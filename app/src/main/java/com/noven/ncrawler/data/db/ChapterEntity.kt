@@ -5,9 +5,6 @@ import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
 
-/**
- * Downloaded chapter content stored offline.
- */
 @Entity(
     tableName = "chapters",
     foreignKeys = [
@@ -25,6 +22,7 @@ data class ChapterEntity(
     val novelSlug: String,
     val chapterNum: Int,
     val title: String,
-    val content: String,                    // full HTML stripped to plain text
+    val chapterUrl: String = "",            // real URL scraped from detail page
+    val content: String,
     val downloadedAt: Long = System.currentTimeMillis()
 )
