@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        Compose handles all UI — we just need a windowless host theme.
+        Theme.AppCompat.Light.NoActionBar is available at minSdk 26+
+        and requires the appcompat dependency added below.
+    -->
+    <style name="Theme.NCrawler" parent="Theme.AppCompat.Light.NoActionBar">
+        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Amber "N" centered in the safe zone -->
+    <path
+        android:fillColor="#FFCA28"
+        android:pathData="M30,22 L30,86 L44,86 L44,46 L64,86 L78,86 L78,22 L64,22 L64,62 L44,22 Z" />
+</vector>
