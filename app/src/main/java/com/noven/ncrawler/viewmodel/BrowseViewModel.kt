@@ -1,6 +1,7 @@
 package com.noven.ncrawler.viewmodel
 
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.noven.ncrawler.NCrawlerApp
@@ -18,8 +19,8 @@ sealed interface BrowseUiState {
 class BrowseViewModel(app: Application) : AndroidViewModel(app) {
 
     private val repo = (app as NCrawlerApp).repository
+    private val TAG  = "NCrawler_Browse"
 
-    // ── State ─────────────────────────────────────────────────────────────
     private val _browseState = MutableStateFlow<BrowseUiState>(BrowseUiState.Loading)
     val browseState: StateFlow<BrowseUiState> = _browseState.asStateFlow()
 
@@ -29,20 +30,32 @@ class BrowseViewModel(app: Application) : AndroidViewModel(app) {
     private val _query = MutableStateFlow("")
     val query: StateFlow<String> = _query.asStateFlow()
 
-    // Debounce search so we don't fire on every keystroke
     private var searchJob: Job? = null
 
-    init { loadHomepage() }
+    init {
+        Log.d(TAG, "BrowseViewModel created — calling loadHomepage()")
+        loadHomepage()
+    }
 
-    // ── Actions ───────────────────────────────────────────────────────────
     fun loadHomepage() {
         viewModelScope.launch {
+            Log.d(TAG, "loadHomepage() started")
             _browseState.value = BrowseUiState.Loading
-            _browseState.value = try {
+            try {
+                Log.d(TAG, "Calling repo.fetchHomepage()...")
                 val novels = repo.fetchHomepage()
-                if (novels.isEmpty()) BrowseUiState.Empty else BrowseUiState.Success(novels)
+                Log.d(TAG, "fetchHomepage() returned ${novels.size} novels")
+                _browseState.value = if (novels.isEmpty()) {
+                    Log.w(TAG, "Novel list is empty")
+                    BrowseUiState.Empty
+                } else {
+                    BrowseUiState.Success(novels)
+                }
             } catch (e: Exception) {
-                BrowseUiState.Error(e.message ?: "Failed to load")
+                Log.e(TAG, "fetchHomepage() FAILED: ${e::class.simpleName}: ${e.message}", e)
+                _browseState.value = BrowseUiState.Error(
+                    "${e::class.simpleName}: ${e.message ?: "Unknown error"}"
+                )
             }
         }
     }
@@ -50,18 +63,19 @@ class BrowseViewModel(app: Application) : AndroidViewModel(app) {
     fun onQueryChange(q: String) {
         _query.value = q
         searchJob?.cancel()
-        if (q.isBlank()) {
-            _searchState.value = BrowseUiState.Empty
-            return
-        }
+        if (q.isBlank()) { _searchState.value = BrowseUiState.Empty; return }
         searchJob = viewModelScope.launch {
-            delay(350)   // 350 ms debounce
+            delay(350)
             _searchState.value = BrowseUiState.Loading
-            _searchState.value = try {
+            try {
+                Log.d(TAG, "search('$q') started")
                 val results = repo.search(q)
-                if (results.isEmpty()) BrowseUiState.Empty else BrowseUiState.Success(results)
+                Log.d(TAG, "search('$q') returned ${results.size} results")
+                _searchState.value = if (results.isEmpty()) BrowseUiState.Empty
+                                     else BrowseUiState.Success(results)
             } catch (e: Exception) {
-                BrowseUiState.Error(e.message ?: "Search failed")
+                Log.e(TAG, "search('$q') FAILED: ${e.message}", e)
+                _searchState.value = BrowseUiState.Error(e.message ?: "Search failed")
             }
         }
     }

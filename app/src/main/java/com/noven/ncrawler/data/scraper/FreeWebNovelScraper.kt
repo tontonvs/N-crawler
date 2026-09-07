@@ -1,5 +1,6 @@
 package com.noven.ncrawler.data.scraper
 
+import android.util.Log
 import com.noven.ncrawler.data.db.NovelEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -12,6 +13,7 @@ import java.util.concurrent.TimeUnit
 class FreeWebNovelScraper {
 
     private val BASE = "https://freewebnovel.com"
+    private val TAG  = "NCrawler_Scraper"
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
@@ -31,24 +33,45 @@ class FreeWebNovelScraper {
         .build()
 
     private suspend fun fetch(url: String): Document = withContext(Dispatchers.IO) {
-        val body = client.newCall(Request.Builder().url(url).build())
-            .execute().use { it.body!!.string() }
+        Log.d(TAG, "Fetching: $url")
+        val resp = client.newCall(Request.Builder().url(url).build()).execute()
+        Log.d(TAG, "Response ${resp.code} for $url")
+        val body = resp.use { it.body!!.string() }
+        Log.d(TAG, "Body length: ${body.length} chars")
         Jsoup.parse(body, url)
     }
 
-    // ── Homepage ──────────────────────────────────────────────────────────────
-    suspend fun fetchHomepage(): List<NovelEntity> =
-        parseNovelCards(fetch("$BASE/latest-release-novel/"))
-
-    // ── Search ────────────────────────────────────────────────────────────────
-    suspend fun search(query: String): List<NovelEntity> {
-        val encoded = java.net.URLEncoder.encode(query, "UTF-8")
-        return parseNovelCards(fetch("$BASE/search/?searchkey=$encoded"))
+    suspend fun fetchHomepage(): List<NovelEntity> {
+        Log.d(TAG, "fetchHomepage() called")
+        return try {
+            val doc    = fetch("$BASE/latest-release-novel/")
+            val novels = parseNovelCards(doc)
+            Log.d(TAG, "fetchHomepage() parsed ${novels.size} novel cards")
+            novels
+        } catch (e: Exception) {
+            Log.e(TAG, "fetchHomepage() exception: ${e::class.simpleName}: ${e.message}", e)
+            throw e
+        }
     }
 
-    // ── Novel detail ──────────────────────────────────────────────────────────
+    suspend fun search(query: String): List<NovelEntity> {
+        val encoded = java.net.URLEncoder.encode(query, "UTF-8")
+        return try {
+            val doc = fetch("$BASE/search/?searchkey=$encoded")
+            parseNovelCards(doc)
+        } catch (e: Exception) {
+            Log.e(TAG, "search() exception: ${e.message}", e)
+            throw e
+        }
+    }
+
     suspend fun fetchDetail(slug: String): Pair<NovelEntity, List<ChapterLink>>? {
-        val doc = try { fetch("$BASE/$slug/") } catch (e: Exception) { return null }
+        val doc = try {
+            fetch("$BASE/$slug/")
+        } catch (e: Exception) {
+            Log.e(TAG, "fetchDetail($slug) exception: ${e.message}", e)
+            return null
+        }
 
         val title = doc.select("h1.tit").firstOrNull()?.text()?.trim()
             ?: doc.select("h1").firstOrNull()?.text()?.trim()
@@ -66,8 +89,6 @@ class FreeWebNovelScraper {
         val genres   = doc.select("a[href*='/genre/'], .book-label a")
             .joinToString(",") { it.text().trim() }
 
-        // Convert to plain Kotlin List immediately — avoids Jsoup NodeFilter
-        // conflict when using Kotlin collection extensions (none, filter, etc.)
         val anchorList: List<org.jsoup.nodes.Element> = run {
             val primary = doc.select("div.m-newest2 ul#idData li a.con")
             if (primary.isNotEmpty()) return@run primary.toList()
@@ -76,9 +97,10 @@ class FreeWebNovelScraper {
             doc.select("[class*=chapter-list] li a").toList()
         }
 
-        val seenUrls  = mutableSetOf<String>()
-        val chapters  = mutableListOf<ChapterLink>()
+        Log.d(TAG, "fetchDetail($slug): found ${anchorList.size} chapter links")
 
+        val seenUrls = mutableSetOf<String>()
+        val chapters = mutableListOf<ChapterLink>()
         anchorList.forEachIndexed { idx, a ->
             val href = a.attr("abs:href").ifBlank { return@forEachIndexed }
             val text = a.text().trim().ifBlank { "Chapter ${idx + 1}" }
@@ -87,46 +109,42 @@ class FreeWebNovelScraper {
             val num = extractChapterNum(href, text) ?: (idx + 1)
             chapters.add(ChapterLink(num = num, title = text, url = href))
         }
-
         chapters.sortByDescending { it.num }
 
         val urlMap = chapters.joinToString("\t") { "${it.num}|${it.url}" }
-
-        val novel = NovelEntity(
-            slug          = slug,
-            title         = title,
-            coverUrl      = cover,
-            synopsis      = synopsis,
-            status        = status,
-            rating        = rating,
-            genres        = genres,
-            chapterCount  = chapters.size,
+        val novel  = NovelEntity(
+            slug = slug, title = title, coverUrl = cover,
+            synopsis = synopsis, status = status, rating = rating,
+            genres = genres, chapterCount = chapters.size,
             latestChapter = chapters.firstOrNull()?.title ?: "",
-            chapterUrls   = urlMap
+            chapterUrls = urlMap
         )
         return Pair(novel, chapters)
     }
 
-    // ── Chapter content ───────────────────────────────────────────────────────
     suspend fun fetchChapterByUrl(url: String): Pair<String, String> {
+        Log.d(TAG, "fetchChapterByUrl: $url")
         val doc = try { fetch(url) }
-            catch (e: Exception) { return Pair("Error", "Failed to load: ${e.message}") }
+            catch (e: Exception) {
+                Log.e(TAG, "fetchChapterByUrl exception: ${e.message}", e)
+                return Pair("Error", "Failed to load: ${e.message}")
+            }
 
         val title = doc.select("div.top span.chapter, h1, [class*=chapter-title]")
             .firstOrNull()?.text()?.trim() ?: "Chapter"
 
         var content = doc.select("div.txt div#article").firstOrNull()?.text()?.trim() ?: ""
+        Log.d(TAG, "Primary selector got ${content.length} chars")
 
         if (content.length < 200) {
-            // Convert to Kotlin list to safely use maxByOrNull
             val candidates = doc.select("div#article, div.txt, div.chapter-content").toList()
             content = candidates
                 .filter { it.text().length > 200 }
                 .maxByOrNull { it.text().length }
                 ?.text()?.trim() ?: ""
+            Log.d(TAG, "Fallback selector got ${content.length} chars")
         }
 
-        // Strip watermark lines — use plain String operations, no Jsoup
         content = content.lines()
             .filter { line ->
                 !line.contains("freewebnovel", ignoreCase = true) &&
@@ -136,19 +154,18 @@ class FreeWebNovelScraper {
             .joinToString("\n\n")
 
         if (content.isBlank()) content = "Could not extract content — try again."
+        Log.d(TAG, "fetchChapterByUrl done, content length: ${content.length}")
         return Pair(title, content)
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
     private fun parseNovelCards(doc: Document): List<NovelEntity> {
         val result = mutableListOf<NovelEntity>()
-
-        // Convert to Kotlin list immediately
         val cards = run {
             val primary = doc.select(".li-row .li, .book-item, div.col-content").toList()
             if (primary.isNotEmpty()) primary
             else doc.select("a[href*='freewebnovel.com/']").toList()
         }
+        Log.d(TAG, "parseNovelCards: found ${cards.size} raw cards")
 
         cards.forEach { card ->
             val href  = card.select("a[href]").firstOrNull()?.attr("abs:href") ?: return@forEach
@@ -167,6 +184,7 @@ class FreeWebNovelScraper {
                 ))
             }
         }
+        Log.d(TAG, "parseNovelCards: returning ${result.size} novels")
         return result.distinctBy { it.slug }.take(60)
     }
 
@@ -174,8 +192,6 @@ class FreeWebNovelScraper {
         Regex("/chapter-(\\d+)\\.html").find(url)
             ?.groupValues?.get(1)?.toIntOrNull()?.let { return it }
         Regex("chapter[\\s-]*(\\d+)", RegexOption.IGNORE_CASE).find(text)
-            ?.groupValues?.get(1)?.toIntOrNull()?.let { return it }
-        Regex("c\\.(\\d+)", RegexOption.IGNORE_CASE).find(text)
             ?.groupValues?.get(1)?.toIntOrNull()?.let { return it }
         return null
     }
