@@ -71,7 +71,8 @@ fun NavGraph() {
         ) {
             composable(Routes.BROWSE) {
                 BrowseScreen(
-                    onNovelClick = { slug -> nav.navigate(Routes.detail(slug)) }
+                    onNovelClick     = { slug -> nav.navigate(Routes.detail(slug)) },
+                    onDownloadsClick = { nav.navigate(Routes.DOWNLOADS) }
                 )
             }
 

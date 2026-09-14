@@ -40,18 +40,20 @@ import com.noven.ncrawler.viewmodel.BrowseUiState
 import com.noven.ncrawler.viewmodel.BrowseViewModel
 import kotlinx.coroutines.delay
 
-// ── Dark glass tokens — used throughout this screen ──────────────────────────
-// Matches the "frosted glass over dark imagery" look from the Disney+ snippet.
-// True backdrop blur needs API 31+; we achieve the same feel on API 26+ using
-// a semi-opaque dark fill + 1-px white hairline + a tinted diffuse shadow.
-private val DarkGlassFill    = Color(0x1AFFFFFF)  // 10% white over dark bg
-private val DarkGlassBorder  = Color(0x33FFFFFF)  // 20% white hairline
-private val DarkGlassFillMd  = Color(0x26FFFFFF)  // 15% white — slightly more opaque pills
+// ── Glass tokens — used throughout this screen ────────────────────────────────
+// Two families: an on-image variant (white-translucent, for controls sitting
+// over the hero cover / card thumbnails) and the light-page variant from
+// Theme.kt (GlassSurfaceLight / GlassBorderLight, for chips + panels that sit
+// directly on the light #F4F7F9 background — never the old dark-glass look).
+private val OnImageGlassFill    = Color(0x1AFFFFFF)  // 10% white over image
+private val OnImageGlassBorder  = Color(0x33FFFFFF)  // 20% white hairline
+private val OnImageGlassFillMd  = Color(0x26FFFFFF)  // 15% white — slightly more opaque pills
 
 @Composable
 fun BrowseScreen(
     onNovelClick: (slug: String) -> Unit,
     onContinueReading: (() -> Unit)? = null,
+    onDownloadsClick: (() -> Unit)? = null,
     lastReadNovelName: String? = null,
     vm: BrowseViewModel = viewModel()
 ) {
@@ -71,16 +73,17 @@ fun BrowseScreen(
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
 
-            // ── Top bar (floats over content, transparent) ─────────────────
+            // ── Top bar (solid white, sits above the light content) ────────
             TopNavBar(
-                isSearching   = isSearching,
-                query         = query,
-                onQueryChange = vm::onQueryChange,
-                onClearSearch = {
+                isSearching      = isSearching,
+                query            = query,
+                onQueryChange    = vm::onQueryChange,
+                onClearSearch    = {
                     vm.clearSearch()
                     focusManager.clearFocus()
                     keyboard?.hide()
-                }
+                },
+                onDownloadsClick = onDownloadsClick
             )
 
             if (isSearching) {
@@ -103,13 +106,15 @@ fun BrowseScreen(
 }
 
 // ── Top Nav Bar ───────────────────────────────────────────────────────────────
-// Transparent in browse mode (hero bleeds through), switches to search field.
+// Solid white bar (Material You style) — never transparent over content.
+// Normal mode: avatar (left) · logo (true center, via Box alignment) · download (right).
 @Composable
 private fun TopNavBar(
     isSearching: Boolean,
     query: String,
     onQueryChange: (String) -> Unit,
-    onClearSearch: () -> Unit
+    onClearSearch: () -> Unit,
+    onDownloadsClick: (() -> Unit)?
 ) {
     val focusManager = LocalFocusManager.current
     val keyboard     = LocalSoftwareKeyboardController.current
@@ -118,6 +123,7 @@ private fun TopNavBar(
         modifier = Modifier
             .fillMaxWidth()
             .statusBarsPadding()
+            .background(MaterialTheme.colorScheme.surface)
     ) {
         AnimatedContent(
             targetState   = isSearching,
@@ -132,13 +138,13 @@ private fun TopNavBar(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(56.dp)
-                        .background(MaterialTheme.colorScheme.background)
+                        .background(MaterialTheme.colorScheme.surface)
                         .padding(horizontal = 12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     IconButton(onClick = onClearSearch) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back",
-                            tint = MaterialTheme.colorScheme.onBackground)
+                            tint = MaterialTheme.colorScheme.onSurface)
                     }
                     OutlinedTextField(
                         value         = query,
@@ -152,8 +158,8 @@ private fun TopNavBar(
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor   = AccentBlue,
                             unfocusedBorderColor = MaterialTheme.colorScheme.outline,
-                            focusedTextColor     = MaterialTheme.colorScheme.onBackground,
-                            unfocusedTextColor   = MaterialTheme.colorScheme.onBackground,
+                            focusedTextColor     = MaterialTheme.colorScheme.onSurface,
+                            unfocusedTextColor   = MaterialTheme.colorScheme.onSurface,
                             cursorColor          = AccentBlue
                         ),
                         shape = RoundedCornerShape(14.dp),
@@ -171,58 +177,60 @@ private fun TopNavBar(
                     }
                 }
             } else {
-                // ── Normal mode — transparent bar over hero ───────────────
-                Row(
+                // ── Normal mode — solid white, dark icons/text ────────────
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(56.dp)
-                        .padding(horizontal = 16.dp),
-                    verticalAlignment     = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+                        .padding(horizontal = 16.dp)
                 ) {
-                    // Avatar
+                    // Avatar — left
                     Box(
                         modifier = Modifier
+                            .align(Alignment.CenterStart)
                             .size(34.dp)
                             .clip(CircleShape)
-                            .background(DarkGlassFillMd)
-                            .border(1.dp, DarkGlassBorder, CircleShape),
+                            .background(MaterialTheme.colorScheme.primaryContainer)
+                            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f), CircleShape),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
                             "T",
-                            color = Color.White,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
                             style = MaterialTheme.typography.labelLarge.copy(
                                 fontWeight = FontWeight.ExtraBold
                             )
                         )
                     }
 
-                    // Logo
+                    // Logo — true center
                     Text(
                         "nCrawl",
+                        modifier = Modifier.align(Alignment.Center),
                         style = MaterialTheme.typography.titleLarge.copy(
                             fontWeight    = FontWeight.ExtraBold,
-                            fontSize      = 22.sp,
+                            fontSize      = 20.sp,
                             letterSpacing = (-0.5).sp
                         ),
-                        color = Color.White
+                        color = MaterialTheme.colorScheme.onSurface
                     )
 
-                    // Search icon pill
+                    // Download icon — right
                     Box(
                         modifier = Modifier
+                            .align(Alignment.CenterEnd)
                             .size(34.dp)
                             .clip(CircleShape)
-                            .background(DarkGlassFillMd)
-                            .border(1.dp, DarkGlassBorder, CircleShape)
-                            .clickable { /* search tap handled by text field focus */ },
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .clickable(enabled = onDownloadsClick != null) {
+                                onDownloadsClick?.invoke()
+                            },
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
-                            Icons.Default.Search,
-                            contentDescription = "Search",
-                            tint     = Color.White,
+                            Icons.Default.Download,
+                            contentDescription = "Downloads",
+                            tint     = MaterialTheme.colorScheme.onSurface,
                             modifier = Modifier.size(17.dp)
                         )
                     }
@@ -291,34 +299,20 @@ private fun BrowseContent(
                     }
                 }
 
-                // ── Latest Updates ────────────────────────────────────────
+                // ── Latest Updates — landscape cards, 2-col grid ────────────
                 item {
                     Spacer(Modifier.height(24.dp))
                     SectionHeader("Latest Updates")
                     Spacer(Modifier.height(12.dp))
-                    LazyRow(
-                        contentPadding        = PaddingValues(horizontal = 16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        items(latestNovels, key = { it.slug }) { novel ->
-                            NovelCard(novel = novel, onClick = { onNovelClick(novel.slug) })
-                        }
-                    }
+                    NovelGrid(novels = latestNovels, onNovelClick = onNovelClick)
                 }
 
-                // ── Popular ───────────────────────────────────────────────
+                // ── Popular — landscape cards, 2-col grid ───────────────────
                 item {
                     Spacer(Modifier.height(28.dp))
                     SectionHeader("Popular")
                     Spacer(Modifier.height(12.dp))
-                    LazyRow(
-                        contentPadding        = PaddingValues(horizontal = 16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        items(popularNovels, key = { it.slug + "_p" }) { novel ->
-                            NovelCard(novel = novel, onClick = { onNovelClick(novel.slug) })
-                        }
-                    }
+                    NovelGrid(novels = popularNovels, onNovelClick = onNovelClick, keySuffix = "_p")
                     Spacer(Modifier.height(20.dp))
                 }
             }
@@ -326,18 +320,20 @@ private fun BrowseContent(
     }
 }
 
-// ── Hero Banner — full-bleed, no rounded corners, deep scrim ──────────────────
-// Mirrors the Disney+ Luca hero: cover image fills the card, gradient from
-// transparent to near-black at the bottom, title + frosted CTA pill over it.
+// ── Hero Banner — inset card, rounded corners, compact height ─────────────────
+// NOT full-bleed: horizontal page padding + ~20dp corner radius, ~160dp tall
+// (like the Disney+ "featured banner" card, not the full-screen Luca poster).
 @Composable
 private fun HeroBanner(novel: NovelEntity, onClick: () -> Unit) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(420.dp)
+            .padding(horizontal = 16.dp)
+            .height(160.dp)
+            .clip(RoundedCornerShape(20.dp))
             .clickable(onClick = onClick)
     ) {
-        // Cover image — full bleed
+        // Cover image
         AsyncImage(
             model              = novel.coverUrl,
             contentDescription = novel.title,
@@ -345,7 +341,7 @@ private fun HeroBanner(novel: NovelEntity, onClick: () -> Unit) {
             modifier           = Modifier.fillMaxSize()
         )
 
-        // Deep scrim — transparent top, near-black bottom (like Disney+ snippet)
+        // Scrim — transparent top, dark bottom, tuned for the shorter card
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -353,72 +349,58 @@ private fun HeroBanner(novel: NovelEntity, onClick: () -> Unit) {
                     Brush.verticalGradient(
                         colorStops = arrayOf(
                             0f    to Color.Black.copy(alpha = 0.05f),
-                            0.35f to Color.Black.copy(alpha = 0.1f),
-                            0.65f to Color.Black.copy(alpha = 0.55f),
-                            1f    to Color.Black.copy(alpha = 0.93f)
+                            0.45f to Color.Black.copy(alpha = 0.15f),
+                            1f    to Color.Black.copy(alpha = 0.80f)
                         )
                     )
                 )
         )
 
-        // Content — bottom-aligned
+        // Content — bottom-aligned, compact
         Column(
             modifier = Modifier
                 .align(Alignment.BottomStart)
-                .padding(start = 16.dp, end = 16.dp, bottom = 20.dp)
+                .padding(start = 14.dp, end = 14.dp, bottom = 12.dp)
         ) {
-            // Genre label — small caps style
-            if (novel.genres.isNotBlank()) {
-                Text(
-                    novel.genres.split(",").take(2).joinToString(" · "),
-                    style = MaterialTheme.typography.labelSmall.copy(
-                        letterSpacing = 1.5.sp
-                    ),
-                    color = Color.White.copy(alpha = 0.65f)
-                )
-                Spacer(Modifier.height(4.dp))
-            }
-
-            // Title — large, bold, tight
+            // Title — one line, tight
             Text(
                 novel.title,
-                style = MaterialTheme.typography.displaySmall.copy(
+                style = MaterialTheme.typography.titleLarge.copy(
                     fontWeight    = FontWeight.ExtraBold,
-                    fontSize      = 30.sp,
-                    lineHeight    = 34.sp,
-                    letterSpacing = (-0.5).sp
+                    fontSize      = 19.sp,
+                    letterSpacing = (-0.3).sp
                 ),
                 color    = Color.White,
-                maxLines = 2,
+                maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
 
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(8.dp))
 
             // Row: frosted "Start Reading" pill + rating badge
             Row(
                 verticalAlignment     = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                // Frosted-glass "Start Reading" pill — Disney+ play button feel
+                // Frosted-glass pill — on-image, so white-translucent still reads
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(50.dp))
-                        .background(DarkGlassFillMd)
-                        .border(1.dp, DarkGlassBorder, RoundedCornerShape(50.dp))
-                        .padding(horizontal = 16.dp, vertical = 9.dp)
+                        .background(OnImageGlassFillMd)
+                        .border(1.dp, OnImageGlassBorder, RoundedCornerShape(50.dp))
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
                             Icons.Default.PlayArrow,
                             contentDescription = null,
                             tint     = Color.White,
-                            modifier = Modifier.size(16.dp)
+                            modifier = Modifier.size(14.dp)
                         )
-                        Spacer(Modifier.width(5.dp))
+                        Spacer(Modifier.width(4.dp))
                         Text(
                             "Start Reading",
-                            style = MaterialTheme.typography.labelLarge,
+                            style = MaterialTheme.typography.labelMedium,
                             color = Color.White
                         )
                     }
@@ -431,7 +413,7 @@ private fun HeroBanner(novel: NovelEntity, onClick: () -> Unit) {
                             Icons.Default.Star,
                             contentDescription = null,
                             tint     = StarGold,
-                            modifier = Modifier.size(13.dp)
+                            modifier = Modifier.size(12.dp)
                         )
                         Spacer(Modifier.width(3.dp))
                         Text(
@@ -454,8 +436,9 @@ private fun ContinueReadingRow(novelName: String, onClick: () -> Unit) {
     Surface(
         onClick  = onClick,
         shape    = RoundedCornerShape(18.dp),
-        color    = DarkGlassFill,
-        border   = BorderStroke(1.dp, DarkGlassBorder),
+        color    = GlassSurfaceLight,
+        border   = BorderStroke(1.dp, GlassBorderLight),
+        shadowElevation = 2.dp,
         modifier = Modifier
             .padding(horizontal = 16.dp)
             .fillMaxWidth()
@@ -530,149 +513,177 @@ private fun SectionHeader(title: String) {
 
 // ── Genre Chip ────────────────────────────────────────────────────────────────
 // Mirrors the "Channel" chips (Disney / Pixar / Marvel) from the snippet —
-// glass for inactive, solid accent for active.
+// tall (50dp), white frosted-glass, bold dark text. Never dark glass; the
+// active chip swaps to solid accent + white text for affordance only.
 @Composable
 private fun GenreChip(name: String, isActive: Boolean) {
-    val bg = if (isActive) AccentBlue else DarkGlassFill
-    val border = if (isActive) Color.Transparent else DarkGlassBorder
-    val textColor = Color.White
+    val bg        = if (isActive) AccentBlue else GlassSurfaceLight
+    val border    = if (isActive) Color.Transparent else GlassBorderLight
+    val textColor = if (isActive) Color.White else MaterialTheme.colorScheme.onSurface
 
     Box(
         modifier = Modifier
-            .clip(RoundedCornerShape(50.dp))
+            .height(50.dp)
+            .clip(RoundedCornerShape(25.dp))
             .background(bg)
-            .border(1.dp, border, RoundedCornerShape(50.dp))
+            .border(1.dp, border, RoundedCornerShape(25.dp))
             .clickable { }
-            .padding(horizontal = 14.dp, vertical = 7.dp),
+            .padding(horizontal = 18.dp),
         contentAlignment = Alignment.Center
     ) {
         Text(
             name,
-            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-            color = textColor.copy(alpha = if (isActive) 1f else 0.75f)
+            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+            color = textColor
         )
     }
 }
 
-// ── Novel Card ────────────────────────────────────────────────────────────────
-// Portrait thumbnail card — mirrors the Moana/Encanto cards in the snippet:
-// rounded image, title below, time + rating below that.
-// Width ≈ 110dp, image 2:3 ratio (110×155dp).
+// ── Novel Grid ────────────────────────────────────────────────────────────────
+// 2-column grid of landscape cards (Moana/Encanto style) — NOT a horizontal
+// portrait scroll. Built with chunked Rows rather than LazyVerticalGrid since
+// it lives inside an outer LazyColumn item (avoids nested-scroll conflicts);
+// section sizes here (≤20 items) are small enough that this costs nothing.
 @Composable
-private fun NovelCard(novel: NovelEntity, onClick: () -> Unit) {
-    val cardWidth = 110.dp
-    val imgHeight = 155.dp
+private fun NovelGrid(
+    novels: List<NovelEntity>,
+    onNovelClick: (String) -> Unit,
+    keySuffix: String = ""
+) {
+    Column(
+        modifier            = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        novels.chunked(2).forEach { pair ->
+            Row(
+                modifier              = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                pair.forEach { novel ->
+                    key(novel.slug + keySuffix) {
+                        NovelCard(
+                            novel    = novel,
+                            onClick  = { onNovelClick(novel.slug) },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+                // Odd item out on the last row — keep it half-width, not stretched
+                if (pair.size == 1) {
+                    Spacer(Modifier.weight(1f))
+                }
+            }
+        }
+    }
+}
 
+// ── Novel Card ────────────────────────────────────────────────────────────────
+// Landscape card — mirrors the Moana/Encanto cards in the snippet exactly:
+// white rounded card, image fills the top, title below, then
+// `duration · play button · rating` row.
+@Composable
+private fun NovelCard(novel: NovelEntity, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
     val scale by animateFloatAsState(
-        targetValue   = if (isPressed) 0.95f else 1f,
+        targetValue   = if (isPressed) 0.96f else 1f,
         animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessHigh),
         label         = "cardPress"
     )
 
-    Column(
-        modifier = Modifier
-            .width(cardWidth)
+    Surface(
+        modifier = modifier
             .graphicsLayer(scaleX = scale, scaleY = scale)
             .clickable(
                 interactionSource = interactionSource,
                 indication        = null,
                 onClick           = onClick
             ),
-        horizontalAlignment = Alignment.Start
+        shape           = RoundedCornerShape(16.dp),
+        color           = MaterialTheme.colorScheme.surface,
+        shadowElevation = 3.dp
     ) {
-        // Cover image with frosted play icon (top-right corner)
-        Box(
-            modifier = Modifier
-                .width(cardWidth)
-                .height(imgHeight)
-                .clip(RoundedCornerShape(16.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant)
-        ) {
-            AsyncImage(
-                model              = novel.coverUrl,
-                contentDescription = novel.title,
-                contentScale       = ContentScale.Crop,
-                modifier           = Modifier.fillMaxSize()
-            )
-            // Subtle bottom gradient for readability
+        Column {
+            // Cover image — landscape, fills card width, top of card
             Box(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .background(
-                        Brush.verticalGradient(
-                            colorStops = arrayOf(
-                                0.6f to Color.Transparent,
-                                1f   to Color.Black.copy(alpha = 0.45f)
-                            )
-                        )
-                    )
-            )
-            // Play button — frosted, bottom-right
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(7.dp)
-                    .size(26.dp)
-                    .clip(CircleShape)
-                    .background(DarkGlassFillMd)
-                    .border(1.dp, DarkGlassBorder, CircleShape),
-                contentAlignment = Alignment.Center
+                    .fillMaxWidth()
+                    .height(90.dp)
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
             ) {
-                Icon(
-                    Icons.Default.PlayArrow,
-                    contentDescription = "Read",
-                    tint     = Color.White,
-                    modifier = Modifier.size(14.dp)
+                AsyncImage(
+                    model              = novel.coverUrl,
+                    contentDescription = novel.title,
+                    contentScale       = ContentScale.Crop,
+                    modifier           = Modifier.fillMaxSize()
                 )
             }
-        }
 
-        Spacer(Modifier.height(6.dp))
+            Column(modifier = Modifier.padding(10.dp)) {
+                // Title
+                Text(
+                    novel.title,
+                    style    = MaterialTheme.typography.labelMedium.copy(
+                        fontWeight = FontWeight.Bold,
+                        fontSize   = 12.sp
+                    ),
+                    color    = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
 
-        // Title
-        Text(
-            novel.title,
-            style    = MaterialTheme.typography.labelSmall.copy(
-                fontWeight = FontWeight.SemiBold,
-                fontSize   = 11.sp
-            ),
-            color    = MaterialTheme.colorScheme.onBackground,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.width(cardWidth)
-        )
+                Spacer(Modifier.height(6.dp))
 
-        Spacer(Modifier.height(3.dp))
-
-        // Chapter + rating row
-        Row(
-            modifier              = Modifier.width(cardWidth),
-            verticalAlignment     = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(
-                text  = if (novel.latestChapter.isNotBlank())
-                    novel.latestChapter.take(7) else "Ch.—",
-                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1
-            )
-            if (novel.rating.isNotBlank()) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        Icons.Default.Star,
-                        contentDescription = null,
-                        tint     = StarGold,
-                        modifier = Modifier.size(9.dp)
-                    )
-                    Spacer(Modifier.width(2.dp))
+                // duration · play button · rating
+                Row(
+                    modifier              = Modifier.fillMaxWidth(),
+                    verticalAlignment     = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
                     Text(
-                        novel.rating,
+                        text  = if (novel.latestChapter.isNotBlank())
+                            novel.latestChapter.take(7) else "Ch.—",
                         style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1
                     )
+
+                    // Small solid play button
+                    Box(
+                        modifier = Modifier
+                            .size(20.dp)
+                            .clip(CircleShape)
+                            .background(AccentBlue),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Default.PlayArrow,
+                            contentDescription = "Read",
+                            tint     = Color.White,
+                            modifier = Modifier.size(12.dp)
+                        )
+                    }
+
+                    if (novel.rating.isNotBlank()) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                Icons.Default.Star,
+                                contentDescription = null,
+                                tint     = StarGold,
+                                modifier = Modifier.size(10.dp)
+                            )
+                            Spacer(Modifier.width(2.dp))
+                            Text(
+                                novel.rating,
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    } else {
+                        Spacer(Modifier.width(1.dp))
+                    }
                 }
             }
         }
@@ -761,16 +772,18 @@ private fun BrowseSkeleton() {
     val shimmer = MaterialTheme.colorScheme.surfaceVariant
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // Hero skeleton
+        // Hero skeleton — inset, rounded, ~160dp
         Box(
             Modifier
                 .fillMaxWidth()
-                .height(420.dp)
+                .padding(horizontal = 16.dp)
+                .height(160.dp)
+                .clip(RoundedCornerShape(20.dp))
                 .background(shimmer)
         )
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(20.dp))
 
-        // Chips row
+        // Chips row — 50dp tall
         Row(
             Modifier.padding(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -778,8 +791,8 @@ private fun BrowseSkeleton() {
             repeat(4) {
                 Box(
                     Modifier
-                        .size(72.dp, 30.dp)
-                        .clip(RoundedCornerShape(50.dp))
+                        .size(80.dp, 50.dp)
+                        .clip(RoundedCornerShape(25.dp))
                         .background(shimmer)
                 )
             }
@@ -796,26 +809,24 @@ private fun BrowseSkeleton() {
         )
         Spacer(Modifier.height(12.dp))
 
-        // Novel cards row
-        Row(
+        // Novel cards — 2-col landscape grid
+        Column(
             Modifier.padding(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            repeat(4) {
-                Column(horizontalAlignment = Alignment.Start) {
-                    Box(
-                        Modifier
-                            .size(110.dp, 155.dp)
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(shimmer)
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    Box(
-                        Modifier
-                            .size(80.dp, 10.dp)
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(shimmer)
-                    )
+            repeat(2) {
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    repeat(2) {
+                        Column(
+                            Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(shimmer)
+                        ) {
+                            Spacer(Modifier.fillMaxWidth().height(90.dp))
+                            Spacer(Modifier.height(30.dp))
+                        }
+                    }
                 }
             }
         }
