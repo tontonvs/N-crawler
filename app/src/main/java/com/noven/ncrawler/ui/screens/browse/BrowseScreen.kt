@@ -11,9 +11,9 @@ import androidx.compose.foundation.shape.*
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
+import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
@@ -65,7 +65,7 @@ fun BrowseScreen(
     val focusManager = LocalFocusManager.current
     val keyboard     = LocalSoftwareKeyboardController.current
 
-    // Dark background fills the entire screen — hero image bleeds to edges
+    // Light background fills the entire screen
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -73,17 +73,20 @@ fun BrowseScreen(
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
 
-            // ── Top bar (solid white, sits above the light content) ────────
-            TopNavBar(
-                isSearching      = isSearching,
-                query            = query,
-                onQueryChange    = vm::onQueryChange,
-                onClearSearch    = {
+            // ── Top bar — always avatar/logo/download, never swaps modes ───
+            TopNavBar(onDownloadsClick = onDownloadsClick)
+
+            // ── Search bar — always visible & focusable, this IS the entry
+            // point into search (previously it only appeared once a query
+            // existed, so there was no way to ever type one — fixed here).
+            SearchBar(
+                query         = query,
+                onQueryChange = vm::onQueryChange,
+                onClear       = {
                     vm.clearSearch()
                     focusManager.clearFocus()
                     keyboard?.hide()
-                },
-                onDownloadsClick = onDownloadsClick
+                }
             )
 
             if (isSearching) {
@@ -106,138 +109,130 @@ fun BrowseScreen(
 }
 
 // ── Top Nav Bar ───────────────────────────────────────────────────────────────
-// Solid white bar (Material You style) — never transparent over content.
-// Normal mode: avatar (left) · logo (true center, via Box alignment) · download (right).
+// Solid white bar (Material You style) — never transparent, never swaps modes.
+// avatar (left) · logo (true center, via Box alignment) · download (right).
 @Composable
-private fun TopNavBar(
-    isSearching: Boolean,
-    query: String,
-    onQueryChange: (String) -> Unit,
-    onClearSearch: () -> Unit,
-    onDownloadsClick: (() -> Unit)?
-) {
-    val focusManager = LocalFocusManager.current
-    val keyboard     = LocalSoftwareKeyboardController.current
-
+private fun TopNavBar(onDownloadsClick: (() -> Unit)?) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .statusBarsPadding()
             .background(MaterialTheme.colorScheme.surface)
     ) {
-        AnimatedContent(
-            targetState   = isSearching,
-            transitionSpec = {
-                fadeIn(tween(180)) togetherWith fadeOut(tween(120))
-            },
-            label = "topBarMode"
-        ) { searching ->
-            if (searching) {
-                // ── Search mode ───────────────────────────────────────────
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(56.dp)
-                        .background(MaterialTheme.colorScheme.surface)
-                        .padding(horizontal = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    IconButton(onClick = onClearSearch) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back",
-                            tint = MaterialTheme.colorScheme.onSurface)
-                    }
-                    OutlinedTextField(
-                        value         = query,
-                        onValueChange = onQueryChange,
-                        modifier      = Modifier.weight(1f),
-                        placeholder   = {
-                            Text("Search novels…",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        },
-                        singleLine = true,
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor   = AccentBlue,
-                            unfocusedBorderColor = MaterialTheme.colorScheme.outline,
-                            focusedTextColor     = MaterialTheme.colorScheme.onSurface,
-                            unfocusedTextColor   = MaterialTheme.colorScheme.onSurface,
-                            cursorColor          = AccentBlue
-                        ),
-                        shape = RoundedCornerShape(14.dp),
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                        keyboardActions = KeyboardActions(onSearch = {
-                            focusManager.clearFocus()
-                            keyboard?.hide()
-                        })
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp)
+                .padding(horizontal = 16.dp)
+        ) {
+            // Avatar — left
+            Box(
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .size(34.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primaryContainer)
+                    .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f), CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "T",
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    style = MaterialTheme.typography.labelLarge.copy(
+                        fontWeight = FontWeight.ExtraBold
                     )
-                    if (query.isNotBlank()) {
-                        IconButton(onClick = onClearSearch) {
-                            Icon(Icons.Default.Close, "Clear",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
-                }
-            } else {
-                // ── Normal mode — solid white, dark icons/text ────────────
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(56.dp)
-                        .padding(horizontal = 16.dp)
-                ) {
-                    // Avatar — left
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.CenterStart)
-                            .size(34.dp)
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.primaryContainer)
-                            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f), CircleShape),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            "T",
-                            color = MaterialTheme.colorScheme.onPrimaryContainer,
-                            style = MaterialTheme.typography.labelLarge.copy(
-                                fontWeight = FontWeight.ExtraBold
-                            )
-                        )
-                    }
+                )
+            }
 
-                    // Logo — true center
-                    Text(
-                        "nCrawl",
-                        modifier = Modifier.align(Alignment.Center),
-                        style = MaterialTheme.typography.titleLarge.copy(
-                            fontWeight    = FontWeight.ExtraBold,
-                            fontSize      = 20.sp,
-                            letterSpacing = (-0.5).sp
-                        ),
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
+            // Logo — true center
+            Text(
+                "nCrawl",
+                modifier = Modifier.align(Alignment.Center),
+                style = MaterialTheme.typography.titleLarge.copy(
+                    fontWeight    = FontWeight.ExtraBold,
+                    fontSize      = 20.sp,
+                    letterSpacing = (-0.5).sp
+                ),
+                color = MaterialTheme.colorScheme.onSurface
+            )
 
-                    // Download icon — right
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.CenterEnd)
-                            .size(34.dp)
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.surfaceVariant)
-                            .clickable(enabled = onDownloadsClick != null) {
-                                onDownloadsClick?.invoke()
-                            },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            Icons.Default.Download,
-                            contentDescription = "Downloads",
-                            tint     = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.size(17.dp)
-                        )
-                    }
-                }
+            // Download icon — right
+            Box(
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .size(34.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .clickable(enabled = onDownloadsClick != null) {
+                        onDownloadsClick?.invoke()
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Rounded.Download,
+                    contentDescription = "Downloads",
+                    tint     = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(17.dp)
+                )
             }
         }
     }
+}
+
+// ── Search Bar ────────────────────────────────────────────────────────────────
+// Persistent, always-tappable field — the sole entry point into search.
+// Stays visible while results show, so clearing/refining is a single tap.
+@Composable
+private fun SearchBar(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    onClear: () -> Unit
+) {
+    val focusManager = LocalFocusManager.current
+    val keyboard     = LocalSoftwareKeyboardController.current
+
+    OutlinedTextField(
+        value         = query,
+        onValueChange = onQueryChange,
+        modifier      = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        placeholder   = {
+            Text("Search novels…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        },
+        leadingIcon = {
+            Icon(
+                Icons.Rounded.Search,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        },
+        trailingIcon = {
+            if (query.isNotBlank()) {
+                IconButton(onClick = onClear) {
+                    Icon(
+                        Icons.Rounded.Close,
+                        contentDescription = "Clear",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        },
+        singleLine = true,
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedBorderColor   = AccentBlue,
+            unfocusedBorderColor = MaterialTheme.colorScheme.outline,
+            focusedTextColor     = MaterialTheme.colorScheme.onSurface,
+            unfocusedTextColor   = MaterialTheme.colorScheme.onSurface,
+            cursorColor          = AccentBlue
+        ),
+        shape = RoundedCornerShape(16.dp),
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+        keyboardActions = KeyboardActions(onSearch = {
+            focusManager.clearFocus()
+            keyboard?.hide()
+        })
+    )
 }
 
 // ── Browse Content ────────────────────────────────────────────────────────────
@@ -392,7 +387,7 @@ private fun HeroBanner(novel: NovelEntity, onClick: () -> Unit) {
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
-                            Icons.Default.PlayArrow,
+                            Icons.Rounded.PlayArrow,
                             contentDescription = null,
                             tint     = Color.White,
                             modifier = Modifier.size(14.dp)
@@ -410,7 +405,7 @@ private fun HeroBanner(novel: NovelEntity, onClick: () -> Unit) {
                 if (novel.rating.isNotBlank()) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
-                            Icons.Default.Star,
+                            Icons.Rounded.Star,
                             contentDescription = null,
                             tint     = StarGold,
                             modifier = Modifier.size(12.dp)
@@ -477,7 +472,7 @@ private fun ContinueReadingRow(novelName: String, onClick: () -> Unit) {
                 )
             }
             Icon(
-                Icons.Default.ChevronRight,
+                Icons.Rounded.ChevronRight,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -659,7 +654,7 @@ private fun NovelCard(novel: NovelEntity, onClick: () -> Unit, modifier: Modifie
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
-                            Icons.Default.PlayArrow,
+                            Icons.Rounded.PlayArrow,
                             contentDescription = "Read",
                             tint     = Color.White,
                             modifier = Modifier.size(12.dp)
@@ -669,7 +664,7 @@ private fun NovelCard(novel: NovelEntity, onClick: () -> Unit, modifier: Modifie
                     if (novel.rating.isNotBlank()) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(
-                                Icons.Default.Star,
+                                Icons.Rounded.Star,
                                 contentDescription = null,
                                 tint     = StarGold,
                                 modifier = Modifier.size(10.dp)
@@ -758,7 +753,7 @@ private fun SearchRow(novel: NovelEntity, onClick: () -> Unit) {
             }
         }
         Icon(
-            Icons.Default.ChevronRight,
+            Icons.Rounded.ChevronRight,
             contentDescription = null,
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.size(18.dp)
@@ -871,7 +866,7 @@ private fun SearchEmpty(query: String) {
     Box(Modifier.fillMaxSize(), Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Icon(
-                Icons.Default.SearchOff,
+                Icons.Rounded.SearchOff,
                 contentDescription = null,
                 modifier = Modifier.size(48.dp),
                 tint     = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
@@ -891,7 +886,7 @@ private fun BrowseError(message: String, onRetry: () -> Unit) {
     Box(Modifier.fillMaxSize(), Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Icon(
-                Icons.Default.WifiOff,
+                Icons.Rounded.WifiOff,
                 contentDescription = null,
                 modifier = Modifier.size(48.dp),
                 tint     = MaterialTheme.colorScheme.error.copy(alpha = 0.7f)

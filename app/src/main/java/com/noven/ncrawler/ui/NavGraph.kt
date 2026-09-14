@@ -13,6 +13,7 @@ import androidx.compose.foundation.shape.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
+import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -182,14 +183,14 @@ private fun FloatingNavBar(
             ) {
                 NavPillItem(
                     icon        = Icons.Outlined.Home,
-                    iconActive  = Icons.Filled.Home,
+                    iconActive  = Icons.Rounded.Home,
                     label       = "Home",
                     isSelected  = currentRoute == Routes.BROWSE,
                     onClick     = { onNavigate(Routes.BROWSE) }
                 )
                 NavPillItem(
                     icon        = Icons.Outlined.Search,
-                    iconActive  = Icons.Filled.Search,
+                    iconActive  = Icons.Rounded.Search,
                     label       = "Search",
                     isSelected  = false,
                     // Search activates in BrowseScreen itself — navigate to browse
@@ -198,7 +199,7 @@ private fun FloatingNavBar(
                 )
                 NavPillItem(
                     icon        = Icons.Outlined.CollectionsBookmark,
-                    iconActive  = Icons.Filled.CollectionsBookmark,
+                    iconActive  = Icons.Rounded.CollectionsBookmark,
                     label       = "Library",
                     isSelected  = currentRoute == Routes.LIBRARY,
                     onClick     = { onNavigate(Routes.LIBRARY) }
@@ -238,7 +239,7 @@ private fun FloatingNavBar(
         ) {
             Box(contentAlignment = Alignment.Center) {
                 Icon(
-                    Icons.Filled.PlayArrow,
+                    Icons.Rounded.PlayArrow,
                     contentDescription = "Continue Reading",
                     tint     = Color.White,
                     modifier = Modifier.size(26.dp)
