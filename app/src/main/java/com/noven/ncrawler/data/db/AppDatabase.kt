@@ -6,14 +6,21 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 
 @Database(
-    entities  = [NovelEntity::class, ChapterEntity::class],
-    version   = 2,
+    entities = [
+        NovelEntity::class,
+        ChapterEntity::class,
+        DownloadProgress::class,
+        ReadingProgress::class
+    ],
+    version = 3,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
 
     abstract fun novelDao(): NovelDao
     abstract fun chapterDao(): ChapterDao
+    abstract fun downloadProgressDao(): DownloadProgressDao
+    abstract fun readingProgressDao(): ReadingProgressDao
 
     companion object {
         @Volatile private var INSTANCE: AppDatabase? = null
@@ -24,8 +31,10 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "ncrawler.db"
-                ).fallbackToDestructiveMigration()
-                .build().also { INSTANCE = it }
+                )
+                .fallbackToDestructiveMigration()
+                .build()
+                .also { INSTANCE = it }
             }
     }
 }
