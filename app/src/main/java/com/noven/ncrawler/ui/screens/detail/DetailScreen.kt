@@ -5,7 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -50,7 +50,7 @@ fun DetailScreen(
                 title = {},
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
@@ -76,12 +76,12 @@ fun DetailScreen(
             }
 
             is DetailUiState.Success -> DetailContent(
-                novel       = s.novel,
-                chapters    = s.chapters,
-                downloading = downloading,
-                padding     = padding,
+                novel         = s.novel,
+                chapters      = s.chapters,
+                downloading   = downloading,
+                padding       = padding,
                 onReadChapter = onReadChapter,
-                onDownload  = { num -> vm.downloadChapter(slug, num) {} }
+                onDownload    = { num -> vm.downloadChapter(slug, num) {} }
             )
         }
     }
@@ -108,33 +108,42 @@ private fun DetailContent(
         item {
             Box(Modifier.fillMaxWidth().height(320.dp)) {
                 AsyncImage(
-                    model = novel.coverUrl, contentDescription = novel.title,
-                    contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()
+                    model              = novel.coverUrl,
+                    contentDescription = novel.title,
+                    contentScale       = ContentScale.Crop,
+                    modifier           = Modifier.fillMaxSize()
                 )
                 Box(
-                    Modifier.fillMaxWidth().fillMaxHeight(0.6f).align(Alignment.BottomCenter)
-                        .background(Brush.verticalGradient(
-                            listOf(Color.Transparent, MaterialTheme.colorScheme.background)
-                        ))
+                    Modifier
+                        .fillMaxWidth()
+                        .fillMaxHeight(0.6f)
+                        .align(Alignment.BottomCenter)
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(Color.Transparent, MaterialTheme.colorScheme.background)
+                            )
+                        )
                 )
                 Column(
                     Modifier.align(Alignment.BottomStart)
                         .padding(horizontal = 16.dp, vertical = 12.dp)
                 ) {
-                    Text(novel.title,
+                    Text(
+                        novel.title,
                         style = MaterialTheme.typography.titleLarge.copy(
                             fontWeight = FontWeight.Bold, fontSize = 20.sp),
-                        color = MaterialTheme.colorScheme.onBackground)
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
                     Spacer(Modifier.height(6.dp))
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalAlignment     = Alignment.CenterVertically
                     ) {
                         if (novel.status.isNotBlank()) StatusChip(novel.status)
                         if (novel.rating.isNotBlank()) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(Icons.Default.Star, null,
-                                    tint = MaterialTheme.colorScheme.primary,
+                                    tint     = MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.size(14.dp))
                                 Spacer(Modifier.width(3.dp))
                                 Text(novel.rating,
@@ -170,16 +179,19 @@ private fun DetailContent(
         if (novel.synopsis.isNotBlank()) {
             item {
                 Column(Modifier.padding(horizontal = 16.dp).animateContentSize()) {
-                    Text(novel.synopsis,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    Text(
+                        novel.synopsis,
+                        style    = MaterialTheme.typography.bodyMedium,
+                        color    = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = if (synopsisExpanded) Int.MAX_VALUE else 4,
-                        overflow = TextOverflow.Ellipsis)
+                        overflow = TextOverflow.Ellipsis
+                    )
                     Spacer(Modifier.height(4.dp))
                     Text(
                         if (synopsisExpanded) "Show less" else "Read more",
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
-                        color = MaterialTheme.colorScheme.primary,
+                        style    = MaterialTheme.typography.labelSmall.copy(
+                            fontWeight = FontWeight.SemiBold),
+                        color    = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.clickable { synopsisExpanded = !synopsisExpanded }
                     )
                 }
@@ -194,10 +206,14 @@ private fun DetailContent(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(Icons.AutoMirrored.Filled.MenuBook, null,
-                    tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                    tint     = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
-                Text("Chapters (${chapters.size})",
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold))
+                Text(
+                    "Chapters (${chapters.size})",
+                    style = MaterialTheme.typography.titleMedium.copy(
+                        fontWeight = FontWeight.SemiBold)
+                )
             }
             HorizontalDivider(
                 Modifier.padding(horizontal = 16.dp),
@@ -205,7 +221,7 @@ private fun DetailContent(
             )
         }
 
-        // No chapters fallback
+        // Empty state
         if (chapters.isEmpty()) {
             item {
                 Box(Modifier.fillMaxWidth().padding(32.dp), Alignment.Center) {
@@ -216,12 +232,15 @@ private fun DetailContent(
             }
         }
 
-        // Chapter rows — use real ChapterLink data
-        itemsIndexed(chapters, key = { _, ch -> ch.num }) { _, chapter ->
+        // Chapter rows — use items() not itemsIndexed() to avoid type inference issue
+        items(
+            items = chapters,
+            key   = { chapter -> chapter.num }
+        ) { chapter ->
             ChapterRow(
-                chapter      = chapter,
+                chapter       = chapter,
                 isDownloading = chapter.num in downloading,
-                onRead       = { onReadChapter(chapter.num) }
+                onRead        = { onReadChapter(chapter.num) }
             )
             HorizontalDivider(
                 Modifier.padding(horizontal = 16.dp),
@@ -238,24 +257,26 @@ private fun ChapterRow(
     onRead: () -> Unit
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onRead)
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onRead)
             .padding(horizontal = 16.dp, vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        verticalAlignment     = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = chapter.title.ifBlank { "Chapter ${chapter.num}" },
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
+        Text(
+            text     = chapter.title.ifBlank { "Chapter ${chapter.num}" },
+            style    = MaterialTheme.typography.bodyMedium,
+            color    = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
         if (isDownloading) {
             CircularProgressIndicator(
-                modifier = Modifier.size(18.dp), strokeWidth = 2.dp,
-                color = MaterialTheme.colorScheme.primary
+                modifier    = Modifier.size(18.dp),
+                strokeWidth = 2.dp,
+                color       = MaterialTheme.colorScheme.primary
             )
         }
     }
@@ -269,20 +290,24 @@ private fun StatusChip(status: String) {
         color = if (isComplete) MaterialTheme.colorScheme.primaryContainer
                 else MaterialTheme.colorScheme.surfaceVariant
     ) {
-        Text(status,
-            style = MaterialTheme.typography.labelSmall,
-            color = if (isComplete) MaterialTheme.colorScheme.onPrimaryContainer
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp))
+        Text(
+            status,
+            style    = MaterialTheme.typography.labelSmall,
+            color    = if (isComplete) MaterialTheme.colorScheme.onPrimaryContainer
+                       else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+        )
     }
 }
 
 @Composable
 private fun GenreChip(genre: String) {
     Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
-        Text(genre,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp))
+        Text(
+            genre,
+            style    = MaterialTheme.typography.labelSmall,
+            color    = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+        )
     }
 }
