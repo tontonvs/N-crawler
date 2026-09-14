@@ -1,12 +1,12 @@
 package com.noven.ncrawler.ui.screens.detail
 
 import androidx.compose.animation.animateContentSize
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.MenuBook
@@ -21,18 +21,22 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
-import com.noven.ncrawler.data.db.DownloadStatus
-import com.noven.ncrawler.data.db.NovelEntity
 import com.noven.ncrawler.data.scraper.ChapterLink
+import com.noven.ncrawler.data.db.NovelEntity
+import com.noven.ncrawler.ui.theme.AccentBlue
+import com.noven.ncrawler.ui.theme.StarGold
 import com.noven.ncrawler.viewmodel.DetailUiState
 import com.noven.ncrawler.viewmodel.DetailViewModel
 
-@OptIn(ExperimentalMaterial3Api::class)
+// ── Dark glass tokens ─────────────────────────────────────────────────────────
+private val DarkGlassFill   = Color(0x1AFFFFFF)  // 10% white
+private val DarkGlassBorder = Color(0x33FFFFFF)  // 20% white hairline
+private val DarkGlassFillMd = Color(0x26FFFFFF)  // 15% white
+
 @Composable
 fun DetailScreen(
     slug: String,
@@ -42,250 +46,232 @@ fun DetailScreen(
 ) {
     LaunchedEffect(slug) { vm.load(slug) }
 
-    val state           by vm.state.collectAsStateWithLifecycle()
-    val downloadProgress by vm.downloadProgress.collectAsStateWithLifecycle()
-    val updateMessage   by vm.updateMessage.collectAsStateWithLifecycle()
+    val state       by vm.state.collectAsStateWithLifecycle()
+    val downloading by vm.downloading.collectAsStateWithLifecycle()
 
-    // Snackbar for update messages
-    val snackbarHost = remember { SnackbarHostState() }
-    LaunchedEffect(updateMessage) {
-        updateMessage?.let {
-            snackbarHost.showSnackbar(it)
-            vm.clearUpdateMessage()
-        }
-    }
-
-    Scaffold(
-        snackbarHost = { SnackbarHost(snackbarHost) },
-        topBar = {
-            TopAppBar(
-                title = {},
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
-                    }
-                },
-                actions = {
-                    // Check for updates
-                    IconButton(onClick = vm::checkForUpdates) {
-                        Icon(Icons.Default.Refresh, "Check for updates")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
-            )
-        }
-    ) { padding ->
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+    ) {
         when (val s = state) {
-            is DetailUiState.Loading -> Box(
-                Modifier.fillMaxSize().padding(padding), Alignment.Center
-            ) { CircularProgressIndicator(color = MaterialTheme.colorScheme.primary) }
+            is DetailUiState.Loading -> DetailSkeleton()
 
             is DetailUiState.Error -> Box(
-                Modifier.fillMaxSize().padding(padding), Alignment.Center
+                Modifier.fillMaxSize(),
+                Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(Icons.Default.WifiOff, null, Modifier.size(48.dp),
-                        tint = MaterialTheme.colorScheme.error)
+                    Icon(
+                        Icons.Default.WifiOff,
+                        contentDescription = null,
+                        modifier = Modifier.size(48.dp),
+                        tint     = MaterialTheme.colorScheme.error
+                    )
                     Spacer(Modifier.height(12.dp))
                     Text(s.message, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(Modifier.height(16.dp))
-                    Button(onClick = { vm.load(slug) }) { Text("Retry") }
+                    Button(
+                        onClick = { vm.load(slug) },
+                        shape   = RoundedCornerShape(12.dp),
+                        colors  = ButtonDefaults.buttonColors(containerColor = AccentBlue)
+                    ) { Text("Retry") }
                 }
             }
 
             is DetailUiState.Success -> DetailContent(
-                novel            = s.novel,
-                chapters         = s.chapters,
-                lastReadChapter  = s.lastReadChapter,
-                downloadProgress = downloadProgress,
-                padding          = padding,
-                onReadChapter    = onReadChapter,
-                onDownloadAll    = vm::downloadAll,
-                onCancelDownload = vm::cancelDownload
+                novel         = s.novel,
+                chapters      = s.chapters,
+                downloading   = downloading,
+                slug          = slug,
+                onReadChapter = onReadChapter,
+                onDownload    = { num -> vm.downloadChapter(slug, num) {} }
+            )
+        }
+
+        // ── Floating back button — always on top of hero ──────────────────
+        Box(
+            modifier = Modifier
+                .statusBarsPadding()
+                .padding(12.dp)
+                .size(38.dp)
+                .clip(CircleShape)
+                .background(DarkGlassFill)
+                .border(1.dp, DarkGlassBorder, CircleShape)
+                .clickable(onClick = onBack)
+                .align(Alignment.TopStart),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                Icons.AutoMirrored.Filled.ArrowBack,
+                contentDescription = "Back",
+                tint     = Color.White,
+                modifier = Modifier.size(18.dp)
             )
         }
     }
 }
 
+// ── Detail Content ────────────────────────────────────────────────────────────
 @Composable
 private fun DetailContent(
     novel: NovelEntity,
     chapters: List<ChapterLink>,
-    lastReadChapter: Int?,
-    downloadProgress: com.noven.ncrawler.data.db.DownloadProgress?,
-    padding: PaddingValues,
+    downloading: Set<Int>,
+    slug: String,
     onReadChapter: (Int) -> Unit,
-    onDownloadAll: () -> Unit,
-    onCancelDownload: () -> Unit
+    onDownload: (Int) -> Unit
 ) {
     var synopsisExpanded by remember { mutableStateOf(false) }
-    val isDownloading = downloadProgress?.status == DownloadStatus.DOWNLOADING ||
-                        downloadProgress?.status == DownloadStatus.QUEUED
-    val isComplete    = downloadProgress?.status == DownloadStatus.COMPLETE
 
     LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(
-            top = padding.calculateTopPadding(), bottom = 100.dp
-        )
+        modifier       = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(bottom = 120.dp)
     ) {
-        // ── Hero ──────────────────────────────────────────────────────────
+
+        // ── Hero — full-bleed cover + deep scrim ──────────────────────────
         item {
-            Box(Modifier.fillMaxWidth().height(340.dp)) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(420.dp)
+            ) {
                 AsyncImage(
-                    model = novel.coverUrl, contentDescription = novel.title,
-                    contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()
+                    model              = novel.coverUrl,
+                    contentDescription = novel.title,
+                    contentScale       = ContentScale.Crop,
+                    modifier           = Modifier.fillMaxSize()
                 )
+
+                // Scrim: lighter top (back button), heavy bottom (text/CTAs)
                 Box(
-                    Modifier.fillMaxSize().background(
-                        Brush.verticalGradient(
-                            colorStops = arrayOf(
-                                0f   to Color.Transparent,
-                                0.45f to Color.Black.copy(alpha = 0.1f),
-                                1f   to Color.Black.copy(alpha = 0.9f)
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(
+                            Brush.verticalGradient(
+                                colorStops = arrayOf(
+                                    0f    to Color.Black.copy(alpha = 0.40f),
+                                    0.38f to Color.Black.copy(alpha = 0.05f),
+                                    0.60f to Color.Black.copy(alpha = 0.40f),
+                                    1f    to Color.Black.copy(alpha = 0.97f)
+                                )
                             )
                         )
-                    )
                 )
+
+                // Bottom content
                 Column(
-                    Modifier.align(Alignment.BottomStart)
-                        .padding(horizontal = 16.dp, vertical = 16.dp)
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(horizontal = 16.dp, vertical = 20.dp)
                 ) {
-                    Text(
-                        novel.title,
-                        style = MaterialTheme.typography.titleLarge.copy(
-                            fontWeight = FontWeight.Bold, fontSize = 22.sp),
-                        color = Color.White
-                    )
-                    Spacer(Modifier.height(4.dp))
+                    // Meta row — status pill + rating + chapter count
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalAlignment     = Alignment.CenterVertically
                     ) {
                         if (novel.status.isNotBlank()) {
-                            Surface(
-                                shape = RoundedCornerShape(4.dp),
-                                color = Color.White.copy(alpha = 0.2f)
-                            ) {
-                                Text(novel.status,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = Color.White,
-                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
-                            }
+                            GlassPill(novel.status)
                         }
                         if (novel.rating.isNotBlank()) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.Star, null,
-                                    tint = Color(0xFFFFCA28), modifier = Modifier.size(12.dp))
-                                Spacer(Modifier.width(2.dp))
-                                Text(novel.rating, style = MaterialTheme.typography.labelSmall,
-                                    color = Color(0xFFFFCA28))
+                                Icon(
+                                    Icons.Default.Star,
+                                    contentDescription = null,
+                                    tint     = StarGold,
+                                    modifier = Modifier.size(12.dp)
+                                )
+                                Spacer(Modifier.width(3.dp))
+                                Text(
+                                    novel.rating,
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontWeight = FontWeight.Bold
+                                    ),
+                                    color = StarGold
+                                )
                             }
                         }
                         if (chapters.isNotEmpty()) {
-                            Text("${chapters.size} chapters",
+                            Text(
+                                "${chapters.size} ch.",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = Color.White.copy(alpha = 0.8f))
+                                color = Color.White.copy(alpha = 0.65f)
+                            )
+                        }
+                    }
+
+                    Spacer(Modifier.height(6.dp))
+
+                    // Title
+                    Text(
+                        novel.title,
+                        style = MaterialTheme.typography.displaySmall.copy(
+                            fontWeight    = FontWeight.ExtraBold,
+                            fontSize      = 28.sp,
+                            lineHeight    = 33.sp,
+                            letterSpacing = (-0.5).sp
+                        ),
+                        color    = Color.White,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+
+                    Spacer(Modifier.height(14.dp))
+
+                    // Primary CTA pill
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50.dp))
+                            .background(AccentBlue)
+                            .clickable {
+                                val firstChapter = chapters.lastOrNull()?.num ?: 1
+                                onReadChapter(firstChapter)
+                            }
+                            .padding(horizontal = 20.dp, vertical = 10.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.MenuBook,
+                                contentDescription = null,
+                                tint     = Color.White,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                "Start Reading",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = Color.White
+                            )
                         }
                     }
                 }
             }
         }
 
-        // ── Action buttons ────────────────────────────────────────────────
-        item {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                // Read / Continue button
-                Button(
-                    onClick = {
-                        val chapter = lastReadChapter ?: chapters.lastOrNull()?.num ?: 1
-                        onReadChapter(chapter)
-                    },
-                    modifier = Modifier.weight(1f),
-                    shape    = RoundedCornerShape(10.dp)
-                ) {
-                    Icon(
-                        if (lastReadChapter != null) Icons.Default.PlayArrow
-                        else Icons.Default.MenuBook,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        if (lastReadChapter != null) "Continue Ch.$lastReadChapter"
-                        else "Start Reading"
-                    )
-                }
-
-                // Download button
-                FilledTonalIconButton(
-                    onClick = if (isDownloading) onCancelDownload else onDownloadAll,
-                    modifier = Modifier.size(48.dp)
-                ) {
-                    if (isDownloading) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(20.dp),
-                            strokeWidth = 2.dp,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    } else {
-                        Icon(
-                            if (isComplete) Icons.Default.DownloadDone
-                            else Icons.Default.Download,
-                            contentDescription = if (isComplete) "Downloaded" else "Download all",
-                            tint = if (isComplete) MaterialTheme.colorScheme.primary
-                                   else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-
-            // Download progress bar
-            if (isDownloading && downloadProgress != null) {
-                val p = if (downloadProgress.totalChapters > 0)
-                    downloadProgress.downloadedChapters.toFloat() / downloadProgress.totalChapters
-                else 0f
-                Column(Modifier.padding(horizontal = 16.dp)) {
-                    LinearProgressIndicator(
-                        progress = { p },
-                        modifier = Modifier.fillMaxWidth().height(3.dp)
-                            .clip(RoundedCornerShape(2.dp)),
-                        color    = MaterialTheme.colorScheme.primary,
-                        trackColor = MaterialTheme.colorScheme.surfaceVariant
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        "${downloadProgress.downloadedChapters}/${downloadProgress.totalChapters} chapters downloaded",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Spacer(Modifier.height(8.dp))
-            }
-        }
-
-        // ── Genres ────────────────────────────────────────────────────────
+        // ── Genre chips ───────────────────────────────────────────────────
         if (novel.genres.isNotBlank()) {
             item {
+                Spacer(Modifier.height(16.dp))
                 Row(
-                    Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    modifier = Modifier
+                        .padding(horizontal = 16.dp)
+                        .horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    novel.genres.split(",").take(4).forEach { genre ->
+                    novel.genres.split(",").take(5).forEach { genre ->
                         if (genre.trim().isNotBlank()) {
-                            Surface(
-                                shape = RoundedCornerShape(20.dp),
-                                color = MaterialTheme.colorScheme.secondaryContainer
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(50.dp))
+                                    .background(DarkGlassFill)
+                                    .border(1.dp, DarkGlassBorder, RoundedCornerShape(50.dp))
+                                    .padding(horizontal = 12.dp, vertical = 5.dp)
                             ) {
-                                Text(genre.trim(),
+                                Text(
+                                    genre.trim(),
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp))
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                             }
                         }
                     }
@@ -296,93 +282,247 @@ private fun DetailContent(
         // ── Synopsis ──────────────────────────────────────────────────────
         if (novel.synopsis.isNotBlank()) {
             item {
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(16.dp))
                 Column(
-                    Modifier.padding(horizontal = 16.dp).animateContentSize()
+                    Modifier
+                        .padding(horizontal = 16.dp)
+                        .animateContentSize(animationSpec = tween(220))
                 ) {
-                    Text(novel.synopsis,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = if (synopsisExpanded) Int.MAX_VALUE else 3,
-                        overflow = TextOverflow.Ellipsis)
-                    Spacer(Modifier.height(4.dp))
                     Text(
-                        if (synopsisExpanded) "Show less" else "More",
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
-                        color = MaterialTheme.colorScheme.primary,
+                        novel.synopsis,
+                        style    = MaterialTheme.typography.bodyMedium.copy(lineHeight = 22.sp),
+                        color    = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = if (synopsisExpanded) Int.MAX_VALUE else 3,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(Modifier.height(5.dp))
+                    Text(
+                        if (synopsisExpanded) "Show less" else "Show more",
+                        style    = MaterialTheme.typography.labelSmall.copy(
+                            fontWeight = FontWeight.SemiBold
+                        ),
+                        color    = AccentBlue,
                         modifier = Modifier.clickable { synopsisExpanded = !synopsisExpanded }
                     )
                 }
-                Spacer(Modifier.height(16.dp))
             }
         }
 
-        // ── Chapter header ────────────────────────────────────────────────
+        // ── Chapter list header ───────────────────────────────────────────
         item {
+            Spacer(Modifier.height(24.dp))
             Row(
-                Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment     = Alignment.CenterVertically
             ) {
-                Icon(Icons.AutoMirrored.Filled.MenuBook, null,
-                    tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("Chapters (${chapters.size})",
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold))
+                Text(
+                    "Chapters",
+                    style = MaterialTheme.typography.titleMedium.copy(
+                        fontWeight    = FontWeight.ExtraBold,
+                        letterSpacing = (-0.2).sp
+                    ),
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+                Text(
+                    "${chapters.size} total",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
+            Spacer(Modifier.height(8.dp))
             HorizontalDivider(
                 Modifier.padding(horizontal = 16.dp),
-                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f)
             )
         }
 
         if (chapters.isEmpty()) {
             item {
-                Box(Modifier.fillMaxWidth().padding(32.dp), Alignment.Center) {
-                    Text("No chapters found",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 32.dp),
+                    Alignment.Center
+                ) {
+                    Text(
+                        "No chapters found",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
                 }
             }
         }
 
         // ── Chapter rows ──────────────────────────────────────────────────
         items(chapters, key = { it.num }) { chapter ->
-            val isLastRead = chapter.num == lastReadChapter
+            val isDownloading = chapter.num in downloading
+
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable { onReadChapter(chapter.num) }
-                    .background(
-                        if (isLastRead) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
-                        else Color.Transparent
-                    )
-                    .padding(horizontal = 16.dp, vertical = 14.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                    .padding(horizontal = 16.dp, vertical = 13.dp),
+                verticalAlignment     = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Column(modifier = Modifier.weight(1f)) {
+                // Left: chapter badge + title
+                Row(
+                    verticalAlignment     = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier              = Modifier.weight(1f)
+                ) {
+                    // Chapter number badge
+                    Box(
+                        modifier = Modifier
+                            .size(32.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(DarkGlassFill)
+                            .border(1.dp, DarkGlassBorder, RoundedCornerShape(8.dp)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            "${chapter.num}",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontWeight = FontWeight.Bold,
+                                fontSize   = 10.sp
+                            ),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
                     Text(
                         chapter.title.ifBlank { "Chapter ${chapter.num}" },
-                        style = MaterialTheme.typography.bodyMedium.copy(
-                            fontWeight = if (isLastRead) FontWeight.SemiBold else FontWeight.Normal
-                        ),
-                        color = if (isLastRead) MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.onSurface,
+                        style    = MaterialTheme.typography.bodyMedium,
+                        color    = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    if (isLastRead) {
-                        Text("Last read",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary)
+                }
+
+                // Right: download icon or spinner
+                Box(
+                    modifier = Modifier
+                        .size(30.dp)
+                        .clip(CircleShape)
+                        .clickable(enabled = !isDownloading) { onDownload(chapter.num) },
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (isDownloading) {
+                        CircularProgressIndicator(
+                            modifier    = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color       = AccentBlue
+                        )
+                    } else {
+                        Icon(
+                            Icons.Default.Download,
+                            contentDescription = "Download Ch.${chapter.num}",
+                            tint     = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(16.dp)
+                        )
                     }
                 }
-                Icon(Icons.Default.ChevronRight, null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(20.dp))
+            }
+
+            HorizontalDivider(
+                Modifier.padding(horizontal = 16.dp),
+                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.07f)
+            )
+        }
+    }
+}
+
+// ── Glass Pill ────────────────────────────────────────────────────────────────
+@Composable
+private fun GlassPill(text: String) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(DarkGlassFillMd)
+            .border(1.dp, DarkGlassBorder, RoundedCornerShape(6.dp))
+            .padding(horizontal = 7.dp, vertical = 3.dp)
+    ) {
+        Text(
+            text,
+            style = MaterialTheme.typography.labelSmall,
+            color = Color.White.copy(alpha = 0.85f)
+        )
+    }
+}
+
+// ── Detail Skeleton ───────────────────────────────────────────────────────────
+@Composable
+private fun DetailSkeleton() {
+    val shimmer = MaterialTheme.colorScheme.surfaceVariant
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(420.dp)
+                .background(shimmer)
+        )
+        Spacer(Modifier.height(16.dp))
+
+        Row(
+            Modifier.padding(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            repeat(3) {
+                Box(
+                    Modifier
+                        .size(64.dp, 26.dp)
+                        .clip(RoundedCornerShape(50.dp))
+                        .background(shimmer)
+                )
+            }
+        }
+        Spacer(Modifier.height(16.dp))
+
+        Column(
+            Modifier.padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            repeat(3) {
+                Box(
+                    Modifier
+                        .fillMaxWidth(if (it == 2) 0.6f else 1f)
+                        .height(12.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(shimmer)
+                )
+            }
+        }
+        Spacer(Modifier.height(24.dp))
+
+        repeat(6) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 13.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment     = Alignment.CenterVertically
+            ) {
+                Box(
+                    Modifier
+                        .size(32.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(shimmer)
+                )
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .height(13.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(shimmer)
+                )
             }
             HorizontalDivider(
                 Modifier.padding(horizontal = 16.dp),
-                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f)
+                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.07f)
             )
         }
     }
