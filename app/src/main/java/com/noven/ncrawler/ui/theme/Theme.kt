@@ -10,12 +10,24 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
-// ── Brand palette — blue accent, NO yellow ────────────────────────────────────
+// ── Brand palette — blue accent, NO yellow (StarGold is the sole exception,
+//    reserved strictly for the rating icon — see design note in chat) ─────────
 val NavBlue        = Color(0xFF08519C)   // top nav title, active icons
 val NavBgColor     = Color(0xFFA8EEFF)   // top nav background
 val AccentBlue     = Color(0xFF1565C0)   // buttons, FAB
 val AccentBlueDark = Color(0xFF1E88E5)   // dark mode accent
 val StarGold       = Color(0xFFFFB300)   // star rating only
+
+// ── Glass tokens — translucent surfaces for frosted-glass cards/bars ──────────
+// minSdk 26 means true backdrop blur (RenderEffect, API 31+) isn't reliably
+// available, so "glass" here is done the compatible way: a semi-opaque fill +
+// a soft light border + a diffuse shadow, which reads as frosted glass on both
+// the sky-blue top bar and white content areas without needing a blur pass.
+val GlassSurfaceLight  = Color(0xF2FFFFFF)  // ~95% white — cards over content
+val GlassSurfaceMuted  = Color(0xCCFFFFFF)  // ~80% white — bars over imagery
+val GlassBorderLight   = Color(0x59FFFFFF)  // hairline highlight, light mode
+val GlassSurfaceDark   = Color(0xE6111827)  // dark-mode glass fill
+val GlassBorderDark    = Color(0x33FFFFFF)  // dark-mode hairline highlight
 
 // ── Light scheme ──────────────────────────────────────────────────────────────
 private val LightColors = lightColorScheme(

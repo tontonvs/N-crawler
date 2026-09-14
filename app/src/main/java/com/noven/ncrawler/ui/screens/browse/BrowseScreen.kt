@@ -3,12 +3,15 @@ package com.noven.ncrawler.ui.screens.browse
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
 import androidx.compose.foundation.shape.*
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
@@ -19,6 +22,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -34,6 +38,8 @@ import com.noven.ncrawler.ui.theme.NavBlue
 import com.noven.ncrawler.ui.theme.NavBgColor
 import com.noven.ncrawler.ui.theme.AccentBlue
 import com.noven.ncrawler.ui.theme.StarGold
+import com.noven.ncrawler.ui.theme.GlassSurfaceLight
+import com.noven.ncrawler.ui.theme.GlassBorderLight
 import com.noven.ncrawler.viewmodel.BrowseUiState
 import com.noven.ncrawler.viewmodel.BrowseViewModel
 import kotlinx.coroutines.delay
@@ -76,9 +82,11 @@ fun BrowseScreen(
                 )
             } else {
                 BrowseContent(
-                    state        = browseState,
-                    onNovelClick = onNovelClick,
-                    onRetry      = vm::loadHomepage
+                    state             = browseState,
+                    onNovelClick      = onNovelClick,
+                    onRetry           = vm::loadHomepage,
+                    onContinueReading = onContinueReading,
+                    lastReadNovelName = lastReadNovelName
                 )
             }
         }
@@ -112,7 +120,7 @@ private fun TopNavBar(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = onClearSearch) {
-                    Icon(Icons.Default.ArrowBack, "Back", tint = NavBlue)
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = NavBlue)
                 }
                 OutlinedTextField(
                     value         = query,
@@ -204,7 +212,9 @@ private fun TopNavBar(
 private fun BrowseContent(
     state: BrowseUiState,
     onNovelClick: (String) -> Unit,
-    onRetry: () -> Unit
+    onRetry: () -> Unit,
+    onContinueReading: (() -> Unit)?,
+    lastReadNovelName: String?
 ) {
     when (state) {
         is BrowseUiState.Loading -> BrowseSkeleton()
@@ -221,14 +231,28 @@ private fun BrowseContent(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(bottom = 120.dp) // nav clearance
             ) {
-                // Hero banner
+                // Hero banner — inset, rounded, matches the frosted "Start Reading" pill
                 if (hero != null) {
-                    item { HeroBanner(novel = hero, onClick = { onNovelClick(hero.slug) }) }
+                    item {
+                        Spacer(Modifier.height(12.dp))
+                        HeroBanner(novel = hero, onClick = { onNovelClick(hero.slug) })
+                    }
+                }
+
+                // Continue reading — only shown once there's something to resume
+                if (onContinueReading != null && !lastReadNovelName.isNullOrBlank()) {
+                    item {
+                        Spacer(Modifier.height(16.dp))
+                        ContinueReadingRow(
+                            novelName = lastReadNovelName,
+                            onClick   = onContinueReading
+                        )
+                    }
                 }
 
                 // Source chips
                 item {
-                    Spacer(Modifier.height(16.dp))
+                    Spacer(Modifier.height(20.dp))
                     SectionLabel("Sources")
                     Spacer(Modifier.height(8.dp))
                     LazyRow(
@@ -279,6 +303,62 @@ private fun BrowseContent(
     }
 }
 
+// ── Continue Reading row — glass card, surfaces the paused novel ──────────────
+@Composable
+private fun ContinueReadingRow(novelName: String, onClick: () -> Unit) {
+    Surface(
+        onClick  = onClick,
+        shape    = RoundedCornerShape(18.dp),
+        color    = GlassSurfaceLight,
+        border   = BorderStroke(1.dp, GlassBorderLight),
+        modifier = Modifier
+            .padding(horizontal = 16.dp)
+            .fillMaxWidth()
+            .shadow(
+                elevation    = 6.dp,
+                shape        = RoundedCornerShape(18.dp),
+                ambientColor = Color.Black.copy(alpha = 0.08f),
+                spotColor    = Color.Black.copy(alpha = 0.12f)
+            )
+    ) {
+        Row(
+            modifier          = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .background(AccentBlue),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Filled.PlayArrow,
+                    contentDescription = null,
+                    tint     = Color.White,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    "Continue Reading",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    novelName,
+                    style    = MaterialTheme.typography.titleSmall,
+                    color    = MaterialTheme.colorScheme.onBackground,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
 // ── Section Label ─────────────────────────────────────────────────────────────
 @Composable
 private fun SectionLabel(title: String) {
@@ -309,9 +389,19 @@ private fun SectionLabel(title: String) {
 @Composable
 private fun SourceChip(name: String, isActive: Boolean) {
     Surface(
-        shape = RoundedCornerShape(24.dp),
-        color = if (isActive) AccentBlue else MaterialTheme.colorScheme.surfaceVariant,
-        modifier = Modifier.height(30.dp)
+        shape  = RoundedCornerShape(24.dp),
+        color  = if (isActive) AccentBlue else GlassSurfaceLight,
+        border = if (isActive) null else BorderStroke(1.dp, GlassBorderLight),
+        modifier = Modifier
+            .height(30.dp)
+            .then(
+                if (!isActive) Modifier.shadow(
+                    elevation    = 2.dp,
+                    shape        = RoundedCornerShape(24.dp),
+                    ambientColor = Color.Black.copy(alpha = 0.06f),
+                    spotColor    = Color.Black.copy(alpha = 0.10f)
+                ) else Modifier
+            )
     ) {
         Box(
             contentAlignment = Alignment.Center,
@@ -333,7 +423,9 @@ private fun HeroBanner(novel: NovelEntity, onClick: () -> Unit) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
+            .padding(horizontal = 16.dp)
             .height(220.dp)
+            .clip(RoundedCornerShape(28.dp))
             .clickable(onClick = onClick)
     ) {
         // Cover image
@@ -379,9 +471,11 @@ private fun HeroBanner(novel: NovelEntity, onClick: () -> Unit) {
                 overflow = TextOverflow.Ellipsis
             )
             Spacer(Modifier.height(8.dp))
+            // Frosted-glass "Start Reading" pill
             Surface(
-                shape = RoundedCornerShape(10.dp),
-                color = Color.White
+                shape  = RoundedCornerShape(10.dp),
+                color  = GlassSurfaceLight,
+                border = BorderStroke(1.dp, GlassBorderLight)
             ) {
                 Row(
                     modifier          = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
@@ -403,20 +497,32 @@ private fun HeroBanner(novel: NovelEntity, onClick: () -> Unit) {
 }
 
 // ── Novel Card ────────────────────────────────────────────────────────────────
-// Width: 2.5cm ≈ 94dp, Height: 3cm ≈ 113dp
+// Width: 2.5cm ≈ 94dp
 // Image: 24px border radius, 2.2cm×2.2cm ≈ 83dp×83dp
 // Title: scrolling marquee (7 chars then scroll)
 // Chapter number + play button center + rating right
 @Composable
 private fun NovelCard(novel: NovelEntity, onClick: () -> Unit) {
-    val cardWidth  = 94.dp
-    val cardHeight = 130.dp
-    val imgSize    = 83.dp
+    val cardWidth = 94.dp
+    val imgSize   = 83.dp
+
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue   = if (isPressed) 0.94f else 1f,
+        animationSpec = tween(120),
+        label         = "cardPress"
+    )
 
     Column(
         modifier = Modifier
             .width(cardWidth)
-            .clickable(onClick = onClick),
+            .graphicsLayer(scaleX = scale, scaleY = scale)
+            .clickable(
+                interactionSource = interactionSource,
+                indication        = null,
+                onClick            = onClick
+            ),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         // Cover image box
@@ -432,7 +538,7 @@ private fun NovelCard(novel: NovelEntity, onClick: () -> Unit) {
                 contentScale       = ContentScale.Crop,
                 modifier           = Modifier.fillMaxSize()
             )
-            // Play button overlay — centered
+            // Play button overlay — centered, frosted glass
             Box(
                 modifier = Modifier
                     .size(28.dp)

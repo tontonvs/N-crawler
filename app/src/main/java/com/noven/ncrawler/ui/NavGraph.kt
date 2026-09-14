@@ -3,7 +3,11 @@ package com.noven.ncrawler.ui
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.*
 import androidx.compose.material.icons.Icons
@@ -16,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavType
@@ -28,6 +33,10 @@ import com.noven.ncrawler.ui.screens.library.LibraryScreen
 import com.noven.ncrawler.ui.screens.reader.ReaderScreen
 import com.noven.ncrawler.ui.theme.AccentBlue
 import com.noven.ncrawler.ui.theme.NavBlue
+import com.noven.ncrawler.ui.theme.GlassSurfaceLight
+import com.noven.ncrawler.ui.theme.GlassSurfaceDark
+import com.noven.ncrawler.ui.theme.GlassBorderLight
+import com.noven.ncrawler.ui.theme.GlassBorderDark
 
 object Routes {
     const val BROWSE    = "browse"
@@ -143,21 +152,26 @@ private fun FloatingNavBar(
     currentRoute: String,
     onNavigate: (String) -> Unit
 ) {
+    val isDark      = isSystemInDarkTheme()
+    val glassFill   = if (isDark) GlassSurfaceDark else GlassSurfaceLight
+    val glassBorder = if (isDark) GlassBorderDark else GlassBorderLight
+
     Row(
         verticalAlignment     = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         // ── Pill capsule — Home / Search / Library ─────────────────────────
         Surface(
-            shape         = RoundedCornerShape(50.dp),
-            color         = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f),
+            shape          = RoundedCornerShape(50.dp),
+            color          = glassFill,
+            border         = BorderStroke(1.dp, glassBorder),
             tonalElevation = 8.dp,
-            modifier      = Modifier
+            modifier       = Modifier
                 .shadow(
-                    elevation        = 16.dp,
-                    shape            = RoundedCornerShape(50.dp),
-                    ambientColor     = Color.Black.copy(alpha = 0.15f),
-                    spotColor        = Color.Black.copy(alpha = 0.25f)
+                    elevation    = 16.dp,
+                    shape        = RoundedCornerShape(50.dp),
+                    ambientColor = Color.Black.copy(alpha = 0.15f),
+                    spotColor    = Color.Black.copy(alpha = 0.25f)
                 )
         ) {
             Row(
@@ -192,19 +206,34 @@ private fun FloatingNavBar(
         }
 
         // ── Blue FAB — Continue Reading ────────────────────────────────────
-        // WhatsApp-style: outside the capsule, blue circle, white play icon
+        // WhatsApp-style: outside the capsule, blue circle, white play icon.
+        // Occasional-frequency tap, so a small press-in spring (Jhey-style
+        // delighter) is fine — it stays under 150ms and never fires on load.
+        val interactionSource = remember { MutableInteractionSource() }
+        val isPressed by interactionSource.collectIsPressedAsState()
+        val scale by animateFloatAsState(
+            targetValue   = if (isPressed) 0.90f else 1f,
+            animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
+            label         = "fabPress"
+        )
+
         Surface(
-            shape  = CircleShape,
-            color  = AccentBlue,
+            shape    = CircleShape,
+            color    = AccentBlue,
             modifier = Modifier
                 .size(52.dp)
+                .graphicsLayer(scaleX = scale, scaleY = scale)
                 .shadow(
                     elevation    = 12.dp,
                     shape        = CircleShape,
                     spotColor    = AccentBlue.copy(alpha = 0.4f),
                     ambientColor = AccentBlue.copy(alpha = 0.2f)
                 )
-                .clickable { onNavigate(Routes.LIBRARY) }
+                .clickable(
+                    interactionSource = interactionSource,
+                    indication        = null,
+                    onClick            = { onNavigate(Routes.LIBRARY) }
+                )
         ) {
             Box(contentAlignment = Alignment.Center) {
                 Icon(
