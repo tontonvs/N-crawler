@@ -198,8 +198,8 @@ private fun FloatingNavBar(
                     onClick     = { onNavigate(Routes.BROWSE) }
                 )
                 NavPillItem(
-                    icon        = Icons.Outlined.CollectionsBookmark,
-                    iconActive  = Icons.Rounded.CollectionsBookmark,
+                    icon        = Icons.Outlined.FolderOpen,
+                    iconActive  = Icons.Rounded.FolderOpen,
                     label       = "Library",
                     isSelected  = currentRoute == Routes.LIBRARY,
                     onClick     = { onNavigate(Routes.LIBRARY) }
