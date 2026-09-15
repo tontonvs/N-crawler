@@ -39,7 +39,13 @@ android {
     }
 
     composeOptions {
-        kotlinCompilerExtensionVersion = "1.5.3"
+        // CHANGE: 1.5.3 → 1.5.11
+        // Compose compiler 1.5.3 requires Kotlin 1.9.10 exactly.
+        // Kotlin 1.9.23 is installed on this machine, so we need 1.5.11
+        // which is the compiler extension version that targets Kotlin 1.9.23.
+        // Advantage : build compiles without suppressKotlinVersionCompatibilityCheck hack.
+        // Disadvantage : none — 1.5.11 is a stable patch release in the 1.5.x line.
+        kotlinCompilerExtensionVersion = "1.5.11"
     }
 }
 
@@ -78,18 +84,10 @@ dependencies {
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
-    // Palette — dynamic cover-art colour extraction (Sprint 2)
+    // Palette — dynamic cover-art colour extraction
     implementation("androidx.palette:palette-ktx:1.0.0")
 
-    // ── CHANGE: Material Components for Android ────────────────────────────
-    // Provides the actual XML style definitions for Theme.Material3.*
-    // The Compose material3 BOM only ships Compose tokens — the XML theme
-    // names (used in AndroidManifest android:theme) live in this artifact.
-    //
-    // Advantage : fixes AAPT "Theme.Material3.DayNight.NoActionBar not found"
-    //             with a single line; also unlocks MaterialAlertDialog etc.
-    // Disadvantage : ~2 MB AAR; but it's the standard Android dep — every
-    //                real Android app already carries it.
+    // Material Components — provides Theme.Material3.* XML styles for AAPT
     implementation("com.google.android.material:material:1.11.0")
 
     // Debug
