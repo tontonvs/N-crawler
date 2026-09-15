@@ -57,9 +57,11 @@ fun BrowseScreen(
     onNovelClick: (slug: String) -> Unit,
     onContinueReading: ((slug: String, chapterNum: Int) -> Unit)? = null,
     onDownloadsClick: (() -> Unit)? = null,
+    onGenreClick: ((genre: String) -> Unit)? = null,
     vm: BrowseViewModel = viewModel()
 ) {
     val browseState     by vm.browseState.collectAsStateWithLifecycle()
+    val popularState     by vm.popularState.collectAsStateWithLifecycle()
     val continueReading by vm.continueReading.collectAsStateWithLifecycle()
 
     // Light background fills the entire screen
@@ -77,8 +79,10 @@ fun BrowseScreen(
             // bottom nav) — the homepage itself is browse-only, no inline bar.
             BrowseContent(
                 state             = browseState,
+                popularState      = popularState,
                 onNovelClick      = onNovelClick,
                 onRetry           = vm::loadHomepage,
+                onGenreClick      = onGenreClick ?: {},
                 continueReading   = continueReading,
                 onContinueReading = onContinueReading
             )
@@ -299,8 +303,10 @@ fun SearchOverlay(
 @Composable
 private fun BrowseContent(
     state: BrowseUiState,
+    popularState: BrowseUiState,
     onNovelClick: (String) -> Unit,
     onRetry: () -> Unit,
+    onGenreClick: (String) -> Unit,
     continueReading: ContinueReadingInfo?,
     onContinueReading: ((slug: String, chapterNum: Int) -> Unit)?
 ) {
@@ -309,11 +315,18 @@ private fun BrowseContent(
         is BrowseUiState.Error   -> BrowseError(state.message, onRetry)
         is BrowseUiState.Empty   -> BrowseError("No novels found", onRetry)
         is BrowseUiState.Success -> {
-            val novels        = state.novels
-            val hero          = novels.firstOrNull()
-            val latestNovels  = novels.drop(1).take(20)
-            val popularNovels = novels.take(15)
-            val genres        = listOf("Fantasy", "Action", "Romance", "Sci-Fi", "Martial Arts")
+            val novels = state.novels
+            val hero   = novels.firstOrNull()
+
+            // Group into up to 5 genre rows each, samples of ~10 per genre —
+            // "Latest" from novels.drop(1), "Popular" from the separate
+            // /sort/most-popular fetch (a genuinely different source, not a
+            // slice of the same list).
+            val latestGenreRows  = remember(novels) { groupByTopGenres(novels.drop(1)) }
+            val popularNovels    = (popularState as? BrowseUiState.Success)?.novels ?: emptyList()
+            val popularGenreRows = remember(popularNovels) { groupByTopGenres(popularNovels) }
+
+            val chipGenres = listOf("Fantasy", "Action", "Romance", "Sci-Fi", "Martial Arts")
 
             LazyColumn(
                 modifier       = Modifier.fillMaxSize(),
@@ -342,38 +355,127 @@ private fun BrowseContent(
                     }
                 }
 
-                // ── Genre chips ───────────────────────────────────────────
+                // ── Genre chips — now tappable, each opens that genre's full
+                // list via Discover's infinite-scroll GenreScreen.
                 item {
                     Spacer(Modifier.height(20.dp))
                     LazyRow(
                         contentPadding        = PaddingValues(horizontal = 16.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        itemsIndexed(genres) { i, genre ->
+                        itemsIndexed(chipGenres) { i, genre ->
                             GenreChip(
                                 name     = genre,
-                                isActive = i == 0
+                                isActive = i == 0,
+                                onClick  = { onGenreClick(genre) }
                             )
                         }
                     }
                 }
 
-                // ── Latest Updates — landscape cards, 2-col grid ────────────
-                item {
-                    Spacer(Modifier.height(24.dp))
-                    SectionHeader("Latest Updates")
-                    Spacer(Modifier.height(12.dp))
-                    NovelGrid(novels = latestNovels, onNovelClick = onNovelClick)
+                // ── Latest Updates — up to 5 genre rows, horizontal samples,
+                // "See more" on each opens that genre's full list ─────────────
+                if (latestGenreRows.isNotEmpty()) {
+                    item {
+                        Spacer(Modifier.height(24.dp))
+                        SectionHeader("Latest Updates")
+                    }
+                    items(latestGenreRows, key = { "latest_${it.first}" }) { (genre, rowNovels) ->
+                        Spacer(Modifier.height(16.dp))
+                        GenreRow(
+                            genre        = genre,
+                            novels       = rowNovels,
+                            onNovelClick = onNovelClick,
+                            onSeeMore    = { onGenreClick(genre) }
+                        )
+                    }
                 }
 
-                // ── Popular — landscape cards, 2-col grid ───────────────────
-                item {
-                    Spacer(Modifier.height(28.dp))
-                    SectionHeader("Popular")
-                    Spacer(Modifier.height(12.dp))
-                    NovelGrid(novels = popularNovels, onNovelClick = onNovelClick, keySuffix = "_p")
-                    Spacer(Modifier.height(20.dp))
+                // ── Popular — same pattern, sourced from /sort/most-popular ──
+                if (popularGenreRows.isNotEmpty()) {
+                    item {
+                        Spacer(Modifier.height(28.dp))
+                        SectionHeader("Popular")
+                    }
+                    items(popularGenreRows, key = { "popular_${it.first}" }) { (genre, rowNovels) ->
+                        Spacer(Modifier.height(16.dp))
+                        GenreRow(
+                            genre        = genre,
+                            novels       = rowNovels,
+                            onNovelClick = onNovelClick,
+                            onSeeMore    = { onGenreClick(genre) }
+                        )
+                    }
+                    item { Spacer(Modifier.height(20.dp)) }
                 }
+            }
+        }
+    }
+}
+
+// Groups novels by their (comma-separated) genre tags, keeps the top
+// [maxGenres] genres by how many novels carry them, and caps each row's
+// sample to [perGenre] so a genre row stays a horizontal scroll, not a wall.
+private fun groupByTopGenres(
+    novels: List<NovelEntity>,
+    maxGenres: Int = 5,
+    perGenre: Int = 10
+): List<Pair<String, List<NovelEntity>>> {
+    val byGenre = linkedMapOf<String, MutableList<NovelEntity>>()
+    novels.forEach { novel ->
+        novel.genres.split(",")
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .forEach { g -> byGenre.getOrPut(g) { mutableListOf() }.add(novel) }
+    }
+    return byGenre.entries
+        .sortedByDescending { it.value.size }
+        .take(maxGenres)
+        .map { it.key to it.value.take(perGenre) }
+}
+
+// ── Genre Row — a labeled horizontal sample with a "See more" that opens
+// the full infinite-scroll list for that genre (Discover's GenreScreen).
+// Cards are a fixed, narrower width here (130dp) than the old 2-col grid —
+// narrower cards read the (portrait) covers better at this card height.
+@Composable
+private fun GenreRow(
+    genre: String,
+    novels: List<NovelEntity>,
+    onNovelClick: (String) -> Unit,
+    onSeeMore: () -> Unit
+) {
+    Column {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment     = Alignment.CenterVertically
+        ) {
+            Text(
+                genre,
+                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                color = MaterialTheme.colorScheme.onBackground
+            )
+            Text(
+                "See more",
+                style    = MaterialTheme.typography.labelMedium,
+                color    = AccentBlue,
+                modifier = Modifier.clickable(onClick = onSeeMore)
+            )
+        }
+        Spacer(Modifier.height(10.dp))
+        LazyRow(
+            contentPadding        = PaddingValues(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            items(novels, key = { it.slug }) { novel ->
+                NovelCard(
+                    novel    = novel,
+                    onClick  = { onNovelClick(novel.slug) },
+                    modifier = Modifier.width(130.dp)
+                )
             }
         }
     }
@@ -527,7 +629,7 @@ private fun SectionHeader(title: String) {
 // tall (50dp), white frosted-glass, bold dark text. Never dark glass; the
 // active chip swaps to solid accent + white text for affordance only.
 @Composable
-private fun GenreChip(name: String, isActive: Boolean) {
+private fun GenreChip(name: String, isActive: Boolean, onClick: () -> Unit) {
     val bg        = if (isActive) AccentBlue else GlassSurfaceLight
     val border    = if (isActive) Color.Transparent else GlassBorderLight
     val textColor = if (isActive) Color.White else MaterialTheme.colorScheme.onSurface
@@ -538,7 +640,7 @@ private fun GenreChip(name: String, isActive: Boolean) {
             .clip(RoundedCornerShape(25.dp))
             .background(bg)
             .border(1.dp, border, RoundedCornerShape(25.dp))
-            .clickable { }
+            .clickable(onClick = onClick)
             .padding(horizontal = 18.dp),
         contentAlignment = Alignment.Center
     ) {
@@ -547,46 +649,6 @@ private fun GenreChip(name: String, isActive: Boolean) {
             style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
             color = textColor
         )
-    }
-}
-
-// ── Novel Grid ────────────────────────────────────────────────────────────────
-// 2-column grid of landscape cards (Moana/Encanto style) — NOT a horizontal
-// portrait scroll. Built with chunked Rows rather than LazyVerticalGrid since
-// it lives inside an outer LazyColumn item (avoids nested-scroll conflicts);
-// section sizes here (≤20 items) are small enough that this costs nothing.
-@Composable
-private fun NovelGrid(
-    novels: List<NovelEntity>,
-    onNovelClick: (String) -> Unit,
-    keySuffix: String = ""
-) {
-    Column(
-        modifier            = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        novels.chunked(2).forEach { pair ->
-            Row(
-                modifier              = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                pair.forEach { novel ->
-                    key(novel.slug + keySuffix) {
-                        NovelCard(
-                            novel    = novel,
-                            onClick  = { onNovelClick(novel.slug) },
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                }
-                // Odd item out on the last row — keep it half-width, not stretched
-                if (pair.size == 1) {
-                    Spacer(Modifier.weight(1f))
-                }
-            }
-        }
     }
 }
 

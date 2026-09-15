@@ -35,6 +35,11 @@ class BrowseViewModel(app: Application) : AndroidViewModel(app) {
     private val _browseState = MutableStateFlow<BrowseUiState>(BrowseUiState.Loading)
     val browseState: StateFlow<BrowseUiState> = _browseState.asStateFlow()
 
+    // Separate "most popular" sort — a genuinely different source (/sort/most-popular)
+    // from the "latest release" one above, not just a slice of the same list.
+    private val _popularState = MutableStateFlow<BrowseUiState>(BrowseUiState.Loading)
+    val popularState: StateFlow<BrowseUiState> = _popularState.asStateFlow()
+
     private val _searchState = MutableStateFlow<BrowseUiState>(BrowseUiState.Empty)
     val searchState: StateFlow<BrowseUiState> = _searchState.asStateFlow()
 
@@ -89,6 +94,19 @@ class BrowseViewModel(app: Application) : AndroidViewModel(app) {
                 _browseState.value = BrowseUiState.Error(
                     "${e::class.simpleName}: ${e.message ?: "Unknown error"}"
                 )
+            }
+        }
+        viewModelScope.launch {
+            Log.d(TAG, "loadPopular() started")
+            _popularState.value = BrowseUiState.Loading
+            try {
+                val novels = repo.fetchPopular()
+                Log.d(TAG, "fetchPopular() returned ${novels.size} novels")
+                _popularState.value = if (novels.isEmpty()) BrowseUiState.Empty
+                                       else BrowseUiState.Success(novels)
+            } catch (e: Exception) {
+                Log.e(TAG, "fetchPopular() FAILED: ${e.message}", e)
+                _popularState.value = BrowseUiState.Error(e.message ?: "Failed to load")
             }
         }
     }

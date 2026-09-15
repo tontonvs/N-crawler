@@ -30,6 +30,18 @@ class NovelRepository(
         return novels
     }
 
+    suspend fun fetchPopular(): List<NovelEntity> {
+        val novels = scraper.fetchPopular()
+        if (novels.isNotEmpty()) novelDao.upsertAll(novels)
+        return novels
+    }
+
+    suspend fun fetchGenre(genre: String, page: Int = 1): List<NovelEntity> {
+        val novels = scraper.fetchGenre(genre, page)
+        if (novels.isNotEmpty()) novelDao.upsertAll(novels)
+        return novels
+    }
+
     suspend fun search(query: String): List<NovelEntity> {
         val local  = novelDao.searchLocal(query)
         val remote = try { scraper.search(query) } catch (_: Exception) { emptyList() }

@@ -77,6 +77,40 @@ class FreeWebNovelScraper {
         }
     }
 
+    // ── Popular ───────────────────────────────────────────────────────────────
+    // Confirmed URL: /sort/most-popular — same card markup as the homepage
+    // listing, just a different sort order, so it reuses parseNovelCards.
+    suspend fun fetchPopular(): List<NovelEntity> {
+        Log.d(TAG, "fetchPopular()")
+        return try {
+            val doc = fetch("$BASE/sort/most-popular")
+            parseNovelCards(doc)
+        } catch (e: Exception) {
+            Log.e(TAG, "fetchPopular failed: ${e.message}", e)
+            throw e
+        }
+    }
+
+    // ── Genre listing (paginated) ───────────────────────────────────────────
+    // URL pattern inferred from the confirmed /sort/latest-release/english-novel
+    // pagination (…/english-novel/2, /3, …) — genre pages are built by the same
+    // site template, so page 1 is /genre/<Genre> and further pages are
+    // /genre/<Genre>/<page>. Not yet verified live against page 2+; if this
+    // turns out wrong, the logcat GET/HTTP lines below will show exactly what
+    // URL was hit and what came back, same as how the cover bug got diagnosed.
+    suspend fun fetchGenre(genre: String, page: Int = 1): List<NovelEntity> {
+        Log.d(TAG, "fetchGenre(genre=$genre, page=$page)")
+        val encodedGenre = java.net.URLEncoder.encode(genre, "UTF-8").replace("+", "+")
+        val url = if (page <= 1) "$BASE/genre/$encodedGenre" else "$BASE/genre/$encodedGenre/$page"
+        return try {
+            val doc = fetch(url)
+            parseNovelCards(doc)
+        } catch (e: Exception) {
+            Log.e(TAG, "fetchGenre('$genre', page=$page) failed: ${e.message}", e)
+            throw e
+        }
+    }
+
     // ── Search ────────────────────────────────────────────────────────────────
     // Confirmed URL: /search/?searchkey=<query>
     suspend fun search(query: String): List<NovelEntity> {
@@ -271,15 +305,20 @@ class FreeWebNovelScraper {
             val cover  = findCoverNear(h3)
 
             // Rating: text content near the card (plain number like "4.6")
-            val ratingText = (h3.parent() ?: h3).select("em, [class*=score]")
+            val infoBlock  = h3.parent() ?: h3
+            val ratingText = infoBlock.select("em, [class*=score]")
                 .firstOrNull()?.text()?.trim() ?: ""
+
+            // Genres: the 1-2 genre tag links shown per card (e.g. Fantasy, Romance)
+            val genresText = infoBlock.select("a[href*='/genre/']")
+                .eachText().joinToString(", ")
 
             Log.d(TAG, "Card: slug=$slug title=$title cover=${cover.takeLast(20)}")
 
             result.add(NovelEntity(
                 slug = slug, title = title, coverUrl = cover,
                 synopsis = "", status = "", rating = ratingText,
-                genres = "", chapterCount = 0, latestChapter = ""
+                genres = genresText, chapterCount = 0, latestChapter = ""
             ))
         }
 
