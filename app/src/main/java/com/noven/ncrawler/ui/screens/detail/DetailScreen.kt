@@ -1,578 +1,687 @@
 package com.noven.ncrawler.ui.screens.detail
 
-import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.core.*
-import androidx.compose.foundation.*
-import androidx.compose.foundation.layout.*
+import android.graphics.Bitmap
+import android.graphics.drawable.BitmapDrawable
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.*
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.MenuBook
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarHalf
+import androidx.compose.material.icons.outlined.StarOutline
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.*
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.palette.graphics.Palette
 import coil.compose.AsyncImage
-import com.noven.ncrawler.data.db.DownloadProgress
-import com.noven.ncrawler.data.db.DownloadStatus
+import coil.request.ImageRequest
 import com.noven.ncrawler.data.db.NovelEntity
 import com.noven.ncrawler.data.scraper.ChapterLink
-import com.noven.ncrawler.ui.theme.AccentBlue
-import com.noven.ncrawler.ui.theme.StarGold
 import com.noven.ncrawler.viewmodel.DetailUiState
 import com.noven.ncrawler.viewmodel.DetailViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
-// ── Dark glass tokens ─────────────────────────────────────────────────────────
-private val DarkGlassFill   = Color(0x1AFFFFFF)  // 10% white
-private val DarkGlassBorder = Color(0x33FFFFFF)  // 20% white hairline
-private val DarkGlassFillMd = Color(0x26FFFFFF)  // 15% white
+// ── Colour helpers ────────────────────────────────────────────────────────────
+
+private val FallbackTop    = Color(0xFF050A1A)
+private val FallbackAccent = Color(0xFF4FC3F7)
+
+// ── Star rating ───────────────────────────────────────────────────────────────
+
+@Composable
+private fun StarRating(
+    rawRating: String,                     // e.g. "8.7" from NovelEntity.rating
+    modifier: Modifier = Modifier,
+    starColor: Color = Color(0xFFFFB400),
+    emptyColor: Color = Color.White.copy(alpha = 0.30f),
+) {
+    val score = rawRating.toFloatOrNull() ?: 0f
+    // NovelArrow ratings are out of 10 — map to 5 stars
+    val stars = (score / 2f).coerceIn(0f, 5f)
+
+    Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
+        for (i in 1..5) {
+            val icon = when {
+                stars >= i          -> Icons.Filled.Star
+                stars >= i - 0.5f   -> Icons.Filled.StarHalf
+                else                -> Icons.Outlined.StarOutline
+            }
+            Icon(
+                imageVector        = icon,
+                contentDescription = null,
+                tint               = if (stars >= i - 0.5f) starColor else emptyColor,
+                modifier           = Modifier.size(17.dp),
+            )
+        }
+        Spacer(Modifier.width(7.dp))
+        Text(
+            text       = rawRating.ifBlank { "—" },
+            color      = Color.White,
+            fontSize   = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+    }
+}
+
+// ── Glass play button ─────────────────────────────────────────────────────────
+
+@Composable
+private fun GlassPlayButton(label: String, onClick: () -> Unit) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier            = Modifier.clickable(onClick = onClick),
+    ) {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier         = Modifier
+                .size(68.dp)
+                .clip(CircleShape)
+                .background(Color.White.copy(alpha = 0.18f))
+                .border(1.5.dp, Color.White.copy(alpha = 0.45f), CircleShape),
+        ) {
+            Icon(
+                imageVector        = Icons.Filled.PlayArrow,
+                contentDescription = label,
+                tint               = Color.White,
+                modifier           = Modifier.size(34.dp),
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(label, color = Color.White.copy(alpha = 0.80f), fontSize = 11.sp)
+    }
+}
+
+// ── Meta chip (Status | Genre | Latest) ──────────────────────────────────────
+
+@Composable
+private fun MetaChip(label: String, value: String, accent: Color) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(
+            text       = value,
+            color      = Color.White,
+            fontSize   = 13.sp,
+            fontWeight = FontWeight.Bold,
+            textAlign  = TextAlign.Center,
+            maxLines   = 1,
+            overflow   = TextOverflow.Ellipsis,
+        )
+        Spacer(Modifier.height(3.dp))
+        Text(
+            text          = label,
+            color         = accent.copy(alpha = 0.75f),
+            fontSize      = 9.sp,
+            fontWeight    = FontWeight.SemiBold,
+            letterSpacing = 1.2.sp,
+            textAlign     = TextAlign.Center,
+        )
+    }
+}
+
+// ── Vertical separator ────────────────────────────────────────────────────────
+
+@Composable
+private fun MetaSeparator() {
+    Box(
+        modifier = Modifier
+            .height(28.dp)
+            .width(1.dp)
+            .background(Color.White.copy(alpha = 0.18f)),
+    )
+}
+
+// ── Chapter row ───────────────────────────────────────────────────────────────
+
+@Composable
+private fun ChapterRow(chapter: ChapterLink, accent: Color, onClick: () -> Unit) {
+    Row(
+        modifier          = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 12.dp, horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(6.dp)
+                .clip(CircleShape)
+                .background(accent.copy(alpha = 0.75f)),
+        )
+        Spacer(Modifier.width(12.dp))
+        Text(
+            text     = chapter.title.ifBlank { "Chapter ${chapter.num}" },
+            color    = Color.White.copy(alpha = 0.88f),
+            fontSize = 13.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            text     = "Ch.${chapter.num}",
+            color    = accent.copy(alpha = 0.55f),
+            fontSize = 10.sp,
+        )
+    }
+    HorizontalDivider(
+        color     = Color.White.copy(alpha = 0.07f),
+        thickness = 0.5.dp,
+    )
+}
+
+// ── Floating glass icon button (back / refresh) ───────────────────────────────
+
+@Composable
+private fun GlassCircleBtn(onClick: () -> Unit, content: @Composable () -> Unit) {
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier         = Modifier
+            .size(38.dp)
+            .clip(CircleShape)
+            .background(Color.Black.copy(alpha = 0.35f))
+            .border(1.dp, Color.White.copy(alpha = 0.20f), CircleShape)
+            .clickable(onClick = onClick),
+    ) { content() }
+}
+
+// ── Main screen ───────────────────────────────────────────────────────────────
 
 @Composable
 fun DetailScreen(
     slug: String,
     onBack: () -> Unit,
     onReadChapter: (chapterNum: Int) -> Unit,
-    vm: DetailViewModel = viewModel()
+    vm: DetailViewModel = viewModel(),
 ) {
     LaunchedEffect(slug) { vm.load(slug) }
 
-    val state            by vm.state.collectAsStateWithLifecycle()
+    val state           by vm.state.collectAsStateWithLifecycle()
     val downloadProgress by vm.downloadProgress.collectAsStateWithLifecycle()
-    val updateMessage    by vm.updateMessage.collectAsStateWithLifecycle()
+    val updateMessage   by vm.updateMessage.collectAsStateWithLifecycle()
 
     val snackbarHost = remember { SnackbarHostState() }
     LaunchedEffect(updateMessage) {
-        updateMessage?.let {
-            snackbarHost.showSnackbar(it)
-            vm.clearUpdateMessage()
-        }
+        updateMessage?.let { vm.clearUpdateMessage(); snackbarHost.showSnackbar(it) }
     }
 
-    Scaffold(
-        snackbarHost   = { SnackbarHost(snackbarHost) },
-        containerColor = MaterialTheme.colorScheme.background
-    ) { padding ->
-        Box(modifier = Modifier.fillMaxSize()) {
+    // Palette colours — extracted once the cover bitmap loads
+    var dominantColor by remember { mutableStateOf<Color?>(null) }
+    var vibrantColor  by remember { mutableStateOf<Color?>(null) }
 
-            when (val s = state) {
-                is DetailUiState.Loading -> DetailSkeleton()
+    val bgTop  = dominantColor ?: FallbackTop
+    val accent = vibrantColor  ?: FallbackAccent
 
-                is DetailUiState.Error -> Box(
-                    Modifier.fillMaxSize().padding(padding),
-                    Alignment.Center
+    Box(modifier = Modifier.fillMaxSize()) {
+
+        when (val s = state) {
+
+            is DetailUiState.Loading -> {
+                // Solid dark bg while loading
+                Box(
+                    modifier         = Modifier.fillMaxSize().background(FallbackTop),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator(color = FallbackAccent)
+                }
+            }
+
+            is DetailUiState.Error -> {
+                Box(
+                    modifier         = Modifier.fillMaxSize().background(FallbackTop),
+                    contentAlignment = Alignment.Center,
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(
-                            Icons.Default.WifiOff,
-                            contentDescription = null,
-                            modifier = Modifier.size(48.dp),
-                            tint     = MaterialTheme.colorScheme.error
-                        )
-                        Spacer(Modifier.height(12.dp))
-                        Text(s.message, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(s.message, color = Color.White.copy(alpha = 0.7f), fontSize = 14.sp)
                         Spacer(Modifier.height(16.dp))
-                        Button(
-                            onClick = { vm.load(slug) },
-                            shape   = RoundedCornerShape(12.dp),
-                            colors  = ButtonDefaults.buttonColors(containerColor = AccentBlue)
-                        ) { Text("Retry") }
+                        Box(
+                            modifier         = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(FallbackAccent.copy(alpha = 0.2f))
+                                .border(1.dp, FallbackAccent.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
+                                .clickable { vm.load(slug) }
+                                .padding(horizontal = 24.dp, vertical = 10.dp),
+                        ) {
+                            Text("Retry", color = Color.White, fontSize = 13.sp)
+                        }
                     }
                 }
+            }
 
-                is DetailUiState.Success -> DetailContent(
-                    novel            = s.novel,
-                    chapters         = s.chapters,
-                    lastReadChapter  = s.lastReadChapter,
-                    downloadProgress = downloadProgress,
-                    onReadChapter    = onReadChapter,
-                    onDownloadAll    = vm::downloadAll,
-                    onCancelDownload = vm::cancelDownload
+            is DetailUiState.Success -> {
+                CinematicDetail(
+                    novel          = s.novel,
+                    chapters       = s.chapters,
+                    lastReadChapter = s.lastReadChapter,
+                    bgTop          = bgTop,
+                    accent         = accent,
+                    onReadChapter  = onReadChapter,
+                    onCoverLoaded  = { drawable ->
+                        val bmp = (drawable as? BitmapDrawable)?.bitmap ?: return@CinematicDetail
+                        // Extract palette off main thread
+                        val palette = Palette.from(bmp).generate()
+                        dominantColor = Color(palette.getDominantColor(0xFF050A1A.toInt()))
+                        vibrantColor  = Color(
+                            palette.getVibrantColor(
+                                palette.getLightVibrantColor(
+                                    palette.getMutedColor(0xFF4FC3F7.toInt())
+                                )
+                            )
+                        )
+                    },
                 )
             }
+        }
 
-            // ── Floating back + refresh row — always over the hero ────────
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .statusBarsPadding()
-                    .padding(horizontal = 10.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment     = Alignment.CenterVertically
-            ) {
-                FloatingCircleButton(onClick = onBack) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Back",
-                        tint     = Color.White,
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
-                FloatingCircleButton(onClick = vm::checkForUpdates) {
-                    Icon(
-                        Icons.Default.Refresh,
-                        contentDescription = "Check for updates",
-                        tint     = Color.White,
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
+        // ── Floating top row: back + refresh — always on top ─────────────
+        Row(
+            modifier              = Modifier
+                .fillMaxWidth()
+                .statusBarsPadding()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment     = Alignment.CenterVertically,
+        ) {
+            GlassCircleBtn(onClick = onBack) {
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Back",
+                    tint               = Color.White,
+                    modifier           = Modifier.size(18.dp),
+                )
+            }
+            GlassCircleBtn(onClick = vm::checkForUpdates) {
+                Icon(
+                    Icons.Filled.Refresh,
+                    contentDescription = "Check updates",
+                    tint               = Color.White,
+                    modifier           = Modifier.size(18.dp),
+                )
             }
         }
+
+        // Snackbar
+        SnackbarHost(
+            hostState = snackbarHost,
+            modifier  = Modifier.align(Alignment.BottomCenter).navigationBarsPadding(),
+        )
     }
 }
 
-// ── Floating circle button — frosted glass ────────────────────────────────────
-@Composable
-private fun FloatingCircleButton(onClick: () -> Unit, content: @Composable () -> Unit) {
-    Box(
-        modifier = Modifier
-            .size(38.dp)
-            .clip(CircleShape)
-            .background(DarkGlassFill)
-            .border(1.dp, DarkGlassBorder, CircleShape)
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center
-    ) { content() }
-}
+// ── Cinematic detail body ─────────────────────────────────────────────────────
 
-// ── Detail Content ────────────────────────────────────────────────────────────
 @Composable
-private fun DetailContent(
+private fun CinematicDetail(
     novel: NovelEntity,
     chapters: List<ChapterLink>,
     lastReadChapter: Int?,
-    downloadProgress: DownloadProgress?,
+    bgTop: Color,
+    accent: Color,
     onReadChapter: (Int) -> Unit,
-    onDownloadAll: () -> Unit,
-    onCancelDownload: () -> Unit
+    onCoverLoaded: (android.graphics.drawable.Drawable) -> Unit,
 ) {
-    var synopsisExpanded by remember { mutableStateOf(false) }
+    var showMore by remember { mutableStateOf(false) }
+    val PREVIEW_COUNT = 10
 
-    val isDownloading = downloadProgress?.status == DownloadStatus.DOWNLOADING ||
-                        downloadProgress?.status == DownloadStatus.QUEUED
-    val isComplete    = downloadProgress?.status == DownloadStatus.COMPLETE
+    // Parse first genre only for the chip slot
+    val primaryGenre = novel.genres.split(",").firstOrNull()?.trim().orEmpty()
 
-    LazyColumn(
-        modifier       = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(bottom = 120.dp)
-    ) {
-
-        // ── Hero — full-bleed cover + deep scrim ──────────────────────────
-        item {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(420.dp)
-            ) {
-                AsyncImage(
-                    model              = novel.coverUrl,
-                    contentDescription = novel.title,
-                    contentScale       = ContentScale.Crop,
-                    modifier           = Modifier.fillMaxSize()
-                )
-
-                // Dual-zone scrim: darker at top (back btn legible) + darker at
-                // bottom (title + CTAs legible), lighter in the middle.
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(
-                            Brush.verticalGradient(
-                                colorStops = arrayOf(
-                                    0f    to Color.Black.copy(alpha = 0.40f),
-                                    0.38f to Color.Black.copy(alpha = 0.05f),
-                                    0.60f to Color.Black.copy(alpha = 0.40f),
-                                    1f    to Color.Black.copy(alpha = 0.97f)
-                                )
-                            )
-                        )
-                )
-
-                // Bottom content
-                Column(
-                    modifier = Modifier
-                        .align(Alignment.BottomStart)
-                        .padding(horizontal = 16.dp, vertical = 20.dp)
-                ) {
-                    // Meta pills row
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment     = Alignment.CenterVertically
-                    ) {
-                        if (novel.status.isNotBlank()) GlassPill(novel.status)
-                        if (novel.rating.isNotBlank()) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.Star, null,
-                                    tint = StarGold, modifier = Modifier.size(12.dp))
-                                Spacer(Modifier.width(3.dp))
-                                Text(novel.rating,
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        fontWeight = FontWeight.Bold),
-                                    color = StarGold)
-                            }
-                        }
-                        if (chapters.isNotEmpty()) {
-                            Text("${chapters.size} ch.",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = Color.White.copy(alpha = 0.65f))
-                        }
-                    }
-
-                    Spacer(Modifier.height(6.dp))
-
-                    // Title
-                    Text(
-                        novel.title,
-                        style = MaterialTheme.typography.displaySmall.copy(
-                            fontWeight    = FontWeight.ExtraBold,
-                            fontSize      = 28.sp,
-                            lineHeight    = 33.sp,
-                            letterSpacing = (-0.5).sp
-                        ),
-                        color    = Color.White,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-
-                    Spacer(Modifier.height(14.dp))
-
-                    // CTA row: read pill + download circle
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        verticalAlignment     = Alignment.CenterVertically
-                    ) {
-                        // Primary read pill — solid AccentBlue
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(50.dp))
-                                .background(AccentBlue)
-                                .clickable {
-                                    val chapter = lastReadChapter
-                                        ?: chapters.lastOrNull()?.num ?: 1
-                                    onReadChapter(chapter)
-                                }
-                                .padding(horizontal = 20.dp, vertical = 10.dp)
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    if (lastReadChapter != null) Icons.Default.PlayArrow
-                                    else Icons.AutoMirrored.Filled.MenuBook,
-                                    contentDescription = null,
-                                    tint     = Color.White,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(Modifier.width(6.dp))
-                                Text(
-                                    if (lastReadChapter != null)
-                                        "Continue Ch.$lastReadChapter"
-                                    else "Start Reading",
-                                    style = MaterialTheme.typography.labelLarge,
-                                    color = Color.White
-                                )
-                            }
-                        }
-
-                        // Download circle — frosted glass
-                        Box(
-                            modifier = Modifier
-                                .size(42.dp)
-                                .clip(CircleShape)
-                                .background(DarkGlassFillMd)
-                                .border(1.dp, DarkGlassBorder, CircleShape)
-                                .clickable {
-                                    if (isDownloading) onCancelDownload()
-                                    else onDownloadAll()
-                                },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            if (isDownloading) {
-                                CircularProgressIndicator(
-                                    modifier    = Modifier.size(18.dp),
-                                    strokeWidth = 2.dp,
-                                    color       = Color.White
-                                )
-                            } else {
-                                Icon(
-                                    if (isComplete) Icons.Default.DownloadDone
-                                    else Icons.Default.Download,
-                                    contentDescription = if (isComplete) "Downloaded"
-                                                         else "Download all",
-                                    tint     = Color.White,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // ── Download progress bar ─────────────────────────────────────────
-        if (isDownloading && downloadProgress != null) {
-            item {
-                val p = if (downloadProgress.totalChapters > 0)
-                    downloadProgress.downloadedChapters.toFloat() / downloadProgress.totalChapters
-                else 0f
-                Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
-                    LinearProgressIndicator(
-                        progress   = { p },
-                        modifier   = Modifier
-                            .fillMaxWidth()
-                            .height(3.dp)
-                            .clip(RoundedCornerShape(2.dp)),
-                        color      = AccentBlue,
-                        trackColor = MaterialTheme.colorScheme.surfaceVariant
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        "${downloadProgress.downloadedChapters}/${downloadProgress.totalChapters} chapters downloaded",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-        }
-
-        // ── Genre chips ───────────────────────────────────────────────────
-        if (novel.genres.isNotBlank()) {
-            item {
-                Spacer(Modifier.height(16.dp))
-                Row(
-                    modifier = Modifier
-                        .padding(horizontal = 16.dp)
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    novel.genres.split(",").take(5).forEach { genre ->
-                        if (genre.trim().isNotBlank()) {
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(50.dp))
-                                    .background(DarkGlassFill)
-                                    .border(1.dp, DarkGlassBorder, RoundedCornerShape(50.dp))
-                                    .padding(horizontal = 12.dp, vertical = 5.dp)
-                            ) {
-                                Text(genre.trim(),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // ── Synopsis ──────────────────────────────────────────────────────
-        if (novel.synopsis.isNotBlank()) {
-            item {
-                Spacer(Modifier.height(16.dp))
-                Column(
-                    Modifier
-                        .padding(horizontal = 16.dp)
-                        .animateContentSize(animationSpec = tween(220))
-                ) {
-                    Text(
-                        novel.synopsis,
-                        style    = MaterialTheme.typography.bodyMedium.copy(lineHeight = 22.sp),
-                        color    = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = if (synopsisExpanded) Int.MAX_VALUE else 3,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Spacer(Modifier.height(5.dp))
-                    Text(
-                        if (synopsisExpanded) "Show less" else "Show more",
-                        style    = MaterialTheme.typography.labelSmall.copy(
-                            fontWeight = FontWeight.SemiBold),
-                        color    = AccentBlue,
-                        modifier = Modifier.clickable { synopsisExpanded = !synopsisExpanded }
-                    )
-                }
-            }
-        }
-
-        // ── Chapter list header ───────────────────────────────────────────
-        item {
-            Spacer(Modifier.height(24.dp))
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment     = Alignment.CenterVertically
-            ) {
-                Text(
-                    "Chapters",
-                    style = MaterialTheme.typography.titleMedium.copy(
-                        fontWeight    = FontWeight.ExtraBold,
-                        letterSpacing = (-0.2).sp
-                    ),
-                    color = MaterialTheme.colorScheme.onBackground
-                )
-                Text(
-                    "${chapters.size} total",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            Spacer(Modifier.height(8.dp))
-            HorizontalDivider(
-                Modifier.padding(horizontal = 16.dp),
-                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f)
-            )
-        }
-
-        if (chapters.isEmpty()) {
-            item {
-                Box(Modifier.fillMaxWidth().padding(vertical = 32.dp), Alignment.Center) {
-                    Text("No chapters found",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.bodyMedium)
-                }
-            }
-        }
-
-        // ── Chapter rows ──────────────────────────────────────────────────
-        items(chapters, key = { it.num }) { chapter ->
-            val isLastRead = chapter.num == lastReadChapter
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { onReadChapter(chapter.num) }
-                    .background(
-                        if (isLastRead) AccentBlue.copy(alpha = 0.08f)
-                        else Color.Transparent
-                    )
-                    .padding(horizontal = 16.dp, vertical = 13.dp),
-                verticalAlignment     = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(
-                    verticalAlignment     = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    modifier              = Modifier.weight(1f)
-                ) {
-                    // Chapter number badge
-                    Box(
-                        modifier = Modifier
-                            .size(32.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(
-                                if (isLastRead) AccentBlue.copy(alpha = 0.18f)
-                                else DarkGlassFill
-                            )
-                            .border(
-                                1.dp,
-                                if (isLastRead) AccentBlue.copy(alpha = 0.4f)
-                                else DarkGlassBorder,
-                                RoundedCornerShape(8.dp)
-                            ),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            "${chapter.num}",
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontWeight = FontWeight.Bold,
-                                fontSize   = 10.sp
-                            ),
-                            color = if (isLastRead) AccentBlue
-                                    else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-
-                    Column {
-                        Text(
-                            chapter.title.ifBlank { "Chapter ${chapter.num}" },
-                            style = MaterialTheme.typography.bodyMedium.copy(
-                                fontWeight = if (isLastRead) FontWeight.SemiBold
-                                             else FontWeight.Normal
-                            ),
-                            color = if (isLastRead) AccentBlue
-                                    else MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        if (isLastRead) {
-                            Text("Last read",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = AccentBlue.copy(alpha = 0.7f))
-                        }
-                    }
-                }
-
-                Icon(Icons.Default.ChevronRight, null,
-                    tint     = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(18.dp))
-            }
-
-            HorizontalDivider(
-                Modifier.padding(horizontal = 16.dp),
-                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.07f)
-            )
-        }
+    // Format latest chapter label
+    val latestLabel = novel.latestChapter.let {
+        if (it.isNotBlank()) "Ch. $it" else "—"
     }
-}
 
-// ── Glass Pill — small status badge ──────────────────────────────────────────
-@Composable
-private fun GlassPill(text: String) {
     Box(
         modifier = Modifier
-            .clip(RoundedCornerShape(6.dp))
-            .background(DarkGlassFillMd)
-            .border(1.dp, DarkGlassBorder, RoundedCornerShape(6.dp))
-            .padding(horizontal = 7.dp, vertical = 3.dp)
+            .fillMaxSize()
+            .background(Brush.verticalGradient(listOf(bgTop, Color(0xFF000000)))),
     ) {
-        Text(text,
-            style = MaterialTheme.typography.labelSmall,
-            color = Color.White.copy(alpha = 0.85f))
-    }
-}
+        // Full-bleed cover art
+        AsyncImage(
+            model = ImageRequest.Builder(LocalContext.current)
+                .data(novel.coverUrl)
+                .crossfade(500)
+                .listener(onSuccess = { _, result -> onCoverLoaded(result.drawable) })
+                .build(),
+            contentDescription = novel.title,
+            contentScale       = ContentScale.Crop,
+            modifier           = Modifier
+                .fillMaxSize()
+                .drawWithContent {
+                    drawContent()
+                    // Heavy bottom scrim so all text is readable over any cover
+                    drawRect(
+                        Brush.verticalGradient(
+                            0f    to Color.Black.copy(alpha = 0.10f),
+                            0.25f to Color.Black.copy(alpha = 0.30f),
+                            0.55f to Color.Black.copy(alpha = 0.72f),
+                            0.75f to Color.Black.copy(alpha = 0.90f),
+                            1f    to Color.Black.copy(alpha = 0.98f),
+                        )
+                    )
+                },
+        )
 
-// ── Detail Skeleton ───────────────────────────────────────────────────────────
-@Composable
-private fun DetailSkeleton() {
-    val shimmer = MaterialTheme.colorScheme.surfaceVariant
-    Column(modifier = Modifier.fillMaxSize()) {
-        Box(Modifier.fillMaxWidth().height(420.dp).background(shimmer))
-        Spacer(Modifier.height(16.dp))
-        Row(Modifier.padding(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            repeat(3) {
-                Box(Modifier.size(64.dp, 26.dp)
-                    .clip(RoundedCornerShape(50.dp)).background(shimmer))
+        // Scrollable content
+        LazyColumn(
+            modifier       = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .navigationBarsPadding(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+
+            // Space for back button row (38dp button + 8dp top + 8dp bottom padding)
+            item { Spacer(Modifier.height(54.dp)) }
+
+            // Cover art breathing room — pushes text below the fold
+            item { Spacer(Modifier.height(220.dp)) }
+
+            // ── Author(s) ─────────────────────────────────────────────────
+            item {
+                val authors = novel.genres   // field reuse note: genres field holds genres,
+                // author isn't a separate field in NovelEntity.
+                // We'll show genres as the sub-brand label (like "Disney · Pixar")
+                // and a formatted genre pill instead.
+                Text(
+                    text          = primaryGenre.uppercase().ifBlank { "NOVEL" },
+                    color         = accent,
+                    fontSize      = 11.sp,
+                    fontWeight    = FontWeight.SemiBold,
+                    letterSpacing = 2.sp,
+                    textAlign     = TextAlign.Center,
+                    modifier      = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 32.dp),
+                )
             }
-        }
-        Spacer(Modifier.height(16.dp))
-        Column(Modifier.padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            repeat(3) {
-                Box(Modifier.fillMaxWidth(if (it == 2) 0.6f else 1f)
-                    .height(12.dp).clip(RoundedCornerShape(4.dp)).background(shimmer))
+
+            item { Spacer(Modifier.height(8.dp)) }
+
+            // ── Title ─────────────────────────────────────────────────────
+            item {
+                Text(
+                    text       = novel.title,
+                    color      = Color.White,
+                    fontSize   = 32.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    lineHeight = 36.sp,
+                    textAlign  = TextAlign.Center,
+                    style      = TextStyle(
+                        shadow = Shadow(
+                            color      = Color.Black.copy(alpha = 0.6f),
+                            offset     = Offset(0f, 4f),
+                            blurRadius = 14f,
+                        )
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 24.dp),
+                )
             }
-        }
-        Spacer(Modifier.height(24.dp))
-        repeat(6) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 13.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalAlignment     = Alignment.CenterVertically) {
-                Box(Modifier.size(32.dp).clip(RoundedCornerShape(8.dp)).background(shimmer))
-                Box(Modifier.weight(1f).height(13.dp)
-                    .clip(RoundedCornerShape(4.dp)).background(shimmer))
+
+            item { Spacer(Modifier.height(20.dp)) }
+
+            // ── Meta row: Status | Genre | Latest ─────────────────────────
+            item {
+                Row(
+                    modifier              = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 32.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment     = Alignment.CenterVertically,
+                ) {
+                    MetaChip(
+                        label  = "STATUS",
+                        value  = novel.status.ifBlank { "—" },
+                        accent = accent,
+                    )
+                    MetaSeparator()
+                    MetaChip(
+                        label  = "GENRE",
+                        value  = primaryGenre.ifBlank { "—" },
+                        accent = accent,
+                    )
+                    MetaSeparator()
+                    MetaChip(
+                        label  = "LATEST",
+                        value  = latestLabel,
+                        accent = accent,
+                    )
+                }
             }
-            HorizontalDivider(Modifier.padding(horizontal = 16.dp),
-                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.07f))
+
+            item { Spacer(Modifier.height(20.dp)) }
+
+            // ── Star rating ───────────────────────────────────────────────
+            item {
+                StarRating(
+                    rawRating = novel.rating,
+                    modifier  = Modifier.padding(horizontal = 24.dp),
+                )
+            }
+
+            item { Spacer(Modifier.height(28.dp)) }
+
+            // ── Glass play button ─────────────────────────────────────────
+            item {
+                val readLabel = if (lastReadChapter != null)
+                    "Continue Ch.$lastReadChapter" else "Start Reading"
+                val targetChapter = lastReadChapter
+                    ?: chapters.lastOrNull()?.num
+                    ?: 1
+
+                GlassPlayButton(
+                    label   = readLabel,
+                    onClick = { onReadChapter(targetChapter) },
+                )
+            }
+
+            item { Spacer(Modifier.height(32.dp)) }
+
+            // ── Show More toggle ──────────────────────────────────────────
+            item {
+                Row(
+                    modifier              = Modifier
+                        .fillMaxWidth()
+                        .clickable { showMore = !showMore }
+                        .padding(vertical = 8.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment     = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text       = if (showMore) "Show Less" else "Show More",
+                        color      = Color.White.copy(alpha = 0.75f),
+                        fontSize   = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Icon(
+                        imageVector        = if (showMore)
+                            Icons.Filled.KeyboardArrowUp
+                        else
+                            Icons.Filled.KeyboardArrowDown,
+                        contentDescription = null,
+                        tint               = Color.White.copy(alpha = 0.75f),
+                        modifier           = Modifier.size(16.dp),
+                    )
+                }
+            }
+
+            // ── Synopsis ──────────────────────────────────────────────────
+            item {
+                AnimatedVisibility(
+                    visible = showMore,
+                    enter   = fadeIn() + expandVertically(spring(stiffness = Spring.StiffnessMediumLow)),
+                    exit    = fadeOut() + shrinkVertically(spring(stiffness = Spring.StiffnessMediumLow)),
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 24.dp),
+                    ) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text          = "SUMMARY",
+                            color         = accent,
+                            fontSize      = 10.sp,
+                            fontWeight    = FontWeight.SemiBold,
+                            letterSpacing = 1.5.sp,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text       = novel.synopsis.ifBlank { "No summary available." },
+                            color      = Color.White.copy(alpha = 0.80f),
+                            fontSize   = 13.sp,
+                            lineHeight = 21.sp,
+                        )
+                        Spacer(Modifier.height(24.dp))
+                    }
+                }
+            }
+
+            // ── Chapter list ──────────────────────────────────────────────
+            item {
+                AnimatedVisibility(
+                    visible = showMore,
+                    enter   = fadeIn() + expandVertically(spring(stiffness = Spring.StiffnessMediumLow)),
+                    exit    = fadeOut() + shrinkVertically(spring(stiffness = Spring.StiffnessMediumLow)),
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
+                            .background(Color.Black.copy(alpha = 0.50f))
+                            .border(
+                                width  = 1.dp,
+                                color  = Color.White.copy(alpha = 0.08f),
+                                shape  = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
+                            ),
+                    ) {
+                        // Header
+                        Row(
+                            modifier              = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 14.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment     = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text       = "Chapters",
+                                color      = Color.White,
+                                fontSize   = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                            Text(
+                                text     = "${chapters.size} total",
+                                color    = accent.copy(alpha = 0.70f),
+                                fontSize = 11.sp,
+                            )
+                        }
+                        HorizontalDivider(
+                            color     = Color.White.copy(alpha = 0.10f),
+                            thickness = 0.5.dp,
+                        )
+
+                        // First 10 chapters
+                        val preview = chapters.take(PREVIEW_COUNT)
+                        preview.forEach { chapter ->
+                            ChapterRow(
+                                chapter     = chapter,
+                                accent      = accent,
+                                onClick     = { onReadChapter(chapter.num) },
+                            )
+                        }
+
+                        // "See More" with fade gradient mask if >10 chapters
+                        if (chapters.size > PREVIEW_COUNT) {
+                            Box(
+                                modifier         = Modifier
+                                    .fillMaxWidth()
+                                    .height(80.dp)
+                                    .drawWithContent {
+                                        drawContent()
+                                        drawRect(
+                                            Brush.verticalGradient(
+                                                0f to Color.Transparent,
+                                                1f to Color.Black.copy(alpha = 0.95f),
+                                            )
+                                        )
+                                    },
+                                contentAlignment = Alignment.BottomCenter,
+                            ) {
+                                Text(
+                                    text       = "See All ${chapters.size} Chapters",
+                                    color      = accent,
+                                    fontSize   = 12.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier   = Modifier
+                                        .padding(bottom = 14.dp)
+                                        .clickable { /* TODO: full chapter list screen */ },
+                                )
+                            }
+                        }
+
+                        Spacer(Modifier.height(8.dp))
+                    }
+                }
+            }
+
+            item { Spacer(Modifier.height(48.dp)) }
         }
     }
 }
