@@ -78,13 +78,19 @@ dependencies {
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
-    // ── CHANGE: Palette (Sprint 2) ─────────────────────────────────────────
-    // Extracts dominant / vibrant colour from the cover art bitmap so the
-    // detail screen gradient adapts to every novel's art automatically.
-    // Advantage : zero-config dynamic theming — no hardcoded colours needed.
-    // Disadvantage : ~60 KB AAR added to APK; palette runs async so colour
-    //   arrives ~100–300 ms after image loads (brief fallback flash is fine).
+    // Palette — dynamic cover-art colour extraction (Sprint 2)
     implementation("androidx.palette:palette-ktx:1.0.0")
+
+    // ── CHANGE: Material Components for Android ────────────────────────────
+    // Provides the actual XML style definitions for Theme.Material3.*
+    // The Compose material3 BOM only ships Compose tokens — the XML theme
+    // names (used in AndroidManifest android:theme) live in this artifact.
+    //
+    // Advantage : fixes AAPT "Theme.Material3.DayNight.NoActionBar not found"
+    //             with a single line; also unlocks MaterialAlertDialog etc.
+    // Disadvantage : ~2 MB AAR; but it's the standard Android dep — every
+    //                real Android app already carries it.
+    implementation("com.google.android.material:material:1.11.0")
 
     // Debug
     debugImplementation("androidx.compose.ui:ui-tooling")
