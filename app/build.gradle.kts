@@ -1,24 +1,23 @@
 plugins {
-    alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
-    alias(libs.plugins.ksp)
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
 }
 
 android {
-    namespace   = "com.noven.ncrawler"
-    compileSdk  = 34
+    namespace = "com.noven.ncrawler"
+    compileSdk = 34
 
     defaultConfig {
-        applicationId   = "com.noven.ncrawler"
-        minSdk          = 26          // Android 8 — covers ~95% of devices
-        targetSdk       = 34
-        versionCode     = 1
-        versionName     = "0.1.0"
+        applicationId = "com.noven.ncrawler"
+        minSdk = 30
+        targetSdk = 34
+        versionCode = 1
+        versionName = "1.0"
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = true
+            isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -40,49 +39,54 @@ android {
     }
 
     composeOptions {
-        kotlinCompilerExtensionVersion = libs.versions.compose.compiler.get()
-    }
-
-    packaging {
-        resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        kotlinCompilerExtensionVersion = "1.5.3"
     }
 }
 
 dependencies {
-    // Core
-    implementation(libs.core.ktx)
-    implementation(libs.lifecycle.runtime)
-    implementation(libs.lifecycle.viewmodel)
-    implementation(libs.lifecycle.compose)
-    implementation(libs.activity.compose)
-
-    // Compose BOM (pins all compose libs to a tested set)
-    val composeBom = platform(libs.compose.bom)
+    // Compose BOM
+    val composeBom = platform("androidx.compose:compose-bom:2023.10.01")
     implementation(composeBom)
-    implementation(libs.compose.ui)
-    implementation(libs.compose.material3)
-    implementation(libs.compose.icons)
-    debugImplementation(libs.compose.ui.tooling)
-    implementation(libs.compose.ui.preview)
+
+    // Compose core
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.ui:ui-graphics")
+    implementation("androidx.compose.ui:ui-tooling-preview")
+    implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material-icons-extended")
+
+    // Activity + ViewModel
+    implementation("androidx.activity:activity-compose:1.8.0")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.6.2")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.6.2")
 
     // Navigation
-    implementation(libs.navigation.compose)
+    implementation("androidx.navigation:navigation-compose:2.7.4")
 
-    // Room (local DB)
-    implementation(libs.room.runtime)
-    implementation(libs.room.ktx)
-    ksp(libs.room.compiler)
+    // Coil — image loading
+    implementation("io.coil-kt:coil-compose:2.4.0")
 
-    // Networking
-    implementation(libs.okhttp)
-    implementation(libs.jsoup)
+    // Room — local DB
+    implementation("androidx.room:room-runtime:2.6.0")
+    implementation("androidx.room:room-ktx:2.6.0")
+    annotationProcessor("androidx.room:room-compiler:2.6.0")
+
+    // OkHttp + Jsoup — scraping
+    implementation("com.squareup.okhttp3:okhttp:4.11.0")
+    implementation("org.jsoup:jsoup:1.16.1")
 
     // Coroutines
-    implementation(libs.coroutines.core)
-    implementation(libs.coroutines.android)
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
-    // Image loading (novel covers)
-    implementation(libs.coil)
-    implementation("androidx.work:work-runtime-ktx:2.9.0")
-    implementation("androidx.appcompat:appcompat:1.7.0")
+    // ── CHANGE: Palette (Sprint 2) ─────────────────────────────────────────
+    // Extracts dominant / vibrant colour from the cover art bitmap so the
+    // detail screen gradient adapts to every novel's art automatically.
+    // Advantage : zero-config dynamic theming — no hardcoded colours needed.
+    // Disadvantage : ~60 KB AAR added to APK; palette runs async so colour
+    //   arrives ~100–300 ms after image loads (brief fallback flash is fine).
+    implementation("androidx.palette:palette-ktx:1.0.0")
+
+    // Debug
+    debugImplementation("androidx.compose.ui:ui-tooling")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
