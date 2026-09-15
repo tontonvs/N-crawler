@@ -24,6 +24,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.*
@@ -68,8 +69,10 @@ fun NavGraph() {
 
     // Hoisted here (not inside BrowseScreen) so the Search overlay — opened
     // from the bottom nav, reachable from any tab — shares the same query/
-    // results/recent-searches state as the Browse screen itself.
+    // results/recent-searches state as the Browse screen itself. Also lets
+    // the play FAB resume the same "last read" novel the hero card shows.
     val browseVm: BrowseViewModel = viewModel()
+    val continueReading by browseVm.continueReading.collectAsStateWithLifecycle()
     var showSearchOverlay by remember { mutableStateOf(false) }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -81,9 +84,10 @@ fun NavGraph() {
         ) {
             composable(Routes.BROWSE) {
                 BrowseScreen(
-                    onNovelClick     = { slug -> nav.navigate(Routes.detail(slug)) },
-                    onDownloadsClick = { nav.navigate(Routes.DOWNLOADS) },
-                    vm               = browseVm
+                    onNovelClick      = { slug -> nav.navigate(Routes.detail(slug)) },
+                    onDownloadsClick  = { nav.navigate(Routes.DOWNLOADS) },
+                    onContinueReading = { slug, chapter -> nav.navigate(Routes.reader(slug, chapter)) },
+                    vm                = browseVm
                 )
             }
 
@@ -173,7 +177,24 @@ fun NavGraph() {
                         }
                     }
                 },
-                onOpenSearch = { showSearchOverlay = true }
+                onOpenSearch = { showSearchOverlay = true },
+                onFabClick   = {
+                    // Resume the same last-read novel the hero card shows,
+                    // at its exact chapter — falls back to Library when
+                    // nothing has been read yet.
+                    val cr = continueReading
+                    if (cr != null) {
+                        showSearchOverlay = false
+                        nav.navigate(Routes.reader(cr.novel.slug, cr.progress.lastChapterNum))
+                    } else if (currentRoute != Routes.LIBRARY) {
+                        showSearchOverlay = false
+                        nav.navigate(Routes.LIBRARY) {
+                            popUpTo(Routes.BROWSE) { saveState = true }
+                            launchSingleTop = true
+                            restoreState    = true
+                        }
+                    }
+                }
             )
         }
     }
@@ -186,7 +207,8 @@ private fun FloatingNavBar(
     currentRoute: String,
     isSearchOverlayOpen: Boolean,
     onNavigate: (String) -> Unit,
-    onOpenSearch: () -> Unit
+    onOpenSearch: () -> Unit,
+    onFabClick: () -> Unit
 ) {
     val isDark      = isSystemInDarkTheme()
     val glassFill   = if (isDark) GlassSurfaceDark else GlassSurfaceLight
@@ -268,7 +290,7 @@ private fun FloatingNavBar(
                 .clickable(
                     interactionSource = interactionSource,
                     indication        = null,
-                    onClick            = { onNavigate(Routes.LIBRARY) }
+                    onClick            = onFabClick
                 )
         ) {
             Box(contentAlignment = Alignment.Center) {

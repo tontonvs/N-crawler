@@ -40,6 +40,7 @@ import com.noven.ncrawler.data.db.NovelEntity
 import com.noven.ncrawler.ui.theme.*
 import com.noven.ncrawler.viewmodel.BrowseUiState
 import com.noven.ncrawler.viewmodel.BrowseViewModel
+import com.noven.ncrawler.viewmodel.ContinueReadingInfo
 import kotlinx.coroutines.delay
 
 // ── Glass tokens — used throughout this screen ────────────────────────────────
@@ -54,12 +55,12 @@ private val OnImageGlassFillMd  = Color(0x26FFFFFF)  // 15% white — slightly m
 @Composable
 fun BrowseScreen(
     onNovelClick: (slug: String) -> Unit,
-    onContinueReading: (() -> Unit)? = null,
+    onContinueReading: ((slug: String, chapterNum: Int) -> Unit)? = null,
     onDownloadsClick: (() -> Unit)? = null,
-    lastReadNovelName: String? = null,
     vm: BrowseViewModel = viewModel()
 ) {
-    val browseState by vm.browseState.collectAsStateWithLifecycle()
+    val browseState     by vm.browseState.collectAsStateWithLifecycle()
+    val continueReading by vm.continueReading.collectAsStateWithLifecycle()
 
     // Light background fills the entire screen
     Box(
@@ -78,8 +79,8 @@ fun BrowseScreen(
                 state             = browseState,
                 onNovelClick      = onNovelClick,
                 onRetry           = vm::loadHomepage,
-                onContinueReading = onContinueReading,
-                lastReadNovelName = lastReadNovelName
+                continueReading   = continueReading,
+                onContinueReading = onContinueReading
             )
         }
     }
@@ -300,8 +301,8 @@ private fun BrowseContent(
     state: BrowseUiState,
     onNovelClick: (String) -> Unit,
     onRetry: () -> Unit,
-    onContinueReading: (() -> Unit)?,
-    lastReadNovelName: String?
+    continueReading: ContinueReadingInfo?,
+    onContinueReading: ((slug: String, chapterNum: Int) -> Unit)?
 ) {
     when (state) {
         is BrowseUiState.Loading -> BrowseSkeleton()
@@ -319,21 +320,25 @@ private fun BrowseContent(
                 contentPadding = PaddingValues(bottom = 120.dp)
             ) {
 
-                // ── Hero — full-bleed, no horizontal padding ──────────────
-                if (hero != null) {
+                // ── Hero — resumes the last-read novel at its exact chapter
+                // when there's reading history; otherwise features the top
+                // of the feed and opens its detail page like before.
+                if (continueReading != null && onContinueReading != null) {
                     item {
-                        HeroBanner(novel = hero, onClick = { onNovelClick(hero.slug) })
-                    }
-                }
-
-                // ── Continue reading pill ─────────────────────────────────
-                if (onContinueReading != null && !lastReadNovelName.isNullOrBlank()) {
-                    item {
-                        Spacer(Modifier.height(16.dp))
-                        ContinueReadingRow(
-                            novelName = lastReadNovelName,
-                            onClick   = onContinueReading
+                        HeroBanner(
+                            novel      = continueReading.novel,
+                            resumeChapter = continueReading.progress.lastChapterNum,
+                            onClick    = {
+                                onContinueReading(
+                                    continueReading.novel.slug,
+                                    continueReading.progress.lastChapterNum
+                                )
+                            }
                         )
+                    }
+                } else if (hero != null) {
+                    item {
+                        HeroBanner(novel = hero, resumeChapter = null, onClick = { onNovelClick(hero.slug) })
                     }
                 }
 
@@ -377,8 +382,11 @@ private fun BrowseContent(
 // ── Hero Banner — inset card, rounded corners, compact height ─────────────────
 // NOT full-bleed: horizontal page padding + ~20dp corner radius, ~160dp tall
 // (like the Disney+ "featured banner" card, not the full-screen Luca poster).
+// resumeChapter != null → this IS the continue-reading novel: CTA becomes
+// "Resume Chapter N" and taps the given onClick (which jumps straight to
+// that chapter), instead of "Start Reading" opening the detail page.
 @Composable
-private fun HeroBanner(novel: NovelEntity, onClick: () -> Unit) {
+private fun HeroBanner(novel: NovelEntity, resumeChapter: Int?, onClick: () -> Unit) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -453,7 +461,7 @@ private fun HeroBanner(novel: NovelEntity, onClick: () -> Unit) {
                         )
                         Spacer(Modifier.width(4.dp))
                         Text(
-                            "Start Reading",
+                            if (resumeChapter != null) "Resume Ch. $resumeChapter" else "Start Reading",
                             style = MaterialTheme.typography.labelMedium,
                             color = Color.White
                         )
@@ -484,60 +492,9 @@ private fun HeroBanner(novel: NovelEntity, onClick: () -> Unit) {
     }
 }
 
-// ── Continue Reading row ──────────────────────────────────────────────────────
-@Composable
-private fun ContinueReadingRow(novelName: String, onClick: () -> Unit) {
-    Surface(
-        onClick  = onClick,
-        shape    = RoundedCornerShape(18.dp),
-        color    = GlassSurfaceLight,
-        border   = BorderStroke(1.dp, GlassBorderLight),
-        shadowElevation = 2.dp,
-        modifier = Modifier
-            .padding(horizontal = 16.dp)
-            .fillMaxWidth()
-    ) {
-        Row(
-            modifier          = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(34.dp)
-                    .clip(CircleShape)
-                    .background(AccentBlue),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    Icons.Filled.PlayArrow,
-                    contentDescription = null,
-                    tint     = Color.White,
-                    modifier = Modifier.size(17.dp)
-                )
-            }
-            Spacer(Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    "Continue Reading",
-                    style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 0.5.sp),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    novelName,
-                    style    = MaterialTheme.typography.titleSmall,
-                    color    = MaterialTheme.colorScheme.onBackground,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-            Icon(
-                Icons.Rounded.ChevronRight,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-    }
-}
+// ── Continue Reading row — removed; the Hero card now absorbs this role
+// (see BrowseContent / HeroBanner above) so there's no duplicate "resume"
+// affordance on the homepage.
 
 // ── Section Header ────────────────────────────────────────────────────────────
 @Composable
@@ -664,7 +621,7 @@ private fun NovelCard(novel: NovelEntity, onClick: () -> Unit, modifier: Modifie
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(90.dp)
+                    .height(130.dp)
                     .background(MaterialTheme.colorScheme.surfaceVariant)
             ) {
                 AsyncImage(
@@ -877,7 +834,7 @@ private fun BrowseSkeleton() {
                                 .clip(RoundedCornerShape(16.dp))
                                 .background(shimmer)
                         ) {
-                            Spacer(Modifier.fillMaxWidth().height(90.dp))
+                            Spacer(Modifier.fillMaxWidth().height(130.dp))
                             Spacer(Modifier.height(30.dp))
                         }
                     }

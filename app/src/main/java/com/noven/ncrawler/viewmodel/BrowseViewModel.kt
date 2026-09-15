@@ -6,6 +6,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.noven.ncrawler.NCrawlerApp
 import com.noven.ncrawler.data.db.NovelEntity
+import com.noven.ncrawler.data.db.ReadingProgress
 import com.noven.ncrawler.data.local.RecentSearchStore
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -16,6 +17,14 @@ sealed interface BrowseUiState {
     data class  Error(val message: String) : BrowseUiState
     data class  Success(val novels: List<NovelEntity>) : BrowseUiState
 }
+
+// The novel + progress row for whatever the user most recently read — powers
+// both the home hero card and the bottom-nav play FAB, so both resume at the
+// exact chapter instead of just opening a screen.
+data class ContinueReadingInfo(
+    val novel: NovelEntity,
+    val progress: ReadingProgress
+)
 
 class BrowseViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -36,11 +45,29 @@ class BrowseViewModel(app: Application) : AndroidViewModel(app) {
     private val _recentSearches = MutableStateFlow(recentStore.getRecent())
     val recentSearches: StateFlow<List<String>> = _recentSearches.asStateFlow()
 
+    // Most-recently-read novel + exact chapter, or null if nothing read yet
+    private val _continueReading = MutableStateFlow<ContinueReadingInfo?>(null)
+    val continueReading: StateFlow<ContinueReadingInfo?> = _continueReading.asStateFlow()
+
     private var searchJob: Job? = null
 
     init {
         Log.d(TAG, "BrowseViewModel created — calling loadHomepage()")
         loadHomepage()
+        observeContinueReading()
+    }
+
+    private fun observeContinueReading() {
+        viewModelScope.launch {
+            repo.allReadingProgressFlow()
+                .map { it.firstOrNull() }   // already ordered by lastReadAt DESC
+                .distinctUntilChanged()
+                .collectLatest { progress ->
+                    _continueReading.value = progress?.let { p ->
+                        repo.getNovel(p.novelSlug)?.let { novel -> ContinueReadingInfo(novel, p) }
+                    }
+                }
+        }
     }
 
     fun loadHomepage() {
