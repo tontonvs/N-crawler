@@ -63,7 +63,7 @@ object Routes {
 private val fullScreenRoutes = listOf("detail/", "reader/")
 
 @Composable
-fun NavGraph() {
+fun NCrawlerNavGraph() {
     val nav          = rememberNavController()
     val currentEntry by nav.currentBackStackEntryAsState()
     val currentRoute  = currentEntry?.destination?.route ?: ""

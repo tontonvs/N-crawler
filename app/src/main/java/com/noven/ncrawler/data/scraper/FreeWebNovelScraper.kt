@@ -138,7 +138,6 @@ class FreeWebNovelScraper {
             val synopsis = doc.select("meta[property=og:description]").attr("content").trim()
             val genres   = doc.select("meta[property=og:novel:genre]").attr("content")
             val status   = doc.select("meta[property=og:novel:status]").attr("content")
-            val latestUrl = doc.select("meta[property=og:novel:lastest_chapter_url]").attr("content")
 
             Log.d(TAG, "Detail: title=$title cover=${cover.take(40)} genres=$genres")
 
@@ -191,10 +190,11 @@ class FreeWebNovelScraper {
         return try {
             val doc = fetch(url)
 
-            // Title from h1 or page title meta
-            val title = doc.select("h1").firstOrNull()?.text()?.trim()
-                ?: doc.select("meta[property=og:novel:chapter_name]").attr("content").trim()
-                ?: "Chapter"
+            // Title from h1 or page title meta — .attr() never returns null
+            // (empty string when absent), so the old `?: "Chapter"` after it
+            // was dead code; .ifBlank{} actually catches the empty case.
+            val title = doc.select("h1").firstOrNull()?.text()?.trim()?.ifBlank { null }
+                ?: doc.select("meta[property=og:novel:chapter_name]").attr("content").trim().ifBlank { "Chapter" }
 
             // Content: div.txt p — confirmed in live chapter HTML
             // Each paragraph is a <p> tag inside div.txt
