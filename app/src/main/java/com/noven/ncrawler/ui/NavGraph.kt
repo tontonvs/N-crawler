@@ -24,10 +24,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.*
 import androidx.navigation.navArgument
 import com.noven.ncrawler.ui.screens.browse.BrowseScreen
+import com.noven.ncrawler.ui.screens.browse.SearchOverlay
 import com.noven.ncrawler.ui.screens.detail.DetailScreen
 import com.noven.ncrawler.ui.screens.downloads.DownloadsScreen
 import com.noven.ncrawler.ui.screens.library.LibraryScreen
@@ -38,6 +40,7 @@ import com.noven.ncrawler.ui.theme.GlassSurfaceLight
 import com.noven.ncrawler.ui.theme.GlassSurfaceDark
 import com.noven.ncrawler.ui.theme.GlassBorderLight
 import com.noven.ncrawler.ui.theme.GlassBorderDark
+import com.noven.ncrawler.viewmodel.BrowseViewModel
 
 object Routes {
     const val BROWSE    = "browse"
@@ -63,6 +66,12 @@ fun NavGraph() {
         currentRoute.startsWith(prefix)
     }
 
+    // Hoisted here (not inside BrowseScreen) so the Search overlay — opened
+    // from the bottom nav, reachable from any tab — shares the same query/
+    // results/recent-searches state as the Browse screen itself.
+    val browseVm: BrowseViewModel = viewModel()
+    var showSearchOverlay by remember { mutableStateOf(false) }
+
     Box(modifier = Modifier.fillMaxSize()) {
         // Main nav host — no bottom padding, nav floats over content
         NavHost(
@@ -73,7 +82,8 @@ fun NavGraph() {
             composable(Routes.BROWSE) {
                 BrowseScreen(
                     onNovelClick     = { slug -> nav.navigate(Routes.detail(slug)) },
-                    onDownloadsClick = { nav.navigate(Routes.DOWNLOADS) }
+                    onDownloadsClick = { nav.navigate(Routes.DOWNLOADS) },
+                    vm               = browseVm
                 )
             }
 
@@ -132,8 +142,9 @@ fun NavGraph() {
                 .padding(bottom = 16.dp)
         ) {
             FloatingNavBar(
-                currentRoute = currentRoute,
-                onNavigate   = { route ->
+                currentRoute        = currentRoute,
+                isSearchOverlayOpen = showSearchOverlay,
+                onNavigate          = { route ->
                     if (route != currentRoute) {
                         nav.navigate(route) {
                             popUpTo(Routes.BROWSE) { saveState = true }
@@ -141,7 +152,24 @@ fun NavGraph() {
                             restoreState    = true
                         }
                     }
-                }
+                },
+                onOpenSearch = { showSearchOverlay = true }
+            )
+        }
+
+        // ── Search overlay — reachable from any tab via the bottom nav ──────
+        AnimatedVisibility(
+            visible = showSearchOverlay,
+            enter   = fadeIn(),
+            exit    = fadeOut()
+        ) {
+            SearchOverlay(
+                vm           = browseVm,
+                onNovelClick = { slug ->
+                    showSearchOverlay = false
+                    nav.navigate(Routes.detail(slug))
+                },
+                onClose      = { showSearchOverlay = false }
             )
         }
     }
@@ -152,7 +180,9 @@ fun NavGraph() {
 @Composable
 private fun FloatingNavBar(
     currentRoute: String,
-    onNavigate: (String) -> Unit
+    isSearchOverlayOpen: Boolean,
+    onNavigate: (String) -> Unit,
+    onOpenSearch: () -> Unit
 ) {
     val isDark      = isSystemInDarkTheme()
     val glassFill   = if (isDark) GlassSurfaceDark else GlassSurfaceLight
@@ -192,10 +222,10 @@ private fun FloatingNavBar(
                     icon        = Icons.Outlined.Search,
                     iconActive  = Icons.Rounded.Search,
                     label       = "Search",
-                    isSelected  = false,
-                    // Search activates in BrowseScreen itself — navigate to browse
-                    // Search doesn't crash — it navigates to Browse where the bar is
-                    onClick     = { onNavigate(Routes.BROWSE) }
+                    isSelected  = isSearchOverlayOpen,
+                    // Opens the full-screen search overlay (see NavGraph) —
+                    // reachable from any tab, not just Browse.
+                    onClick     = onOpenSearch
                 )
                 NavPillItem(
                     icon        = Icons.Outlined.FolderOpen,

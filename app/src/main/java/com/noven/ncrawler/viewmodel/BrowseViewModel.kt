@@ -6,6 +6,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.noven.ncrawler.NCrawlerApp
 import com.noven.ncrawler.data.db.NovelEntity
+import com.noven.ncrawler.data.local.RecentSearchStore
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 
@@ -18,7 +19,8 @@ sealed interface BrowseUiState {
 
 class BrowseViewModel(app: Application) : AndroidViewModel(app) {
 
-    private val repo = (app as NCrawlerApp).repository
+    private val repo        = (app as NCrawlerApp).repository
+    private val recentStore = RecentSearchStore(app)
     private val TAG  = "NCrawler_Browse"
 
     private val _browseState = MutableStateFlow<BrowseUiState>(BrowseUiState.Loading)
@@ -29,6 +31,10 @@ class BrowseViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _query = MutableStateFlow("")
     val query: StateFlow<String> = _query.asStateFlow()
+
+    // Recent search terms — max 5, most-recent-first, persisted across sessions
+    private val _recentSearches = MutableStateFlow(recentStore.getRecent())
+    val recentSearches: StateFlow<List<String>> = _recentSearches.asStateFlow()
 
     private var searchJob: Job? = null
 
@@ -84,5 +90,13 @@ class BrowseViewModel(app: Application) : AndroidViewModel(app) {
         searchJob?.cancel()
         _query.value = ""
         _searchState.value = BrowseUiState.Empty
+    }
+
+    // Records a term into recent searches (max 5, deduped, most-recent-first).
+    // Call on IME submit or when a search result is actually tapped.
+    fun commitSearch(term: String) {
+        if (term.isBlank()) return
+        recentStore.addRecent(term)
+        _recentSearches.value = recentStore.getRecent()
     }
 }

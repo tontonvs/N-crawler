@@ -30,6 +30,8 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.unit.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -58,12 +60,6 @@ fun BrowseScreen(
     vm: BrowseViewModel = viewModel()
 ) {
     val browseState by vm.browseState.collectAsStateWithLifecycle()
-    val searchState by vm.searchState.collectAsStateWithLifecycle()
-    val query       by vm.query.collectAsStateWithLifecycle()
-    val isSearching  = query.isNotBlank()
-
-    val focusManager = LocalFocusManager.current
-    val keyboard     = LocalSoftwareKeyboardController.current
 
     // Light background fills the entire screen
     Box(
@@ -76,34 +72,15 @@ fun BrowseScreen(
             // ── Top bar — always avatar/logo/download, never swaps modes ───
             TopNavBar(onDownloadsClick = onDownloadsClick)
 
-            // ── Search bar — always visible & focusable, this IS the entry
-            // point into search (previously it only appeared once a query
-            // existed, so there was no way to ever type one — fixed here).
-            SearchBar(
-                query         = query,
-                onQueryChange = vm::onQueryChange,
-                onClear       = {
-                    vm.clearSearch()
-                    focusManager.clearFocus()
-                    keyboard?.hide()
-                }
+            // Search lives exclusively in the SearchOverlay (opened from the
+            // bottom nav) — the homepage itself is browse-only, no inline bar.
+            BrowseContent(
+                state             = browseState,
+                onNovelClick      = onNovelClick,
+                onRetry           = vm::loadHomepage,
+                onContinueReading = onContinueReading,
+                lastReadNovelName = lastReadNovelName
             )
-
-            if (isSearching) {
-                SearchContent(
-                    state        = searchState,
-                    query        = query,
-                    onNovelClick = onNovelClick
-                )
-            } else {
-                BrowseContent(
-                    state             = browseState,
-                    onNovelClick      = onNovelClick,
-                    onRetry           = vm::loadHomepage,
-                    onContinueReading = onContinueReading,
-                    lastReadNovelName = lastReadNovelName
-                )
-            }
         }
     }
 }
@@ -179,60 +156,142 @@ private fun TopNavBar(onDownloadsClick: (() -> Unit)?) {
     }
 }
 
-// ── Search Bar ────────────────────────────────────────────────────────────────
-// Persistent, always-tappable field — the sole entry point into search.
-// Stays visible while results show, so clearing/refining is a single tap.
+// ── Search Overlay ────────────────────────────────────────────────────────────
+// Opened from the bottom nav's Search icon — full-screen, autofocused field,
+// recent searches (max 5) when empty, live results once typing, X to close.
 @Composable
-private fun SearchBar(
-    query: String,
-    onQueryChange: (String) -> Unit,
-    onClear: () -> Unit
+fun SearchOverlay(
+    vm: BrowseViewModel,
+    onNovelClick: (String) -> Unit,
+    onClose: () -> Unit
 ) {
-    val focusManager = LocalFocusManager.current
-    val keyboard     = LocalSoftwareKeyboardController.current
+    val query          by vm.query.collectAsStateWithLifecycle()
+    val searchState    by vm.searchState.collectAsStateWithLifecycle()
+    val recentSearches by vm.recentSearches.collectAsStateWithLifecycle()
 
-    OutlinedTextField(
-        value         = query,
-        onValueChange = onQueryChange,
-        modifier      = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 10.dp),
-        placeholder   = {
-            Text("Search novels…", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        },
-        leadingIcon = {
-            Icon(
-                Icons.Rounded.Search,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        },
-        trailingIcon = {
-            if (query.isNotBlank()) {
-                IconButton(onClick = onClear) {
+    val focusManager    = LocalFocusManager.current
+    val keyboard        = LocalSoftwareKeyboardController.current
+    val focusRequester   = remember { FocusRequester() }
+
+    // Autofocus + open the keyboard the moment the overlay appears
+    LaunchedEffect(Unit) {
+        delay(150)
+        focusRequester.requestFocus()
+    }
+
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color    = MaterialTheme.colorScheme.background
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            // ── Field + close (X) ───────────────────────────────────────────
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .statusBarsPadding()
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedTextField(
+                    value         = query,
+                    onValueChange = vm::onQueryChange,
+                    modifier      = Modifier
+                        .weight(1f)
+                        .focusRequester(focusRequester),
+                    placeholder   = {
+                        Text("Search novels…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    },
+                    leadingIcon = {
+                        Icon(Icons.Rounded.Search, contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    },
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor   = AccentBlue,
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outline,
+                        focusedTextColor     = MaterialTheme.colorScheme.onSurface,
+                        unfocusedTextColor   = MaterialTheme.colorScheme.onSurface,
+                        cursorColor          = AccentBlue
+                    ),
+                    shape = RoundedCornerShape(16.dp),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(onSearch = {
+                        vm.commitSearch(query)
+                        focusManager.clearFocus()
+                        keyboard?.hide()
+                    })
+                )
+                Spacer(Modifier.width(8.dp))
+                IconButton(onClick = {
+                    vm.clearSearch()
+                    onClose()
+                }) {
                     Icon(
                         Icons.Rounded.Close,
-                        contentDescription = "Clear",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        contentDescription = "Close search",
+                        tint = MaterialTheme.colorScheme.onSurface
                     )
                 }
             }
-        },
-        singleLine = true,
-        colors = OutlinedTextFieldDefaults.colors(
-            focusedBorderColor   = AccentBlue,
-            unfocusedBorderColor = MaterialTheme.colorScheme.outline,
-            focusedTextColor     = MaterialTheme.colorScheme.onSurface,
-            unfocusedTextColor   = MaterialTheme.colorScheme.onSurface,
-            cursorColor          = AccentBlue
-        ),
-        shape = RoundedCornerShape(16.dp),
-        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-        keyboardActions = KeyboardActions(onSearch = {
-            focusManager.clearFocus()
-            keyboard?.hide()
-        })
-    )
+
+            if (query.isBlank()) {
+                // ── Recent searches (max 5) ─────────────────────────────────
+                if (recentSearches.isNotEmpty()) {
+                    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                        Text(
+                            "Recent Searches",
+                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        recentSearches.take(5).forEach { term ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .clickable { vm.onQueryChange(term) }
+                                    .padding(vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    Icons.Rounded.History,
+                                    contentDescription = null,
+                                    tint     = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(Modifier.width(10.dp))
+                                Text(
+                                    term,
+                                    style    = MaterialTheme.typography.bodyMedium,
+                                    color    = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(
+                            "Search for a novel by title",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            } else {
+                // ── Live results ─────────────────────────────────────────────
+                SearchContent(
+                    state        = searchState,
+                    query        = query,
+                    onNovelClick = { slug ->
+                        vm.commitSearch(query)
+                        onNovelClick(slug)
+                        onClose()
+                    }
+                )
+            }
+        }
+    }
 }
 
 // ── Browse Content ────────────────────────────────────────────────────────────
