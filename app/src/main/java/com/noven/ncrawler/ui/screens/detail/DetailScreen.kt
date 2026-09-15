@@ -312,16 +312,22 @@ fun DetailScreen(
                     onReadChapter  = onReadChapter,
                     onCoverLoaded  = { drawable ->
                         val bmp = (drawable as? BitmapDrawable)?.bitmap ?: return@CinematicDetail
-                        // Extract palette off main thread
-                        val palette = Palette.from(bmp).generate()
-                        dominantColor = Color(palette.getDominantColor(0xFF050A1A.toInt()))
-                        vibrantColor  = Color(
-                            palette.getVibrantColor(
-                                palette.getLightVibrantColor(
-                                    palette.getMutedColor(0xFF4FC3F7.toInt())
+                        // Extract palette off main thread — guarded: a bad
+                        // bitmap here must never be able to blank the cover.
+                        try {
+                            val palette = Palette.from(bmp).generate()
+                            dominantColor = Color(palette.getDominantColor(0xFF050A1A.toInt()))
+                            vibrantColor  = Color(
+                                palette.getVibrantColor(
+                                    palette.getLightVibrantColor(
+                                        palette.getMutedColor(0xFF4FC3F7.toInt())
+                                    )
                                 )
                             )
-                        )
+                        } catch (e: Exception) {
+                            // Falls back to FallbackTop/FallbackAccent — the
+                            // cover image itself is unaffected either way.
+                        }
                     },
                 )
             }
@@ -395,6 +401,11 @@ private fun CinematicDetail(
             model = ImageRequest.Builder(LocalContext.current)
                 .data(novel.coverUrl)
                 .crossfade(500)
+                // Palette.from() below needs a software bitmap — Coil defaults
+                // to hardware bitmaps on API 26+, which Palette throws on
+                // (IllegalArgumentException), silently killing this request.
+                // Cards never hit this because they never touch Palette.
+                .allowHardware(false)
                 .listener(onSuccess = { _, result -> onCoverLoaded(result.drawable) })
                 .build(),
             contentDescription = novel.title,
