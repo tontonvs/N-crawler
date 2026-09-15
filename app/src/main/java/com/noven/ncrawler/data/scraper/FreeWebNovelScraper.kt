@@ -8,6 +8,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
+import org.jsoup.nodes.Element
 import java.util.concurrent.TimeUnit
 
 /**
@@ -202,6 +203,33 @@ class FreeWebNovelScraper {
     //   <img src="...cover..."> inside an <a href="/novel/slug">
     //   <h3><a href="/novel/slug">Title</a></h3>
     //   Rating number as plain text
+    //
+    // Listing thumbnails are lazy-loaded: the real URL lives in a data-*
+    // attribute, and plain `src` is a blank placeholder until the browser
+    // scrolls the image into view — which never happens for Jsoup. That's
+    // why cards/hero (built from this parser) came back with no cover while
+    // the detail page (og:image meta, no lazy-loading involved) worked fine.
+    private val coverAttrs = listOf("data-src", "data-original", "data-lazy-src", "data-echo", "src")
+
+    private fun extractCoverUrl(card: Element): String {
+        val imgs = card.select("img")
+        // Prefer the confirmed article-image path, across any lazy-load attribute
+        for (img in imgs) {
+            for (attr in coverAttrs) {
+                val url = img.attr("abs:$attr")
+                if (url.isNotBlank() && url.contains("/files/article/image/")) return url
+            }
+        }
+        // Fallback: first non-blank image URL from any attribute
+        for (img in imgs) {
+            for (attr in coverAttrs) {
+                val url = img.attr("abs:$attr")
+                if (url.isNotBlank()) return url
+            }
+        }
+        return ""
+    }
+
     private fun parseNovelCards(doc: Document): List<NovelEntity> {
         val result = mutableListOf<NovelEntity>()
 
@@ -216,11 +244,11 @@ class FreeWebNovelScraper {
 
             val title = a.text().trim().ifBlank { return@forEach }
 
-            // Cover: look for img in the parent chain of this h3
+            // Cover: look for img in the parent chain of this h3, checking
+            // lazy-load attributes first (see extractCoverUrl above)
             val h3     = a.parent() ?: return@forEach
             val card   = h3.parent() ?: h3
-            val cover  = card.select("img[src*='/files/article/image/']")
-                .firstOrNull()?.attr("abs:src") ?: ""
+            val cover  = extractCoverUrl(card)
 
             // Rating: text content near the card (plain number like "4.6")
             val ratingText = card.select("em, [class*=score]")
