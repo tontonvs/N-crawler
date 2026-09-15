@@ -52,7 +52,13 @@ class NovelRepository(
     // ── Novel detail ──────────────────────────────────────────────────────────
     suspend fun getNovel(slug: String): NovelEntity? {
         val cached = novelDao.getBySlug(slug)
-        if (cached != null && cached.synopsis.isNotBlank() && cached.chapterUrls.isNotBlank())
+        // Also require coverUrl — a row can have synopsis/chapterUrls filled in
+        // from an earlier detail fetch, then get its coverUrl blanked out by a
+        // later homepage/genre upsert (Room's REPLACE swaps the whole row).
+        // Without this check, a novel opened once during that window would
+        // never re-fetch and would stay cover-less forever.
+        if (cached != null && cached.synopsis.isNotBlank() && cached.chapterUrls.isNotBlank()
+            && cached.coverUrl.isNotBlank())
             return cached
         val result = scraper.fetchDetail(slug) ?: return cached
         novelDao.upsert(result.first)
