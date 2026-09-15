@@ -138,17 +138,33 @@ class FreeWebNovelScraper {
             val synopsis = doc.select("meta[property=og:description]").attr("content").trim()
             val genres   = doc.select("meta[property=og:novel:genre]").attr("content")
             val status   = doc.select("meta[property=og:novel:status]").attr("content")
+            val latestChapterUrl = doc.select("meta[property=og:novel:lastest_chapter_url]").attr("content")
 
             Log.d(TAG, "Detail: title=$title cover=${cover.take(40)} genres=$genres")
 
             // Chapter links — confirmed pattern: a[href*='/novel/<slug>/chapter-']
-            // Only first 40 shown on page, but URL pattern is fully predictable:
-            // /novel/<slug>/chapter-<N>  (no .html)
+            //
+            // The page actually has TWO separate widgets using this same href
+            // pattern: a "N Latest Chapters" teaser (just the newest few, real
+            // numbers) and a paginated "Chapter List" whose server HTML only
+            // ever contains its FIRST tab (chapters 1-40) — the other tabs
+            // (C.41-C.80, C.81-C.120, ...) are client-side JS pagination we
+            // never see. Scraping the anchors alone gives 1-40 + the latest
+            // handful, with a gap in between (e.g. jumps from 2627 straight
+            // to 40) — exactly the "weird numbering" bug.
+            //
+            // Fix: since the URL pattern is fully predictable AND we know the
+            // true latest chapter number (og:novel:lastest_chapter_url), we
+            // synthesize the complete 1..N range ourselves — using the real
+            // scraped title wherever we have one (1-40 and the latest few),
+            // and a plain "Chapter N" placeholder everywhere else. This is
+            // the same fallback title format already used elsewhere for
+            // chapters resolved purely from the cached URL map.
             val anchorList = doc.select("a[href*='/novel/$slug/chapter-']").toList()
             Log.d(TAG, "Found ${anchorList.size} chapter anchor tags")
 
             val seenUrls = mutableSetOf<String>()
-            val chapters = mutableListOf<ChapterLink>()
+            val scrapedByNum = mutableMapOf<Int, ChapterLink>()
 
             anchorList.forEach { a ->
                 val href = a.attr("abs:href").ifBlank { return@forEach }
@@ -156,10 +172,28 @@ class FreeWebNovelScraper {
                 if (!seenUrls.add(href)) return@forEach
                 val num = Regex("/chapter-(\\d+)$").find(href)
                     ?.groupValues?.get(1)?.toIntOrNull() ?: return@forEach
-                chapters.add(ChapterLink(num = num, title = text, url = href))
+                scrapedByNum[num] = ChapterLink(num = num, title = text, url = href)
+            }
+            Log.d(TAG, "Scraped ${scrapedByNum.size} distinct chapter numbers directly")
+
+            val maxChapterNum = Regex("chapter-(\\d+)$").find(latestChapterUrl)
+                ?.groupValues?.get(1)?.toIntOrNull()
+
+            val chapters: MutableList<ChapterLink> = if (maxChapterNum != null && maxChapterNum > 0) {
+                (1..maxChapterNum).map { n ->
+                    scrapedByNum[n] ?: ChapterLink(
+                        num   = n,
+                        title = "Chapter $n",
+                        url   = buildChapterUrl(slug, n)
+                    )
+                }.toMutableList()
+            } else {
+                // Couldn't determine the true latest number — fall back to
+                // whatever was actually scraped rather than guessing a range.
+                scrapedByNum.values.toMutableList()
             }
             chapters.sortByDescending { it.num }
-            Log.d(TAG, "Parsed ${chapters.size} chapters")
+            Log.d(TAG, "Final chapter list: ${chapters.size} (maxChapterNum=$maxChapterNum)")
 
             val urlMap = chapters.joinToString("\t") { "${it.num}|${it.url}" }
             val novel  = NovelEntity(

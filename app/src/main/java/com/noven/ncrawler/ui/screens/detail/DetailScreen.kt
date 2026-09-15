@@ -381,6 +381,7 @@ private fun CinematicDetail(
     onCoverLoaded: (android.graphics.drawable.Drawable) -> Unit,
 ) {
     var showMore by remember { mutableStateOf(false) }
+    var showAllChapters by remember { mutableStateOf(false) }
     val PREVIEW_COUNT = 10
 
     // Parse first genre only for the chip slot
@@ -648,8 +649,12 @@ private fun CinematicDetail(
                             thickness = 0.5.dp,
                         )
 
-                        // First 10 chapters
-                        val preview = chapters.take(PREVIEW_COUNT)
+                        // Preview 10, or the full list once "See All" is tapped.
+                        // Plain (non-lazy) rows, same as before — fine up to a
+                        // few thousand chapters; if a novel's full list ever
+                        // gets sluggish to expand, that's the point to switch
+                        // this inner list to its own LazyColumn.
+                        val preview = if (showAllChapters) chapters else chapters.take(PREVIEW_COUNT)
                         preview.forEach { chapter ->
                             ChapterRow(
                                 chapter     = chapter,
@@ -659,7 +664,7 @@ private fun CinematicDetail(
                         }
 
                         // "See More" with fade gradient mask if >10 chapters
-                        if (chapters.size > PREVIEW_COUNT) {
+                        if (!showAllChapters && chapters.size > PREVIEW_COUNT) {
                             Box(
                                 modifier         = Modifier
                                     .fillMaxWidth()
@@ -682,7 +687,7 @@ private fun CinematicDetail(
                                     fontWeight = FontWeight.SemiBold,
                                     modifier   = Modifier
                                         .padding(bottom = 14.dp)
-                                        .clickable { /* TODO: full chapter list screen */ },
+                                        .clickable { showAllChapters = true },
                                 )
                             }
                         }
