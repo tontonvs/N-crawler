@@ -131,6 +131,25 @@ fun NavGraph() {
             }
         }
 
+        // ── Search overlay — reachable from any tab via the bottom nav ──────
+        // Rendered BEFORE the floating nav below so the nav paints on top of
+        // it (Box z-order = composition order) — otherwise the overlay's
+        // opaque background fully covers the nav, making it untappable.
+        AnimatedVisibility(
+            visible = showSearchOverlay,
+            enter   = fadeIn(),
+            exit    = fadeOut()
+        ) {
+            SearchOverlay(
+                vm           = browseVm,
+                onNovelClick = { slug ->
+                    showSearchOverlay = false
+                    nav.navigate(Routes.detail(slug))
+                },
+                onClose      = { showSearchOverlay = false }
+            )
+        }
+
         // ── Floating bottom nav ────────────────────────────────────────────
         AnimatedVisibility(
             visible  = !isFullScreen,
@@ -146,6 +165,7 @@ fun NavGraph() {
                 isSearchOverlayOpen = showSearchOverlay,
                 onNavigate          = { route ->
                     if (route != currentRoute) {
+                        showSearchOverlay = false
                         nav.navigate(route) {
                             popUpTo(Routes.BROWSE) { saveState = true }
                             launchSingleTop = true
@@ -154,22 +174,6 @@ fun NavGraph() {
                     }
                 },
                 onOpenSearch = { showSearchOverlay = true }
-            )
-        }
-
-        // ── Search overlay — reachable from any tab via the bottom nav ──────
-        AnimatedVisibility(
-            visible = showSearchOverlay,
-            enter   = fadeIn(),
-            exit    = fadeOut()
-        ) {
-            SearchOverlay(
-                vm           = browseVm,
-                onNovelClick = { slug ->
-                    showSearchOverlay = false
-                    nav.navigate(Routes.detail(slug))
-                },
-                onClose      = { showSearchOverlay = false }
             )
         }
     }

@@ -230,6 +230,27 @@ class FreeWebNovelScraper {
         return ""
     }
 
+    // Confirmed via a live fetch of the listing page: covers are plain,
+    // non-lazy `src` attrs pointing straight at /files/article/image/... —
+    // so the lazy-load attribute check above is a defensive no-op here, not
+    // the actual fix. The real bug: h3's immediate parent does NOT contain
+    // the <img> — the cover <a><img></a> and the <h3> title are siblings
+    // under a shared row wrapper one or more levels further up (a common
+    // "image column / text column" card layout). Climb from h3 until an
+    // ancestor's subtree actually contains an <img>, instead of assuming a
+    // fixed depth that breaks the moment the markup nests differently.
+    private fun findCoverNear(start: Element, maxDepth: Int = 5): String {
+        var el: Element? = start
+        var depth = 0
+        while (el != null && depth < maxDepth) {
+            val cover = extractCoverUrl(el)
+            if (cover.isNotBlank()) return cover
+            el = el.parent()
+            depth++
+        }
+        return ""
+    }
+
     private fun parseNovelCards(doc: Document): List<NovelEntity> {
         val result = mutableListOf<NovelEntity>()
 
@@ -244,14 +265,13 @@ class FreeWebNovelScraper {
 
             val title = a.text().trim().ifBlank { return@forEach }
 
-            // Cover: look for img in the parent chain of this h3, checking
-            // lazy-load attributes first (see extractCoverUrl above)
+            // Cover: climb from the title link until we find an ancestor
+            // whose subtree contains the row's <img> (see findCoverNear above)
             val h3     = a.parent() ?: return@forEach
-            val card   = h3.parent() ?: h3
-            val cover  = extractCoverUrl(card)
+            val cover  = findCoverNear(h3)
 
             // Rating: text content near the card (plain number like "4.6")
-            val ratingText = card.select("em, [class*=score]")
+            val ratingText = (h3.parent() ?: h3).select("em, [class*=score]")
                 .firstOrNull()?.text()?.trim() ?: ""
 
             Log.d(TAG, "Card: slug=$slug title=$title cover=${cover.takeLast(20)}")
