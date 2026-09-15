@@ -9,57 +9,29 @@ import androidx.navigation.navArgument
 import com.noven.ncrawler.ui.screens.browse.BrowseScreen
 import com.noven.ncrawler.ui.screens.detail.NovelDetailScreen
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Route constants — single source of truth, avoids magic strings everywhere
-// ─────────────────────────────────────────────────────────────────────────────
-
 object Routes {
     const val BROWSE = "browse"
     const val DETAIL = "detail/{novelId}"
 
-    /** Build a typed detail route from a novel ID. */
-    fun detail(novelId: String) = "detail/${novelId.encodeForRoute()}"
-
-    private fun String.encodeForRoute() =
-        java.net.URLEncoder.encode(this, "UTF-8")
+    fun detail(novelId: String): String =
+        "detail/${java.net.URLEncoder.encode(novelId, "UTF-8")}"
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Root nav graph
-// ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
 fun NCrawlerNavGraph() {
     val navController = rememberNavController()
 
-    NavHost(
-        navController = navController,
-        startDestination = Routes.BROWSE,
-    ) {
+    NavHost(navController = navController, startDestination = Routes.BROWSE) {
 
-        // ── Browse / Search screen (Sprint 1) ────────────────────────────────
+        // Browse screen — Sprint 1 signature (no onNovelClick yet)
         composable(route = Routes.BROWSE) {
-            BrowseScreen(
-                onNovelClick = { novelId ->
-                    navController.navigate(Routes.detail(novelId))
-                },
-            )
+            BrowseScreen()
         }
 
-        // ── Novel Detail screen (Sprint 2) ───────────────────────────────────
-        // CHANGE: added this composable block — routes to NovelDetailScreen
-        // with a URL-encoded novelId argument.
-        //
-        // Advantage : type-safe String arg avoids cast errors at runtime.
-        // Disadvantage : URL-encoding adds ~1 ms overhead — negligible.
+        // Detail screen — Sprint 2
         composable(
             route = Routes.DETAIL,
-            arguments = listOf(
-                navArgument("novelId") {
-                    type = NavType.StringType
-                    nullable = false
-                }
-            ),
+            arguments = listOf(navArgument("novelId") { type = NavType.StringType }),
         ) { backStackEntry ->
             val novelId = backStackEntry.arguments
                 ?.getString("novelId")
@@ -67,12 +39,9 @@ fun NCrawlerNavGraph() {
                 ?: ""
 
             NovelDetailScreen(
-                novelId = novelId,
-                onBack = { navController.popBackStack() },
-                onChapterClick = { chapterUrl ->
-                    // Sprint 3: navigate to reader screen
-                    // navController.navigate(Routes.reader(chapterUrl))
-                },
+                novelId      = novelId,
+                onBack       = { navController.popBackStack() },
+                onChapterClick = { /* Sprint 3: navigate to reader */ },
             )
         }
     }
