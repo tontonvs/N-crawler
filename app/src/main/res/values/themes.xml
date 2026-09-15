@@ -1,13 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!--
-        Compose handles all UI — we just need a windowless host theme.
-        Theme.AppCompat.Light.NoActionBar is available at minSdk 26+
-        and requires the appcompat dependency added below.
+        Theme.NCrawler — base theme for the app window.
+
+        CHANGE: Replaced Theme.AppCompat.Light.NoActionBar with a bare
+        Theme.Material3.DayNight.NoActionBar.
+
+        Advantage : no AppCompat dependency needed; Material3 is already on
+                    the classpath via the Compose BOM.
+        Disadvantage : if a non-Compose view (AlertDialog, Toast, etc.) is
+                       ever added it will inherit M3 styling instead of
+                       AppCompat — fine for this pure-Compose app.
+
+        Compose's setContent{} takes over the window entirely once
+        MainActivity starts, so the XML theme only affects the brief
+        launch-window flash before Compose paints.
     -->
-    <style name="Theme.NCrawler" parent="Theme.AppCompat.Light.NoActionBar">
-        <item name="android:windowBackground">@android:color/black</item>
+    <style name="Theme.NCrawler" parent="Theme.Material3.DayNight.NoActionBar">
+        <!-- Status bar transparent so our full-bleed screens look clean -->
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
     </style>
 </resources>
