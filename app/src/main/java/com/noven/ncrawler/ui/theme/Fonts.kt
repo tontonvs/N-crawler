@@ -1,5 +1,6 @@
 package com.noven.ncrawler.ui.theme
 
+import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontVariation
@@ -15,9 +16,15 @@ val PacificoFamily = FontFamily(Font(R.font.pacifico_regular))
 
 // Cinzel — serif variable font (weight axis). Pinned to Bold(700) via
 // FontVariation to match the engraved/epic look fantasy genres want.
+// CHANGE: added @OptIn(ExperimentalTextApi::class) — FontVariation.Settings
+// is marked experimental in Compose UI text; the API itself is stable and
+// widely used, the annotation is just Google's stability disclaimer.
 // Advantage : single file covers the whole weight range, no extra files.
 // Disadvantage: variable-font rendering is a hair heavier at layout time
-//   than a static weight file — imperceptible at this text size.
+//   than a static weight file — imperceptible at this text size. Also,
+//   being an experimental API, a future Compose version could change its
+//   signature — low risk, but worth knowing if a future BOM bump breaks it.
+@OptIn(ExperimentalTextApi::class)
 val CinzelFamily = FontFamily(
     Font(
         resId             = R.font.cinzel_variable,
