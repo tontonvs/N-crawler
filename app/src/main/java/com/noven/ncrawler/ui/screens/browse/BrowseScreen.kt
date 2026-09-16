@@ -28,7 +28,6 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
@@ -61,6 +60,10 @@ fun BrowseScreen(
     onContinueReading: ((slug: String, chapterNum: Int) -> Unit)? = null,
     onDownloadsClick: (() -> Unit)? = null,
     onGenreClick: ((genre: String) -> Unit)? = null,
+    // CHANGE: new optional callback — powers the trailing "See More" genre
+    // card and the "See all" header link, both of which now route to the
+    // existing DiscoverScreen (which already lists every genre as a card).
+    onDiscoverClick: (() -> Unit)? = null,
     vm: BrowseViewModel = viewModel()
 ) {
     val browseState      by vm.browseState.collectAsStateWithLifecycle()
@@ -87,6 +90,7 @@ fun BrowseScreen(
                 onNovelClick      = onNovelClick,
                 onRetry           = vm::loadHomepage,
                 onGenreClick      = onGenreClick ?: {},
+                onDiscoverClick   = onDiscoverClick,
                 continueReading   = continueReading,
                 onContinueReading = onContinueReading,
                 recentlyReading   = recentlyReading
@@ -202,64 +206,42 @@ fun SearchOverlay(
                     .padding(horizontal = 16.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Custom-bordered field: Material3's OutlinedTextField has no
-                // public "border width" knob, only color — so this uses a
-                // filled TextField (indicator hidden) inside a Box with an
-                // explicit thick black border for exact control.
-                Box(
-                    modifier = Modifier
+                OutlinedTextField(
+                    value         = query,
+                    onValueChange = vm::onQueryChange,
+                    modifier      = Modifier
                         .weight(1f)
-                        .border(2.5.dp, Color.Black, RoundedCornerShape(16.dp))
-                ) {
-                    TextField(
-                        value         = query,
-                        onValueChange = vm::onQueryChange,
-                        modifier      = Modifier
-                            .fillMaxWidth()
-                            .focusRequester(focusRequester),
-                        placeholder   = {
-                            Text(
-                                "Search novels…",
-                                fontFamily = MontserratFamily,
-                                fontWeight = FontWeight.Bold,
-                                color      = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        },
-                        leadingIcon = {
-                            // Filled, solid glyph — TikTok-style, not the
-                            // softer Rounded family used elsewhere.
-                            Icon(Icons.Filled.Search, contentDescription = null,
-                                tint = Color.Black)
-                        },
-                        textStyle = LocalTextStyle.current.copy(
-                            fontFamily = MontserratFamily,
-                            fontWeight = FontWeight.Bold,
-                            color      = MaterialTheme.colorScheme.onSurface
-                        ),
-                        singleLine = true,
-                        colors = TextFieldDefaults.colors(
-                            focusedContainerColor   = Color.Transparent,
-                            unfocusedContainerColor = Color.Transparent,
-                            focusedIndicatorColor   = Color.Transparent,
-                            unfocusedIndicatorColor = Color.Transparent,
-                            cursorColor             = AccentBlue
-                        ),
-                        shape = RoundedCornerShape(16.dp),
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                        keyboardActions = KeyboardActions(onSearch = {
-                            vm.commitSearch(query)
-                            focusManager.clearFocus()
-                            keyboard?.hide()
-                        })
-                    )
-                }
+                        .focusRequester(focusRequester),
+                    placeholder   = {
+                        Text("Search novels…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    },
+                    leadingIcon = {
+                        Icon(Icons.Rounded.Search, contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    },
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor   = AccentBlue,
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outline,
+                        focusedTextColor     = MaterialTheme.colorScheme.onSurface,
+                        unfocusedTextColor   = MaterialTheme.colorScheme.onSurface,
+                        cursorColor          = AccentBlue
+                    ),
+                    shape = RoundedCornerShape(16.dp),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(onSearch = {
+                        vm.commitSearch(query)
+                        focusManager.clearFocus()
+                        keyboard?.hide()
+                    })
+                )
                 Spacer(Modifier.width(8.dp))
                 IconButton(onClick = {
                     vm.clearSearch()
                     onClose()
                 }) {
                     Icon(
-                        Icons.Filled.Close,
+                        Icons.Rounded.Close,
                         contentDescription = "Close search",
                         tint = MaterialTheme.colorScheme.onSurface
                     )
@@ -285,36 +267,19 @@ fun SearchOverlay(
                                     .padding(vertical = 10.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                // Filled clock icon — same solid-glyph language
-                                // as the search icon above.
                                 Icon(
-                                    Icons.Filled.History,
+                                    Icons.Rounded.History,
                                     contentDescription = null,
                                     tint     = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(20.dp)
+                                    modifier = Modifier.size(18.dp)
                                 )
                                 Spacer(Modifier.width(10.dp))
                                 Text(
                                     term,
-                                    // Deliberately NOT Montserrat — a second,
-                                    // distinct font from the bold search-bar
-                                    // text, and bigger than the old bodyMedium.
-                                    fontFamily = FontFamily.Default,
-                                    fontSize   = 17.sp,
-                                    color      = MaterialTheme.colorScheme.onSurface,
-                                    modifier   = Modifier.weight(1f)
+                                    style    = MaterialTheme.typography.bodyMedium,
+                                    color    = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.weight(1f)
                                 )
-                                IconButton(
-                                    onClick  = { vm.removeRecentSearch(term) },
-                                    modifier = Modifier.size(32.dp)
-                                ) {
-                                    Icon(
-                                        Icons.Filled.Close,
-                                        contentDescription = "Remove \"$term\" from recent searches",
-                                        tint     = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                }
                             }
                         }
                     }
@@ -351,6 +316,7 @@ private fun BrowseContent(
     onNovelClick: (String) -> Unit,
     onRetry: () -> Unit,
     onGenreClick: (String) -> Unit,
+    onDiscoverClick: (() -> Unit)?,
     continueReading: ContinueReadingInfo?,
     onContinueReading: ((slug: String, chapterNum: Int) -> Unit)?,
     recentlyReading: List<ContinueReadingInfo>
@@ -371,9 +337,14 @@ private fun BrowseContent(
             val popularNovels    = (popularState as? BrowseUiState.Success)?.novels ?: emptyList()
             val popularGenreRows = remember(popularNovels) { groupByTopGenres(popularNovels) }
 
-            // First 3 of the curated genre list power the new decorative
-            // showcase cards (replaces the old pill-chip filter strip).
-            val showcaseGenres = listOf("Fantasy", "Action", "Romance")
+            // CHANGE: showcase genres now come from the real data (top 8 by
+            // how many novels carry them) instead of a hardcoded 3-item list.
+            // perGenre=1 because the showcase only needs genre NAMES, not
+            // the novel samples — cheap to compute independently of the
+            // other two groupings above.
+            val showcaseGenres = remember(novels) {
+                groupByTopGenres(novels, maxGenres = 8, perGenre = 1).map { it.first }
+            }
 
             LazyColumn(
                 modifier       = Modifier.fillMaxSize(),
@@ -418,15 +389,19 @@ private fun BrowseContent(
                     }
                 }
 
-                // ── Genre showcase — decorative gradient-font cards
-                // (replaces the old pill/chip filter strip). Each card
-                // opens that genre's full list via Discover's GenreScreen.
-                item {
-                    Spacer(Modifier.height(24.dp))
-                    GenreShowcaseRow(
-                        genres    = showcaseGenres,
-                        onGenreClick = onGenreClick
-                    )
+                // ── Genre showcase — decorative gradient-font cards, now a
+                // horizontally scrolling row (up to 8 genres, 6 alternating
+                // decorative styles) ending in a "See More" card that opens
+                // the existing DiscoverScreen (every genre, full list).
+                if (showcaseGenres.isNotEmpty()) {
+                    item {
+                        Spacer(Modifier.height(24.dp))
+                        GenreShowcaseRow(
+                            genres          = showcaseGenres,
+                            onGenreClick    = onGenreClick,
+                            onDiscoverClick = onDiscoverClick
+                        )
+                    }
                 }
 
                 // ── Latest Updates — up to 5 genre rows, horizontal samples,
@@ -802,14 +777,15 @@ private fun RecentCard(
 }
 
 // ── Genre Showcase — decorative, colour-gradient typography per card ─────────
-// Replaces the old pill/chip filter strip with 3 equal-width glass cards,
-// each genre rendered in its own decorative font + gradient, mirroring the
-// "Option 2" comparison design (Pacifico / Cinzel / Anton, all OFL-licensed
-// and bundled — see ui/theme/Fonts.kt).
+// Horizontally scrolling row (was a fixed 3-card row) so any number of real
+// genres fit, each in one of 6 alternating decorative styles (was 3) — see
+// GenreDecorativeCard below. Ends in a "See More" card that opens the
+// existing DiscoverScreen, which already lists every genre.
 @Composable
 private fun GenreShowcaseRow(
     genres: List<String>,
-    onGenreClick: (String) -> Unit
+    onGenreClick: (String) -> Unit,
+    onDiscoverClick: (() -> Unit)?
 ) {
     Column {
         Row(
@@ -827,33 +803,48 @@ private fun GenreShowcaseRow(
                 ),
                 color = MaterialTheme.colorScheme.onBackground
             )
-            // Note: no full "all genres" screen exists yet, so this label is
-            // intentionally non-interactive for now rather than a dead link.
+            // CHANGE: now wired to Discover (was a dead label — no screen
+            // existed for it before; DiscoverScreen already did).
             Text(
                 "See all",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                style    = MaterialTheme.typography.labelMedium,
+                color    = if (onDiscoverClick != null) AccentBlue
+                           else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                modifier = if (onDiscoverClick != null)
+                    Modifier.clickable(onClick = onDiscoverClick) else Modifier
             )
         }
         Spacer(Modifier.height(14.dp))
-        Row(
-            modifier              = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        // CHANGE: fixed 3-card Row → LazyRow so the showcase can hold up to
+        // 8 real genres plus a trailing "See More" card without squeezing.
+        LazyRow(
+            contentPadding        = PaddingValues(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            genres.take(3).forEachIndexed { i, genre ->
+            itemsIndexed(genres, key = { _, g -> g }) { i, genre ->
                 GenreDecorativeCard(
                     genre    = genre,
-                    styleIdx = i % 3,
+                    styleIdx = i % 6,
                     onClick  = { onGenreClick(genre) },
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.width(104.dp)
                 )
+            }
+            if (onDiscoverClick != null) {
+                item(key = "genre_see_more") {
+                    SeeMoreGenreCard(
+                        onClick  = onDiscoverClick,
+                        modifier = Modifier.width(104.dp)
+                    )
+                }
             }
         }
     }
 }
 
+// CHANGE: height reduced 90dp → 72dp (per feedback), font sizes trimmed
+// slightly to match, and doubled from 3 to 6 decorative style variants —
+// reuses the same 3 bundled fonts (Pacifico / Cinzel / Anton) with fresh
+// gradient pairs so 8 genres in a row don't read as visibly repetitive.
 @Composable
 private fun GenreDecorativeCard(
     genre: String,
@@ -863,12 +854,12 @@ private fun GenreDecorativeCard(
 ) {
     Box(
         modifier = modifier
-            .height(90.dp)
-            .shadow(elevation = 10.dp, shape = RoundedCornerShape(18.dp), clip = false)
-            .clip(RoundedCornerShape(18.dp))
+            .height(72.dp)
+            .shadow(elevation = 8.dp, shape = RoundedCornerShape(16.dp), clip = false)
+            .clip(RoundedCornerShape(16.dp))
             .background(GlassSurfaceLight)
             .clickable(onClick = onClick)
-            .padding(8.dp),
+            .padding(6.dp),
         contentAlignment = Alignment.Center
     ) {
         when (styleIdx) {
@@ -877,12 +868,14 @@ private fun GenreDecorativeCard(
                 text  = genre,
                 style = TextStyle(
                     fontFamily = PacificoFamily,
-                    fontSize   = 19.sp,
+                    fontSize   = 16.sp,
                     brush      = Brush.linearGradient(
                         colors = listOf(Color(0xFFFF416C), Color(0xFFFF4B2B))
                     )
                 ),
-                textAlign = TextAlign.Center
+                textAlign = TextAlign.Center,
+                maxLines  = 2,
+                overflow  = TextOverflow.Ellipsis
             )
             // Style 1 — Cinzel serif bold, epic purple gradient
             1 -> Text(
@@ -890,26 +883,110 @@ private fun GenreDecorativeCard(
                 style = TextStyle(
                     fontFamily    = CinzelFamily,
                     fontWeight    = FontWeight.Bold,
-                    fontSize      = 16.sp,
-                    letterSpacing = 2.sp,
+                    fontSize      = 13.sp,
+                    letterSpacing = 1.5.sp,
                     brush         = Brush.linearGradient(
                         colors = listOf(Color(0xFF8E2DE2), Color(0xFF4A00E0))
                     )
                 ),
-                textAlign = TextAlign.Center
+                textAlign = TextAlign.Center,
+                maxLines  = 2,
+                overflow  = TextOverflow.Ellipsis
             )
             // Style 2 — Anton (Impact-style) caps, fiery orange-red gradient
-            else -> Text(
+            2 -> Text(
                 text  = genre.uppercase(),
                 style = TextStyle(
                     fontFamily    = AntonFamily,
-                    fontSize      = 21.sp,
-                    letterSpacing = 1.sp,
+                    fontSize      = 16.sp,
+                    letterSpacing = 0.5.sp,
                     brush         = Brush.linearGradient(
                         colors = listOf(Color(0xFFF97316), Color(0xFFDC2626))
                     )
                 ),
-                textAlign = TextAlign.Center
+                textAlign = TextAlign.Center,
+                maxLines  = 2,
+                overflow  = TextOverflow.Ellipsis
+            )
+            // Style 3 — Pacifico cursive, cool teal-blue gradient
+            3 -> Text(
+                text  = genre,
+                style = TextStyle(
+                    fontFamily = PacificoFamily,
+                    fontSize   = 16.sp,
+                    brush      = Brush.linearGradient(
+                        colors = listOf(Color(0xFF06B6D4), Color(0xFF3B82F6))
+                    )
+                ),
+                textAlign = TextAlign.Center,
+                maxLines  = 2,
+                overflow  = TextOverflow.Ellipsis
+            )
+            // Style 4 — Cinzel serif bold, gold-amber gradient
+            4 -> Text(
+                text  = genre,
+                style = TextStyle(
+                    fontFamily    = CinzelFamily,
+                    fontWeight    = FontWeight.Bold,
+                    fontSize      = 13.sp,
+                    letterSpacing = 1.5.sp,
+                    brush         = Brush.linearGradient(
+                        colors = listOf(Color(0xFFF59E0B), Color(0xFFD97706))
+                    )
+                ),
+                textAlign = TextAlign.Center,
+                maxLines  = 2,
+                overflow  = TextOverflow.Ellipsis
+            )
+            // Style 5 — Anton caps, green-emerald gradient
+            else -> Text(
+                text  = genre.uppercase(),
+                style = TextStyle(
+                    fontFamily    = AntonFamily,
+                    fontSize      = 16.sp,
+                    letterSpacing = 0.5.sp,
+                    brush         = Brush.linearGradient(
+                        colors = listOf(Color(0xFF10B981), Color(0xFF059669))
+                    )
+                ),
+                textAlign = TextAlign.Center,
+                maxLines  = 2,
+                overflow  = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+// New — trailing card at the end of the genre showcase row. Distinct from
+// the decorative cards on purpose (outlined accent style, not white glass)
+// so it reads as an action, not another genre.
+@Composable
+private fun SeeMoreGenreCard(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .height(72.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(AccentBlue.copy(alpha = 0.10f))
+            .border(1.5.dp, AccentBlue.copy(alpha = 0.35f), RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick)
+            .padding(6.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(
+                Icons.Rounded.ArrowForward,
+                contentDescription = "See more genres",
+                tint     = AccentBlue,
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "See More",
+                color      = AccentBlue,
+                fontSize   = 10.sp,
+                fontWeight = FontWeight.Bold,
+                textAlign  = TextAlign.Center,
+                lineHeight = 12.sp
             )
         }
     }

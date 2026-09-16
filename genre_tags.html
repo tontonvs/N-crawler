@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Genre Cards Comparison</title>
+  <!-- Google Fonts for Decorative Typography -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@700&family=Impact&family=Pacifico&family=Plus+Jakarta+Sans:wght@600;800&display=swap" rel="stylesheet">
+  
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+
+    body {
+      background: #0f172a;
+      background-image: 
+        radial-gradient(at 10% 10%, rgba(56, 189, 248, 0.15) 0px, transparent 50%),
+        radial-gradient(at 90% 90%, rgba(236, 72, 153, 0.15) 0px, transparent 50%);
+      color: #f8fafc;
+      padding: 40px 20px;
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+
+    /* Main Container for Side-by-Side Comparison */
+    .comparison-wrapper {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 32px;
+      max-width: 1200px;
+      width: 100%;
+      justify-content: center;
+    }
+
+    .section-box {
+      flex: 1 1 480px;
+      background: rgba(255, 255, 255, 0.03);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 24px;
+      padding: 28px;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+    }
+
+    .header-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+
+    .header-row h3 {
+      font-size: 1.25rem;
+      font-weight: 800;
+      color: #f3f4f6;
+      letter-spacing: -0.3px;
+    }
+
+    .see-all {
+      font-size: 0.875rem;
+      font-weight: 600;
+      color: #94a3b8;
+      text-decoration: none;
+      transition: color 0.2s ease;
+    }
+
+    .see-all:hover {
+      color: #38bdf8;
+    }
+
+    .card-grid {
+      display: flex;
+      gap: 16px;
+    }
+
+    /* Base Glass Card */
+    .genre-card {
+      flex: 1;
+      height: 90px;
+      background: rgba(255, 255, 255, 0.95);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      border-radius: 18px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.2), 0 8px 10px -6px rgba(0, 0, 0, 0.2);
+      transition: transform 0.25s ease, box-shadow 0.25s ease;
+      cursor: pointer;
+      text-align: center;
+      padding: 8px;
+    }
+
+    .genre-card:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 14px 30px -5px rgba(0, 0, 0, 0.35);
+    }
+
+    /* Option 1: Clean Modern Colorful Fonts */
+    .option-1 .adventure-text {
+      color: #e11d48;
+      font-weight: 800;
+      font-size: 1.15rem;
+    }
+
+    .option-1 .fantasy-text {
+      color: #7c3aed;
+      font-weight: 800;
+      font-size: 1.15rem;
+    }
+
+    .option-1 .action-text {
+      color: #0284c7;
+      font-weight: 800;
+      font-size: 1.15rem;
+    }
+
+    /* Option 2: Decorative + Colorful Fonts */
+    .option-2 .adventure-text {
+      font-family: 'Pacifico', cursive;
+      font-size: 1.25rem;
+      background: linear-gradient(135deg, #ff416c, #ff4b2b);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .option-2 .fantasy-text {
+      font-family: 'Cinzel', serif;
+      font-size: 1.05rem;
+      letter-spacing: 3px;
+      background: linear-gradient(135deg, #8e2de2, #4a00e0);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      font-weight: 700;
+    }
+
+    .option-2 .action-text {
+      font-family: 'Impact', sans-serif;
+      font-size: 1.5rem;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      background: linear-gradient(135deg, #f97316, #dc2626);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="comparison-wrapper">
+
+    <!-- SIDE 1: Modern Colorful Fonts -->
+    <div class="section-box option-1">
+      <div class="header-row">
+        <h3>Genre</h3>
+        <a href="#" class="see-all">See all</a>
+      </div>
+      <div class="card-grid">
+        <div class="genre-card">
+          <span class="adventure-text">Adventure</span>
+        </div>
+        <div class="genre-card">
+          <span class="fantasy-text">Fantasy</span>
+        </div>
+        <div class="genre-card">
+          <span class="action-text">Action</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- SIDE 2: Decorative + Colorful Fonts -->
+    <div class="section-box option-2">
+      <div class="header-row">
+        <h3>Genre</h3>
+        <a href="#" class="see-all">See all</a>
+      </div>
+      <div class="card-grid">
+        <div class="genre-card">
+          <span class="adventure-text">Adventure</span>
+        </div>
+        <div class="genre-card">
+          <span class="fantasy-text">Fantasy</span>
+        </div>
+        <div class="genre-card">
+          <span class="action-text">Action</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+</body>
+</html>

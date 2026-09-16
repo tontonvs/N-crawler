@@ -93,6 +93,10 @@ fun NCrawlerNavGraph() {
                     onDownloadsClick  = { nav.navigate(Routes.DOWNLOADS) },
                     onContinueReading = { slug, chapter -> nav.navigate(Routes.reader(slug, chapter)) },
                     onGenreClick      = { genre -> nav.navigate(Routes.genre(genre)) },
+                    // CHANGE: wires the new "See More" genre card + the
+                    // "Genre" section's "See all" link to the existing
+                    // Discover screen, which already lists every genre.
+                    onDiscoverClick   = { nav.navigate(Routes.DISCOVER) },
                     vm                = browseVm
                 )
             }
@@ -266,7 +270,7 @@ private fun FloatingNavBar(
                     icon        = Icons.Outlined.Home,
                     iconActive  = Icons.Rounded.Home,
                     label       = "Home",
-                    isSelected  = currentRoute == Routes.BROWSE && !isSearchOverlayOpen,
+                    isSelected  = currentRoute == Routes.BROWSE,
                     onClick     = { onNavigate(Routes.BROWSE) }
                 )
                 NavPillItem(
@@ -282,15 +286,14 @@ private fun FloatingNavBar(
                     icon        = Icons.Outlined.FolderOpen,
                     iconActive  = Icons.Rounded.FolderOpen,
                     label       = "Library",
-                    isSelected  = currentRoute == Routes.LIBRARY && !isSearchOverlayOpen,
+                    isSelected  = currentRoute == Routes.LIBRARY,
                     onClick     = { onNavigate(Routes.LIBRARY) }
                 )
                 NavPillItem(
                     icon        = Icons.Outlined.Explore,
                     iconActive  = Icons.Rounded.Explore,
                     label       = "Discover",
-                    isSelected  = (currentRoute == Routes.DISCOVER || currentRoute.startsWith("genre/"))
-                        && !isSearchOverlayOpen,
+                    isSelected  = currentRoute == Routes.DISCOVER || currentRoute.startsWith("genre/"),
                     onClick     = { onNavigate(Routes.DISCOVER) }
                 )
             }
