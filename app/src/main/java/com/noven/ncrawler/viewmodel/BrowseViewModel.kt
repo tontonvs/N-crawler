@@ -163,4 +163,9 @@ class BrowseViewModel(app: Application) : AndroidViewModel(app) {
         recentStore.addRecent(term)
         _recentSearches.value = recentStore.getRecent()
     }
+
+    fun removeRecentSearch(term: String) {
+        recentStore.removeRecent(term)
+        _recentSearches.value = recentStore.getRecent()
+    }
 }

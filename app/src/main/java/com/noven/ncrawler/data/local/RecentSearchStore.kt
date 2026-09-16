@@ -28,6 +28,13 @@ class RecentSearchStore(context: Context) {
             .apply()
     }
 
+    fun removeRecent(term: String) {
+        val updated = getRecent().filterNot { it.equals(term, ignoreCase = true) }
+        prefs.edit()
+            .putString(KEY_TERMS, updated.joinToString(DELIMITER))
+            .apply()
+    }
+
     companion object {
         private const val PREFS_NAME = "recent_searches"
         private const val KEY_TERMS  = "terms"
