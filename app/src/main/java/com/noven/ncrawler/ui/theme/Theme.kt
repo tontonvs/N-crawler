@@ -8,7 +8,9 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.googlefonts.GoogleFont
 import androidx.compose.ui.unit.sp
+import com.noven.ncrawler.R
 
 // ── Brand palette — blue accent, NO yellow (StarGold is the sole exception,
 //    reserved strictly for the rating icon — see design note in chat) ─────────
@@ -65,33 +67,52 @@ private val DarkColors = darkColorScheme(
     error              = Color(0xFFFFB4AB)
 )
 
-// ── Typography — system sans, bold/rounded feel ───────────────────────────────
-// Using system default (no custom font assets needed) with tight tracking
-// for the playful bold feel requested
+// ── Typography — Montserrat for titles/headers, system sans for body ──────────
+// Montserrat is a genuinely open (SIL OFL) Google Font, fetched at runtime via
+// Android's standard Downloadable Fonts provider — the exact same mechanism
+// used across the Android ecosystem, not anything bundled/proprietary. Titles
+// only: body/label text stays on the system font for max legibility at small
+// sizes — matches the bold-geometric-title / plain-body pattern this was
+// modeled on.
+private val montserratGoogleFont = GoogleFont("Montserrat")
+private val montserratProvider = GoogleFont.Provider(
+    providerAuthority = "com.google.android.gms.fonts",
+    providerPackage   = "com.google.android.gms",
+    certificates      = R.array.com_google_android_gms_fonts_certs
+)
+val MontserratFamily = FontFamily(
+    Font(googleFont = montserratGoogleFont, fontProvider = montserratProvider, weight = FontWeight.Black),
+    Font(googleFont = montserratGoogleFont, fontProvider = montserratProvider, weight = FontWeight.ExtraBold),
+    Font(googleFont = montserratGoogleFont, fontProvider = montserratProvider, weight = FontWeight.Bold),
+    Font(googleFont = montserratGoogleFont, fontProvider = montserratProvider, weight = FontWeight.SemiBold),
+    Font(googleFont = montserratGoogleFont, fontProvider = montserratProvider, weight = FontWeight.Medium),
+    Font(googleFont = montserratGoogleFont, fontProvider = montserratProvider, weight = FontWeight.Normal)
+)
+
 val NCrawlerTypography = Typography(
     displaySmall = TextStyle(
-        fontFamily   = FontFamily.Default,
+        fontFamily   = MontserratFamily,
         fontWeight   = FontWeight.ExtraBold,
         fontSize     = 28.sp,
         lineHeight   = 34.sp,
         letterSpacing = (-0.5).sp
     ),
     titleLarge = TextStyle(
-        fontFamily   = FontFamily.Default,
+        fontFamily   = MontserratFamily,
         fontWeight   = FontWeight.Bold,
         fontSize     = 20.sp,
         lineHeight   = 26.sp,
         letterSpacing = (-0.3).sp
     ),
     titleMedium = TextStyle(
-        fontFamily   = FontFamily.Default,
+        fontFamily   = MontserratFamily,
         fontWeight   = FontWeight.Bold,
         fontSize     = 16.sp,
         lineHeight   = 22.sp,
         letterSpacing = (-0.2).sp
     ),
     titleSmall = TextStyle(
-        fontFamily   = FontFamily.Default,
+        fontFamily   = MontserratFamily,
         fontWeight   = FontWeight.SemiBold,
         fontSize     = 14.sp,
         lineHeight   = 20.sp
