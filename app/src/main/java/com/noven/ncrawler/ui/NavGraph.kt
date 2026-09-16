@@ -270,7 +270,7 @@ private fun FloatingNavBar(
                     icon        = Icons.Outlined.Home,
                     iconActive  = Icons.Rounded.Home,
                     label       = "Home",
-                    isSelected  = currentRoute == Routes.BROWSE,
+                    isSelected  = currentRoute == Routes.BROWSE && !isSearchOverlayOpen,
                     onClick     = { onNavigate(Routes.BROWSE) }
                 )
                 NavPillItem(
@@ -286,14 +286,15 @@ private fun FloatingNavBar(
                     icon        = Icons.Outlined.FolderOpen,
                     iconActive  = Icons.Rounded.FolderOpen,
                     label       = "Library",
-                    isSelected  = currentRoute == Routes.LIBRARY,
+                    isSelected  = currentRoute == Routes.LIBRARY && !isSearchOverlayOpen,
                     onClick     = { onNavigate(Routes.LIBRARY) }
                 )
                 NavPillItem(
                     icon        = Icons.Outlined.Explore,
                     iconActive  = Icons.Rounded.Explore,
                     label       = "Discover",
-                    isSelected  = currentRoute == Routes.DISCOVER || currentRoute.startsWith("genre/"),
+                    isSelected  = (currentRoute == Routes.DISCOVER || currentRoute.startsWith("genre/"))
+                        && !isSearchOverlayOpen,
                     onClick     = { onNavigate(Routes.DISCOVER) }
                 )
             }

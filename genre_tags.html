@@ -3,12 +3,15 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Genre Cards Comparison</title>
-  <!-- Google Fonts for Decorative Typography -->
+  <title>Genre Showcase — Current Design</title>
+  <!-- Google Fonts — matches the actual bundled fonts in ui/theme/Fonts.kt.
+       Note: the old mockup referenced 'Impact', which isn't a real Google
+       Font — the Kotlin code always used 'Anton' (a genuine OFL font, the
+       "Impact-style" caps face), so that's what's loaded here too. -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@700&family=Impact&family=Pacifico&family=Plus+Jakarta+Sans:wght@600;800&display=swap" rel="stylesheet">
-  
+  <link href="https://fonts.googleapis.com/css2?family=Anton&family=Cinzel:wght@700&family=Pacifico&family=Plus+Jakarta+Sans:wght@600;800&display=swap" rel="stylesheet">
+
   <style>
     * {
       box-sizing: border-box;
@@ -17,12 +20,11 @@
       font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
     }
 
+    /* Real app background (#F4F7F9) — not the old dark preview backdrop —
+       so this reads the way it actually will in the app. */
     body {
-      background: #0f172a;
-      background-image: 
-        radial-gradient(at 10% 10%, rgba(56, 189, 248, 0.15) 0px, transparent 50%),
-        radial-gradient(at 90% 90%, rgba(236, 72, 153, 0.15) 0px, transparent 50%);
-      color: #f8fafc;
+      background: #F4F7F9;
+      color: #0D1117;
       padding: 40px 20px;
       min-height: 100vh;
       display: flex;
@@ -30,172 +32,185 @@
       align-items: center;
     }
 
-    /* Main Container for Side-by-Side Comparison */
-    .comparison-wrapper {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 32px;
-      max-width: 1200px;
-      width: 100%;
-      justify-content: center;
-    }
-
     .section-box {
-      flex: 1 1 480px;
-      background: rgba(255, 255, 255, 0.03);
-      backdrop-filter: blur(16px);
-      -webkit-backdrop-filter: blur(16px);
-      border: 1px solid rgba(255, 255, 255, 0.08);
+      max-width: 760px;
+      width: 100%;
+      background: #FFFFFF;
+      border: 1px solid rgba(0, 0, 0, 0.08);
       border-radius: 24px;
       padding: 28px;
-      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.08);
     }
 
     .header-row {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 20px;
+      margin-bottom: 6px;
     }
 
     .header-row h3 {
       font-size: 1.25rem;
       font-weight: 800;
-      color: #f3f4f6;
       letter-spacing: -0.3px;
     }
 
     .see-all {
       font-size: 0.875rem;
       font-weight: 600;
-      color: #94a3b8;
+      color: #1565C0; /* AccentBlue — now a live link, not a dead label */
       text-decoration: none;
-      transition: color 0.2s ease;
     }
 
-    .see-all:hover {
-      color: #38bdf8;
+    .subtitle {
+      font-size: 0.8rem;
+      color: #64748b;
+      margin-bottom: 20px;
     }
 
-    .card-grid {
+    /* Horizontally scrolling row — matches the LazyRow (was a fixed 3-card
+       Row), 104px cards with a 10px gap, so it overflows on purpose. */
+    .card-row {
       display: flex;
-      gap: 16px;
+      gap: 10px;
+      overflow-x: auto;
+      padding-bottom: 4px;
     }
+    .card-row::-webkit-scrollbar { height: 6px; }
+    .card-row::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
 
-    /* Base Glass Card */
+    /* Base glass card — 72px tall (was 90px), 16px radius (was 18px) */
     .genre-card {
-      flex: 1;
-      height: 90px;
+      flex: 0 0 104px;
+      height: 72px;
       background: rgba(255, 255, 255, 0.95);
-      backdrop-filter: blur(8px);
-      -webkit-backdrop-filter: blur(8px);
-      border-radius: 18px;
+      border-radius: 16px;
       display: flex;
       align-items: center;
       justify-content: center;
-      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.2), 0 8px 10px -6px rgba(0, 0, 0, 0.2);
-      transition: transform 0.25s ease, box-shadow 0.25s ease;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.15), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+      transition: transform 0.2s ease;
       cursor: pointer;
       text-align: center;
-      padding: 8px;
+      padding: 6px;
+    }
+    .genre-card:hover { transform: translateY(-3px); }
+    .genre-card span {
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
     }
 
-    .genre-card:hover {
-      transform: translateY(-4px);
-      box-shadow: 0 14px 30px -5px rgba(0, 0, 0, 0.35);
-    }
-
-    /* Option 1: Clean Modern Colorful Fonts */
-    .option-1 .adventure-text {
-      color: #e11d48;
-      font-weight: 800;
-      font-size: 1.15rem;
-    }
-
-    .option-1 .fantasy-text {
-      color: #7c3aed;
-      font-weight: 800;
-      font-size: 1.15rem;
-    }
-
-    .option-1 .action-text {
-      color: #0284c7;
-      font-weight: 800;
-      font-size: 1.15rem;
-    }
-
-    /* Option 2: Decorative + Colorful Fonts */
-    .option-2 .adventure-text {
+    /* Style 0 — Pacifico cursive, warm pink-orange gradient */
+    .style-0 span {
       font-family: 'Pacifico', cursive;
-      font-size: 1.25rem;
+      font-size: 16px;
       background: linear-gradient(135deg, #ff416c, #ff4b2b);
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
     }
-
-    .option-2 .fantasy-text {
+    /* Style 1 — Cinzel serif bold, epic purple gradient */
+    .style-1 span {
       font-family: 'Cinzel', serif;
-      font-size: 1.05rem;
-      letter-spacing: 3px;
+      font-weight: 700;
+      font-size: 13px;
+      letter-spacing: 1.5px;
       background: linear-gradient(135deg, #8e2de2, #4a00e0);
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
-      font-weight: 700;
     }
-
-    .option-2 .action-text {
-      font-family: 'Impact', sans-serif;
-      font-size: 1.5rem;
-      letter-spacing: 1px;
+    /* Style 2 — Anton caps, fiery orange-red gradient */
+    .style-2 span {
+      font-family: 'Anton', sans-serif;
+      font-size: 16px;
+      letter-spacing: 0.5px;
       text-transform: uppercase;
       background: linear-gradient(135deg, #f97316, #dc2626);
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
     }
+    /* Style 3 — Pacifico cursive, cool teal-blue gradient */
+    .style-3 span {
+      font-family: 'Pacifico', cursive;
+      font-size: 16px;
+      background: linear-gradient(135deg, #06b6d4, #3b82f6);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    /* Style 4 — Cinzel serif bold, gold-amber gradient */
+    .style-4 span {
+      font-family: 'Cinzel', serif;
+      font-weight: 700;
+      font-size: 13px;
+      letter-spacing: 1.5px;
+      background: linear-gradient(135deg, #f59e0b, #d97706);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    /* Style 5 — Anton caps, green-emerald gradient */
+    .style-5 span {
+      font-family: 'Anton', sans-serif;
+      font-size: 16px;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      background: linear-gradient(135deg, #10b981, #059669);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    /* Trailing "See More" card — new, distinct outlined-accent style so it
+       reads as an action rather than another genre. */
+    .see-more-card {
+      flex: 0 0 104px;
+      height: 72px;
+      border-radius: 16px;
+      background: rgba(21, 101, 192, 0.10);
+      border: 1.5px solid rgba(21, 101, 192, 0.35);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      cursor: pointer;
+      padding: 6px;
+    }
+    .see-more-card svg { width: 16px; height: 16px; }
+    .see-more-card span {
+      color: #1565C0;
+      font-size: 10px;
+      font-weight: 700;
+      line-height: 12px;
+      text-align: center;
+    }
   </style>
 </head>
 <body>
 
-  <div class="comparison-wrapper">
+  <div class="section-box">
+    <div class="header-row">
+      <h3>Genre</h3>
+      <a href="#" class="see-all">See all</a>
+    </div>
+    <div class="subtitle">8 genres · styleIdx = i % 6 · trailing "See More" card</div>
 
-    <!-- SIDE 1: Modern Colorful Fonts -->
-    <div class="section-box option-1">
-      <div class="header-row">
-        <h3>Genre</h3>
-        <a href="#" class="see-all">See all</a>
-      </div>
-      <div class="card-grid">
-        <div class="genre-card">
-          <span class="adventure-text">Adventure</span>
-        </div>
-        <div class="genre-card">
-          <span class="fantasy-text">Fantasy</span>
-        </div>
-        <div class="genre-card">
-          <span class="action-text">Action</span>
-        </div>
+    <div class="card-row">
+      <div class="genre-card style-0"><span>Adventure</span></div>
+      <div class="genre-card style-1"><span>Fantasy</span></div>
+      <div class="genre-card style-2"><span>Action</span></div>
+      <div class="genre-card style-3"><span>Romance</span></div>
+      <div class="genre-card style-4"><span>Martial Arts</span></div>
+      <div class="genre-card style-5"><span>Sci-fi</span></div>
+      <div class="genre-card style-0"><span>Horror</span></div>
+      <div class="genre-card style-1"><span>Reincarnation</span></div>
+      <div class="see-more-card">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#1565C0" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="5" y1="12" x2="19" y2="12"></line>
+          <polyline points="12 5 19 12 12 19"></polyline>
+        </svg>
+        <span>See More</span>
       </div>
     </div>
-
-    <!-- SIDE 2: Decorative + Colorful Fonts -->
-    <div class="section-box option-2">
-      <div class="header-row">
-        <h3>Genre</h3>
-        <a href="#" class="see-all">See all</a>
-      </div>
-      <div class="card-grid">
-        <div class="genre-card">
-          <span class="adventure-text">Adventure</span>
-        </div>
-        <div class="genre-card">
-          <span class="fantasy-text">Fantasy</span>
-        </div>
-        <div class="genre-card">
-          <span class="action-text">Action</span>
-        </div>
-      </div>
-    </div>
-
   </div>
 
 </body>

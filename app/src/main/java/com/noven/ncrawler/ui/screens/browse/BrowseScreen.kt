@@ -28,6 +28,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
@@ -206,42 +207,64 @@ fun SearchOverlay(
                     .padding(horizontal = 16.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                OutlinedTextField(
-                    value         = query,
-                    onValueChange = vm::onQueryChange,
-                    modifier      = Modifier
+                // Custom-bordered field: Material3's OutlinedTextField has no
+                // public "border width" knob, only color — so this uses a
+                // filled TextField (indicator hidden) inside a Box with an
+                // explicit thick black border for exact control.
+                Box(
+                    modifier = Modifier
                         .weight(1f)
-                        .focusRequester(focusRequester),
-                    placeholder   = {
-                        Text("Search novels…", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    },
-                    leadingIcon = {
-                        Icon(Icons.Rounded.Search, contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    },
-                    singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor   = AccentBlue,
-                        unfocusedBorderColor = MaterialTheme.colorScheme.outline,
-                        focusedTextColor     = MaterialTheme.colorScheme.onSurface,
-                        unfocusedTextColor   = MaterialTheme.colorScheme.onSurface,
-                        cursorColor          = AccentBlue
-                    ),
-                    shape = RoundedCornerShape(16.dp),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                    keyboardActions = KeyboardActions(onSearch = {
-                        vm.commitSearch(query)
-                        focusManager.clearFocus()
-                        keyboard?.hide()
-                    })
-                )
+                        .border(2.5.dp, Color.Black, RoundedCornerShape(16.dp))
+                ) {
+                    TextField(
+                        value         = query,
+                        onValueChange = vm::onQueryChange,
+                        modifier      = Modifier
+                            .fillMaxWidth()
+                            .focusRequester(focusRequester),
+                        placeholder   = {
+                            Text(
+                                "Search novels…",
+                                fontFamily = MontserratFamily,
+                                fontWeight = FontWeight.Bold,
+                                color      = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        },
+                        leadingIcon = {
+                            // Filled, solid glyph — TikTok-style, not the
+                            // softer Rounded family used elsewhere.
+                            Icon(Icons.Filled.Search, contentDescription = null,
+                                tint = Color.Black)
+                        },
+                        textStyle = LocalTextStyle.current.copy(
+                            fontFamily = MontserratFamily,
+                            fontWeight = FontWeight.Bold,
+                            color      = MaterialTheme.colorScheme.onSurface
+                        ),
+                        singleLine = true,
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor   = Color.Transparent,
+                            unfocusedContainerColor = Color.Transparent,
+                            focusedIndicatorColor   = Color.Transparent,
+                            unfocusedIndicatorColor = Color.Transparent,
+                            cursorColor             = AccentBlue
+                        ),
+                        shape = RoundedCornerShape(16.dp),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                        keyboardActions = KeyboardActions(onSearch = {
+                            vm.commitSearch(query)
+                            focusManager.clearFocus()
+                            keyboard?.hide()
+                        })
+                    )
+                }
                 Spacer(Modifier.width(8.dp))
                 IconButton(onClick = {
                     vm.clearSearch()
                     onClose()
                 }) {
                     Icon(
-                        Icons.Rounded.Close,
+                        Icons.Filled.Close,
                         contentDescription = "Close search",
                         tint = MaterialTheme.colorScheme.onSurface
                     )
@@ -267,19 +290,36 @@ fun SearchOverlay(
                                     .padding(vertical = 10.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
+                                // Filled clock icon — same solid-glyph language
+                                // as the search icon above.
                                 Icon(
-                                    Icons.Rounded.History,
+                                    Icons.Filled.History,
                                     contentDescription = null,
                                     tint     = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(18.dp)
+                                    modifier = Modifier.size(20.dp)
                                 )
                                 Spacer(Modifier.width(10.dp))
                                 Text(
                                     term,
-                                    style    = MaterialTheme.typography.bodyMedium,
-                                    color    = MaterialTheme.colorScheme.onSurface,
-                                    modifier = Modifier.weight(1f)
+                                    // Deliberately NOT Montserrat — a second,
+                                    // distinct font from the bold search-bar
+                                    // text, and bigger than the old bodyMedium.
+                                    fontFamily = FontFamily.Default,
+                                    fontSize   = 17.sp,
+                                    color      = MaterialTheme.colorScheme.onSurface,
+                                    modifier   = Modifier.weight(1f)
                                 )
+                                IconButton(
+                                    onClick  = { vm.removeRecentSearch(term) },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Filled.Close,
+                                        contentDescription = "Remove \"$term\" from recent searches",
+                                        tint     = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
                             }
                         }
                     }
