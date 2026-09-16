@@ -54,6 +54,25 @@ class BrowseViewModel(app: Application) : AndroidViewModel(app) {
     private val _continueReading = MutableStateFlow<ContinueReadingInfo?>(null)
     val continueReading: StateFlow<ContinueReadingInfo?> = _continueReading.asStateFlow()
 
+    // ── CHANGE: recentlyReading — powers the new "Recently Read" cards row ──
+    // Everything the user has read EXCEPT the single most-recent one (that's
+    // already the hero banner above it), newest-first, capped at 12 so the
+    // row stays a horizontal scroll rather than a wall.
+    //
+    // Advantage : reuses the same allReadingProgressFlow() the hero already
+    //   observes — no new DB query, no new DAO method needed.
+    // Disadvantage: repo.getNovel() runs once per item inside the map — for
+    //   12 items that's 12 sequential Room lookups on each emission. Fine at
+    //   this scale (single-digit ms each); would need batching past ~50 items.
+    val recentlyReading: StateFlow<List<ContinueReadingInfo>> =
+        repo.allReadingProgressFlow()
+            .map { all ->
+                all.drop(1)
+                    .take(12)
+                    .mapNotNull { p -> repo.getNovel(p.novelSlug)?.let { ContinueReadingInfo(it, p) } }
+            }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     private var searchJob: Job? = null
 
     init {

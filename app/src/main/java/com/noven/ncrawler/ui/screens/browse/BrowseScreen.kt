@@ -27,8 +27,10 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -60,9 +62,10 @@ fun BrowseScreen(
     onGenreClick: ((genre: String) -> Unit)? = null,
     vm: BrowseViewModel = viewModel()
 ) {
-    val browseState     by vm.browseState.collectAsStateWithLifecycle()
-    val popularState     by vm.popularState.collectAsStateWithLifecycle()
-    val continueReading by vm.continueReading.collectAsStateWithLifecycle()
+    val browseState      by vm.browseState.collectAsStateWithLifecycle()
+    val popularState      by vm.popularState.collectAsStateWithLifecycle()
+    val continueReading  by vm.continueReading.collectAsStateWithLifecycle()
+    val recentlyReading  by vm.recentlyReading.collectAsStateWithLifecycle()
 
     // Light background fills the entire screen
     Box(
@@ -84,7 +87,8 @@ fun BrowseScreen(
                 onRetry           = vm::loadHomepage,
                 onGenreClick      = onGenreClick ?: {},
                 continueReading   = continueReading,
-                onContinueReading = onContinueReading
+                onContinueReading = onContinueReading,
+                recentlyReading   = recentlyReading
             )
         }
     }
@@ -308,7 +312,8 @@ private fun BrowseContent(
     onRetry: () -> Unit,
     onGenreClick: (String) -> Unit,
     continueReading: ContinueReadingInfo?,
-    onContinueReading: ((slug: String, chapterNum: Int) -> Unit)?
+    onContinueReading: ((slug: String, chapterNum: Int) -> Unit)?,
+    recentlyReading: List<ContinueReadingInfo>
 ) {
     when (state) {
         is BrowseUiState.Loading -> BrowseSkeleton()
@@ -326,7 +331,9 @@ private fun BrowseContent(
             val popularNovels    = (popularState as? BrowseUiState.Success)?.novels ?: emptyList()
             val popularGenreRows = remember(popularNovels) { groupByTopGenres(popularNovels) }
 
-            val chipGenres = listOf("Fantasy", "Action", "Romance", "Sci-Fi", "Martial Arts")
+            // First 3 of the curated genre list power the new decorative
+            // showcase cards (replaces the old pill-chip filter strip).
+            val showcaseGenres = listOf("Fantasy", "Action", "Romance")
 
             LazyColumn(
                 modifier       = Modifier.fillMaxSize(),
@@ -355,22 +362,31 @@ private fun BrowseContent(
                     }
                 }
 
-                // ── Genre chips — now tappable, each opens that genre's full
-                // list via Discover's infinite-scroll GenreScreen.
-                item {
-                    Spacer(Modifier.height(20.dp))
-                    LazyRow(
-                        contentPadding        = PaddingValues(horizontal = 16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        itemsIndexed(chipGenres) { i, genre ->
-                            GenreChip(
-                                name     = genre,
-                                isActive = i == 0,
-                                onClick  = { onGenreClick(genre) }
-                            )
-                        }
+                // ── Recently Read — everything read EXCEPT the hero item
+                // above. Tapping a card opens the reader at the exact
+                // chapter; tapping the small "i" badge opens the detail
+                // page instead. No center play button — the whole card
+                // (minus the "i") is the tap target.
+                if (recentlyReading.isNotEmpty() && onContinueReading != null) {
+                    item {
+                        Spacer(Modifier.height(24.dp))
+                        RecentlyReadRow(
+                            items          = recentlyReading,
+                            onOpenReader   = onContinueReading,
+                            onOpenDetail   = onNovelClick
+                        )
                     }
+                }
+
+                // ── Genre showcase — decorative gradient-font cards
+                // (replaces the old pill/chip filter strip). Each card
+                // opens that genre's full list via Discover's GenreScreen.
+                item {
+                    Spacer(Modifier.height(24.dp))
+                    GenreShowcaseRow(
+                        genres    = showcaseGenres,
+                        onGenreClick = onGenreClick
+                    )
                 }
 
                 // ── Latest Updates — up to 5 genre rows, horizontal samples,
@@ -594,9 +610,270 @@ private fun HeroBanner(novel: NovelEntity, resumeChapter: Int?, onClick: () -> U
     }
 }
 
-// ── Continue Reading row — removed; the Hero card now absorbs this role
-// (see BrowseContent / HeroBanner above) so there's no duplicate "resume"
-// affordance on the homepage.
+// ── Recently Read row ─────────────────────────────────────────────────────────
+// Mirrors the "Waiting to watch" carousel design: portrait media cards over
+// the cover art, title top, footer with an info badge + progress bar. Two
+// deliberate departures from the reference:
+//  - No center play button — the whole card (minus the "i" badge) IS the
+//    play target, so a redundant button would just clutter the cover art.
+//  - The "i" badge opens the detail page; everywhere else on the card opens
+//    the reader at the exact last-read chapter. Nested clickables handle
+//    this correctly — the inner "i" click consumes the tap before it can
+//    bubble to the card's own onClick.
+@Composable
+private fun RecentlyReadRow(
+    items: List<ContinueReadingInfo>,
+    onOpenReader: (slug: String, chapterNum: Int) -> Unit,
+    onOpenDetail: (String) -> Unit
+) {
+    Column {
+        Text(
+            "Recently Read",
+            modifier = Modifier.padding(horizontal = 16.dp),
+            style = MaterialTheme.typography.titleMedium.copy(
+                fontWeight    = FontWeight.ExtraBold,
+                letterSpacing = (-0.2).sp
+            ),
+            color = MaterialTheme.colorScheme.onBackground
+        )
+        Spacer(Modifier.height(14.dp))
+        LazyRow(
+            contentPadding        = PaddingValues(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            items(items, key = { it.novel.slug }) { info ->
+                RecentCard(
+                    info         = info,
+                    onOpenReader = { onOpenReader(info.novel.slug, info.progress.lastChapterNum) },
+                    onOpenDetail = { onOpenDetail(info.novel.slug) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun RecentCard(
+    info: ContinueReadingInfo,
+    onOpenReader: () -> Unit,
+    onOpenDetail: () -> Unit
+) {
+    val novel = info.novel
+    val progress = (info.progress.lastChapterNum.toFloat() / novel.chapterCount.coerceAtLeast(1))
+        .coerceIn(0f, 1f)
+
+    Box(
+        modifier = Modifier
+            .width(140.dp)
+            .height(210.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(onClick = onOpenReader)
+    ) {
+        AsyncImage(
+            model              = novel.coverUrl,
+            contentDescription = novel.title,
+            contentScale       = ContentScale.Crop,
+            modifier           = Modifier.fillMaxSize()
+        )
+
+        // Scrim — light top, dark bottom, so the title reads over any cover
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        colorStops = arrayOf(
+                            0f    to Color.Black.copy(alpha = 0.10f),
+                            0.5f  to Color.Black.copy(alpha = 0.20f),
+                            1f    to Color.Black.copy(alpha = 0.88f)
+                        )
+                    )
+                )
+        )
+
+        Column(
+            modifier            = Modifier
+                .fillMaxSize()
+                .padding(12.dp),
+            verticalArrangement = Arrangement.SpaceBetween
+        ) {
+            // Title — top
+            Text(
+                novel.title,
+                style    = MaterialTheme.typography.labelLarge.copy(
+                    fontWeight = FontWeight.ExtraBold,
+                    fontSize   = 13.sp
+                ),
+                color    = Color.White,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Start
+            )
+
+            // Footer — info badge + chapter label, then progress bar
+            Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(24.dp)
+                            .clip(CircleShape)
+                            .background(Color.Black.copy(alpha = 0.35f))
+                            .border(1.dp, Color.White.copy(alpha = 0.35f), CircleShape)
+                            // Nested clickable — consumes the tap here so the
+                            // outer card's onOpenReader never fires for this spot.
+                            .clickable(onClick = onOpenDetail),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            "i",
+                            color      = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontStyle  = androidx.compose.ui.text.font.FontStyle.Italic,
+                            fontSize   = 13.sp
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "Ch.${info.progress.lastChapterNum}/${novel.chapterCount}",
+                        color    = Color.White.copy(alpha = 0.85f),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(4.dp)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(Color.White.copy(alpha = 0.28f))
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(progress)
+                            .fillMaxHeight()
+                            .clip(RoundedCornerShape(2.dp))
+                            .background(Color.White)
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ── Genre Showcase — decorative, colour-gradient typography per card ─────────
+// Replaces the old pill/chip filter strip with 3 equal-width glass cards,
+// each genre rendered in its own decorative font + gradient, mirroring the
+// "Option 2" comparison design (Pacifico / Cinzel / Anton, all OFL-licensed
+// and bundled — see ui/theme/Fonts.kt).
+@Composable
+private fun GenreShowcaseRow(
+    genres: List<String>,
+    onGenreClick: (String) -> Unit
+) {
+    Column {
+        Row(
+            modifier              = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment     = Alignment.CenterVertically
+        ) {
+            Text(
+                "Genre",
+                style = MaterialTheme.typography.titleMedium.copy(
+                    fontWeight    = FontWeight.ExtraBold,
+                    letterSpacing = (-0.2).sp
+                ),
+                color = MaterialTheme.colorScheme.onBackground
+            )
+            // Note: no full "all genres" screen exists yet, so this label is
+            // intentionally non-interactive for now rather than a dead link.
+            Text(
+                "See all",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+            )
+        }
+        Spacer(Modifier.height(14.dp))
+        Row(
+            modifier              = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            genres.take(3).forEachIndexed { i, genre ->
+                GenreDecorativeCard(
+                    genre    = genre,
+                    styleIdx = i % 3,
+                    onClick  = { onGenreClick(genre) },
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun GenreDecorativeCard(
+    genre: String,
+    styleIdx: Int,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .height(90.dp)
+            .shadow(elevation = 10.dp, shape = RoundedCornerShape(18.dp), clip = false)
+            .clip(RoundedCornerShape(18.dp))
+            .background(GlassSurfaceLight)
+            .clickable(onClick = onClick)
+            .padding(8.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        when (styleIdx) {
+            // Style 0 — Pacifico cursive, warm pink-orange gradient
+            0 -> Text(
+                text  = genre,
+                style = TextStyle(
+                    fontFamily = PacificoFamily,
+                    fontSize   = 19.sp,
+                    brush      = Brush.linearGradient(
+                        colors = listOf(Color(0xFFFF416C), Color(0xFFFF4B2B))
+                    )
+                ),
+                textAlign = TextAlign.Center
+            )
+            // Style 1 — Cinzel serif bold, epic purple gradient
+            1 -> Text(
+                text  = genre,
+                style = TextStyle(
+                    fontFamily    = CinzelFamily,
+                    fontWeight    = FontWeight.Bold,
+                    fontSize      = 16.sp,
+                    letterSpacing = 2.sp,
+                    brush         = Brush.linearGradient(
+                        colors = listOf(Color(0xFF8E2DE2), Color(0xFF4A00E0))
+                    )
+                ),
+                textAlign = TextAlign.Center
+            )
+            // Style 2 — Anton (Impact-style) caps, fiery orange-red gradient
+            else -> Text(
+                text  = genre.uppercase(),
+                style = TextStyle(
+                    fontFamily    = AntonFamily,
+                    fontSize      = 21.sp,
+                    letterSpacing = 1.sp,
+                    brush         = Brush.linearGradient(
+                        colors = listOf(Color(0xFFF97316), Color(0xFFDC2626))
+                    )
+                ),
+                textAlign = TextAlign.Center
+            )
+        }
+    }
+}
 
 // ── Section Header ────────────────────────────────────────────────────────────
 @Composable
@@ -625,9 +902,9 @@ private fun SectionHeader(title: String) {
 }
 
 // ── Genre Chip ────────────────────────────────────────────────────────────────
-// Mirrors the "Channel" chips (Disney / Pixar / Marvel) from the snippet —
-// tall (50dp), white frosted-glass, bold dark text. Never dark glass; the
-// active chip swaps to solid accent + white text for affordance only.
+// Kept for any external reference (e.g. a future filter strip inside
+// Discover's GenreScreen) — no longer used on the homepage; the homepage now
+// uses GenreShowcaseRow above instead.
 @Composable
 private fun GenreChip(name: String, isActive: Boolean, onClick: () -> Unit) {
     val bg        = if (isActive) AccentBlue else GlassSurfaceLight
