@@ -5,10 +5,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.googlefonts.GoogleFont
+import androidx.compose.ui.text.googlefonts.Font as GoogleFontRef
 import androidx.compose.ui.unit.sp
 import com.noven.ncrawler.R
 
@@ -81,12 +81,12 @@ private val montserratProvider = GoogleFont.Provider(
     certificates      = R.array.com_google_android_gms_fonts_certs
 )
 val MontserratFamily = FontFamily(
-    Font(googleFont = montserratGoogleFont, fontProvider = montserratProvider, weight = FontWeight.Black),
-    Font(googleFont = montserratGoogleFont, fontProvider = montserratProvider, weight = FontWeight.ExtraBold),
-    Font(googleFont = montserratGoogleFont, fontProvider = montserratProvider, weight = FontWeight.Bold),
-    Font(googleFont = montserratGoogleFont, fontProvider = montserratProvider, weight = FontWeight.SemiBold),
-    Font(googleFont = montserratGoogleFont, fontProvider = montserratProvider, weight = FontWeight.Medium),
-    Font(googleFont = montserratGoogleFont, fontProvider = montserratProvider, weight = FontWeight.Normal)
+    GoogleFontRef(googleFont = montserratGoogleFont, fontProvider = montserratProvider, weight = FontWeight.Black),
+    GoogleFontRef(googleFont = montserratGoogleFont, fontProvider = montserratProvider, weight = FontWeight.ExtraBold),
+    GoogleFontRef(googleFont = montserratGoogleFont, fontProvider = montserratProvider, weight = FontWeight.Bold),
+    GoogleFontRef(googleFont = montserratGoogleFont, fontProvider = montserratProvider, weight = FontWeight.SemiBold),
+    GoogleFontRef(googleFont = montserratGoogleFont, fontProvider = montserratProvider, weight = FontWeight.Medium),
+    GoogleFontRef(googleFont = montserratGoogleFont, fontProvider = montserratProvider, weight = FontWeight.Normal)
 )
 
 val NCrawlerTypography = Typography(
