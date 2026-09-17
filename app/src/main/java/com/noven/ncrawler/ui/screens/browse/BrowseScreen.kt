@@ -65,9 +65,6 @@ fun BrowseScreen(
     // card and the "See all" header link, both of which now route to the
     // existing DiscoverScreen (which already lists every genre as a card).
     onDiscoverClick: (() -> Unit)? = null,
-    // CHANGE: new optional callback — the profile circle in the top bar now
-    // opens the source picker instead of doing nothing.
-    onSettingsClick: (() -> Unit)? = null,
     vm: BrowseViewModel = viewModel()
 ) {
     val browseState      by vm.browseState.collectAsStateWithLifecycle()
@@ -84,7 +81,7 @@ fun BrowseScreen(
         Column(modifier = Modifier.fillMaxSize()) {
 
             // ── Top bar — always avatar/logo/download, never swaps modes ───
-            TopNavBar(onDownloadsClick = onDownloadsClick, onSettingsClick = onSettingsClick)
+            TopNavBar(onDownloadsClick = onDownloadsClick)
 
             // Search lives exclusively in the SearchOverlay (opened from the
             // bottom nav) — the homepage itself is browse-only, no inline bar.
@@ -107,7 +104,7 @@ fun BrowseScreen(
 // Solid white bar (Material You style) — never transparent, never swaps modes.
 // avatar (left) · logo (true center, via Box alignment) · download (right).
 @Composable
-private fun TopNavBar(onDownloadsClick: (() -> Unit)?, onSettingsClick: (() -> Unit)? = null) {
+private fun TopNavBar(onDownloadsClick: (() -> Unit)?) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -120,56 +117,64 @@ private fun TopNavBar(onDownloadsClick: (() -> Unit)?, onSettingsClick: (() -> U
                 .height(56.dp)
                 .padding(horizontal = 16.dp)
         ) {
-            // Avatar — left
+            // Avatar — left, shifted in a bit further, bigger, a full
+            // circle — border/bg both theme colors, so it adapts
+            // automatically between light/dark mode.
             Box(
                 modifier = Modifier
                     .align(Alignment.CenterStart)
-                    .size(34.dp)
+                    .padding(start = 8.dp)
+                    .size(42.dp)
                     .clip(CircleShape)
                     .background(MaterialTheme.colorScheme.primaryContainer)
-                    .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f), CircleShape)
-                    // CHANGE: avatar now opens the source picker (was inert before)
-                    .clickable(enabled = onSettingsClick != null) { onSettingsClick?.invoke() },
+                    .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f), CircleShape),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     "T",
                     color = MaterialTheme.colorScheme.onPrimaryContainer,
                     style = MaterialTheme.typography.labelLarge.copy(
-                        fontWeight = FontWeight.ExtraBold
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize   = 18.sp
                     )
                 )
             }
 
-            // Logo — true center
+            // Logo — true center, bigger, full name
             Text(
-                "nCrawl",
+                "nCrawler",
                 modifier = Modifier.align(Alignment.Center),
                 style = MaterialTheme.typography.titleLarge.copy(
                     fontWeight    = FontWeight.ExtraBold,
-                    fontSize      = 20.sp,
+                    fontSize      = 24.sp,
                     letterSpacing = (-0.5).sp
                 ),
                 color = MaterialTheme.colorScheme.onSurface
             )
 
-            // Download icon — right
+            // Download icon — right, shifted in a bit further, bigger,
+            // squarish (2dp radius). No fill — transparent so the top bar's
+            // own surface color shows through and it just follows the theme;
+            // a thin border keeps the tap target legible without a filled
+            // background. Outlined (not Rounded/Filled) for a genuinely
+            // thin ~2px stroke instead of a solid glyph.
             Box(
                 modifier = Modifier
                     .align(Alignment.CenterEnd)
-                    .size(34.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .padding(end = 8.dp)
+                    .size(42.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f), RoundedCornerShape(2.dp))
                     .clickable(enabled = onDownloadsClick != null) {
                         onDownloadsClick?.invoke()
                     },
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    Icons.Rounded.Download,
+                    Icons.Outlined.Download,
                     contentDescription = "Downloads",
                     tint     = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.size(17.dp)
+                    modifier = Modifier.size(20.dp)
                 )
             }
         }
