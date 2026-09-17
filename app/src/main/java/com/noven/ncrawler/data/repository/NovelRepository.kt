@@ -47,14 +47,14 @@ class NovelRepository(
     // ── Composite slug helpers ──────────────────────────────────────────────
     private fun composite(sourceId: String, realSlug: String) = "$sourceId::$realSlug"
 
-    private fun splitComposite(compositeSlug: String): Pair<String, String> {
-        val idx = compositeSlug.indexOf("::")
-        return if (idx == -1) Pair(SourceRegistry.DEFAULT_SOURCE_ID, compositeSlug)
-        else Pair(compositeSlug.substring(0, idx), compositeSlug.substring(idx + 2))
+    private fun splitComposite(slug: String): Pair<String, String> {
+        val idx = slug.indexOf("::")
+        return if (idx == -1) Pair(SourceRegistry.DEFAULT_SOURCE_ID, slug)
+        else Pair(slug.substring(0, idx), slug.substring(idx + 2))
     }
 
-    private fun sourceFor(compositeSlug: String): Pair<NovelSource, String> {
-        val (sourceId, realSlug) = splitComposite(compositeSlug)
+    private fun sourceFor(slug: String): Pair<NovelSource, String> {
+        val (sourceId, realSlug) = splitComposite(slug)
         return Pair(SourceRegistry.byId(sourceId), realSlug)
     }
 
@@ -134,8 +134,8 @@ class NovelRepository(
     }
 
     // ── Novel detail ──────────────────────────────────────────────────────────
-    suspend fun getNovel(compositeSlug: String): NovelEntity? {
-        val cached = novelDao.getBySlug(compositeSlug)
+    suspend fun getNovel(slug: String): NovelEntity? {
+        val cached = novelDao.getBySlug(slug)
         // Also require coverUrl — a row can have synopsis/chapterUrls filled in
         // from an earlier detail fetch, then get its coverUrl blanked out by a
         // later homepage/genre upsert (Room's REPLACE swaps the whole row).
@@ -145,35 +145,35 @@ class NovelRepository(
             && cached.coverUrl.isNotBlank())
             return cached
 
-        val (source, realSlug) = sourceFor(compositeSlug)
+        val (source, realSlug) = sourceFor(slug)
         val result = source.fetchDetail(realSlug) ?: return cached
         val novel  = rewrapSlug(result.first, source.id)
         novelDao.upsert(novel)
         return novel
     }
 
-    suspend fun getChapterList(compositeSlug: String): List<ChapterLink> {
-        val novel = novelDao.getBySlug(compositeSlug)
+    suspend fun getChapterList(slug: String): List<ChapterLink> {
+        val novel = novelDao.getBySlug(slug)
         if (novel != null && novel.chapterUrls.isNotBlank())
             return parseChapterUrls(novel.chapterUrls)
 
-        val (source, realSlug) = sourceFor(compositeSlug)
+        val (source, realSlug) = sourceFor(slug)
         val result = source.fetchDetail(realSlug) ?: return emptyList()
         novelDao.upsert(rewrapSlug(result.first, source.id))
         return result.second
     }
 
     // ── Chapter download ──────────────────────────────────────────────────────
-    suspend fun downloadChapter(compositeSlug: String, chapterNum: Int): ChapterEntity {
-        val chapterId = "$compositeSlug::$chapterNum"
+    suspend fun downloadChapter(slug: String, chapterNum: Int): ChapterEntity {
+        val chapterId = "$slug::$chapterNum"
         chapterDao.getById(chapterId)?.let { return it }
 
-        val (source, realSlug) = sourceFor(compositeSlug)
-        val url = resolveChapterUrl(compositeSlug, chapterNum)
+        val (source, realSlug) = sourceFor(slug)
+        val url = resolveChapterUrl(slug, chapterNum)
             ?: source.buildChapterUrl(realSlug, chapterNum)
         val (title, content) = source.fetchChapterByUrl(url)
         val entity = ChapterEntity(
-            id = chapterId, novelSlug = compositeSlug,
+            id = chapterId, novelSlug = slug,
             chapterNum = chapterNum, title = title,
             chapterUrl = url, content = content
         )
@@ -182,57 +182,57 @@ class NovelRepository(
     }
 
     // ── Download queue (background) ───────────────────────────────────────────
-    suspend fun queueDownloadAll(compositeSlug: String) {
-        val chapters = getChapterList(compositeSlug)
+    suspend fun queueDownloadAll(slug: String) {
+        val chapters = getChapterList(slug)
         if (chapters.isEmpty()) return
 
-        val downloaded = chapterDao.downloadedCount(compositeSlug)
+        val downloaded = chapterDao.downloadedCount(slug)
         val total      = chapters.size
         val minNum     = chapters.minOf { it.num }
         val maxNum     = chapters.maxOf { it.num }
 
-        Log.d(TAG, "Queuing download: $compositeSlug — $downloaded/$total already done")
+        Log.d(TAG, "Queuing download: $slug — $downloaded/$total already done")
 
         downloadProgressDao.upsert(
             DownloadProgress(
-                novelSlug          = compositeSlug,
+                novelSlug          = slug,
                 totalChapters      = total,
                 downloadedChapters = downloaded,
                 status             = DownloadStatus.QUEUED
             )
         )
 
-        novelDao.setLibrary(compositeSlug, true)
+        novelDao.setLibrary(slug, true)
 
         val request = ChapterDownloadWorker.buildRequest(
-            slug         = compositeSlug,
+            slug         = slug,
             startChapter = minNum,
             endChapter   = maxNum
         )
         workManager.enqueueUniqueWork(
-            "download_$compositeSlug",
+            "download_$slug",
             ExistingWorkPolicy.REPLACE,
             request
         )
     }
 
-    suspend fun cancelDownload(compositeSlug: String) {
-        workManager.cancelAllWorkByTag(compositeSlug)
-        downloadProgressDao.get(compositeSlug)?.let {
+    suspend fun cancelDownload(slug: String) {
+        workManager.cancelAllWorkByTag(slug)
+        downloadProgressDao.get(slug)?.let {
             downloadProgressDao.upsert(it.copy(status = DownloadStatus.PAUSED))
         }
     }
 
     // ── Check for new chapters ────────────────────────────────────────────────
-    suspend fun checkForUpdates(compositeSlug: String): Int {
-        val (source, realSlug) = sourceFor(compositeSlug)
+    suspend fun checkForUpdates(slug: String): Int {
+        val (source, realSlug) = sourceFor(slug)
         val result = source.fetchDetail(realSlug) ?: return 0
         val (fresh, chapters) = result
         novelDao.upsert(rewrapSlug(fresh, source.id))
 
-        val downloaded = chapterDao.downloadedCount(compositeSlug)
+        val downloaded = chapterDao.downloadedCount(slug)
         val newChapters = chapters.size - downloaded
-        Log.d(TAG, "Update check $compositeSlug: ${chapters.size} total, $downloaded downloaded, $newChapters new")
+        Log.d(TAG, "Update check $slug: ${chapters.size} total, $downloaded downloaded, $newChapters new")
 
         if (newChapters > 0) {
             val downloadedNums = (1..downloaded).toSet()
@@ -241,7 +241,7 @@ class NovelRepository(
                 val minNew = missing.minOf { it.num }
                 val maxNew = missing.maxOf { it.num }
 
-                downloadProgressDao.get(compositeSlug)?.let {
+                downloadProgressDao.get(slug)?.let {
                     downloadProgressDao.upsert(
                         it.copy(
                             totalChapters = chapters.size,
@@ -251,9 +251,9 @@ class NovelRepository(
                 }
 
                 workManager.enqueueUniqueWork(
-                    "download_$compositeSlug",
+                    "download_$slug",
                     ExistingWorkPolicy.REPLACE,
-                    ChapterDownloadWorker.buildRequest(compositeSlug, minNew, maxNew)
+                    ChapterDownloadWorker.buildRequest(slug, minNew, maxNew)
                 )
             }
         }
@@ -262,19 +262,19 @@ class NovelRepository(
 
     // ── Library ───────────────────────────────────────────────────────────────
     fun libraryFlow(): Flow<List<NovelEntity>> = novelDao.libraryFlow()
-    suspend fun setLibrary(compositeSlug: String, inLibrary: Boolean) =
-        novelDao.setLibrary(compositeSlug, inLibrary)
+    suspend fun setLibrary(slug: String, inLibrary: Boolean) =
+        novelDao.setLibrary(slug, inLibrary)
 
     // ── Download progress ─────────────────────────────────────────────────────
-    fun downloadProgressFlow(compositeSlug: String) = downloadProgressDao.observe(compositeSlug)
+    fun downloadProgressFlow(slug: String) = downloadProgressDao.observe(slug)
     fun allDownloadProgressFlow() = downloadProgressDao.observeAll()
-    suspend fun getDownloadProgress(compositeSlug: String) = downloadProgressDao.get(compositeSlug)
+    suspend fun getDownloadProgress(slug: String) = downloadProgressDao.get(slug)
 
     // ── Reading progress ──────────────────────────────────────────────────────
-    suspend fun saveReadingProgress(compositeSlug: String, chapterNum: Int, chapterTitle: String, scrollPos: Int = 0) {
+    suspend fun saveReadingProgress(slug: String, chapterNum: Int, chapterTitle: String, scrollPos: Int = 0) {
         readingProgressDao.upsert(
             ReadingProgress(
-                novelSlug        = compositeSlug,
+                novelSlug        = slug,
                 lastChapterNum   = chapterNum,
                 lastChapterTitle = chapterTitle,
                 scrollPosition   = scrollPos
@@ -282,13 +282,13 @@ class NovelRepository(
         )
     }
 
-    suspend fun getReadingProgress(compositeSlug: String) = readingProgressDao.get(compositeSlug)
+    suspend fun getReadingProgress(slug: String) = readingProgressDao.get(slug)
     fun allReadingProgressFlow() = readingProgressDao.observeAll()
 
     // ── Chapters ──────────────────────────────────────────────────────────────
-    fun chaptersFlow(compositeSlug: String) = chapterDao.chaptersForNovel(compositeSlug)
-    suspend fun isChapterDownloaded(compositeSlug: String, chapterNum: Int) =
-        chapterDao.getById("$compositeSlug::$chapterNum") != null
+    fun chaptersFlow(slug: String) = chapterDao.chaptersForNovel(slug)
+    suspend fun isChapterDownloaded(slug: String, chapterNum: Int) =
+        chapterDao.getById("$slug::$chapterNum") != null
 
     // ── Sources (for the Settings screen) ───────────────────────────────────
     fun availableSources(): List<NovelSource> = SourceRegistry.all()
@@ -304,13 +304,13 @@ class NovelRepository(
             } else null
         }.sortedByDescending { it.num }
 
-    private suspend fun resolveChapterUrl(compositeSlug: String, chapterNum: Int): String? {
-        val novel = novelDao.getBySlug(compositeSlug)
+    private suspend fun resolveChapterUrl(slug: String, chapterNum: Int): String? {
+        val novel = novelDao.getBySlug(slug)
         if (novel != null && novel.chapterUrls.isNotBlank()) {
             parseChapterUrls(novel.chapterUrls)
                 .find { it.num == chapterNum }?.url?.let { return it }
         }
-        val (source, realSlug) = sourceFor(compositeSlug)
+        val (source, realSlug) = sourceFor(slug)
         val result = source.fetchDetail(realSlug) ?: return null
         novelDao.upsert(rewrapSlug(result.first, source.id))
         return result.second.find { it.num == chapterNum }?.url
