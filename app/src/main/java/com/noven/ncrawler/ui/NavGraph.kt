@@ -37,6 +37,7 @@ import com.noven.ncrawler.ui.screens.discover.GenreScreen
 import com.noven.ncrawler.ui.screens.downloads.DownloadsScreen
 import com.noven.ncrawler.ui.screens.library.LibraryScreen
 import com.noven.ncrawler.ui.screens.reader.ReaderScreen
+import com.noven.ncrawler.ui.screens.settings.SourceSettingsScreen
 import com.noven.ncrawler.ui.theme.AccentBlue
 import com.noven.ncrawler.ui.theme.NavBlue
 import com.noven.ncrawler.ui.theme.GlassSurfaceLight
@@ -50,6 +51,7 @@ object Routes {
     const val LIBRARY   = "library"
     const val DOWNLOADS = "downloads"
     const val DISCOVER  = "discover"
+    const val SETTINGS  = "settings"
     const val GENRE     = "genre/{genreName}"
     const val DETAIL    = "detail/{slug}"
     const val READER    = "reader/{slug}/{chapter}"
@@ -97,8 +99,14 @@ fun NCrawlerNavGraph() {
                     // "Genre" section's "See all" link to the existing
                     // Discover screen, which already lists every genre.
                     onDiscoverClick   = { nav.navigate(Routes.DISCOVER) },
+                    // CHANGE: profile circle now opens the source picker
+                    onSettingsClick   = { nav.navigate(Routes.SETTINGS) },
                     vm                = browseVm
                 )
+            }
+
+            composable(Routes.SETTINGS) {
+                SourceSettingsScreen(onBack = { nav.popBackStack() })
             }
 
             composable(Routes.LIBRARY) {

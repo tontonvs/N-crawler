@@ -65,6 +65,9 @@ fun BrowseScreen(
     // card and the "See all" header link, both of which now route to the
     // existing DiscoverScreen (which already lists every genre as a card).
     onDiscoverClick: (() -> Unit)? = null,
+    // CHANGE: new optional callback — the profile circle in the top bar now
+    // opens the source picker instead of doing nothing.
+    onSettingsClick: (() -> Unit)? = null,
     vm: BrowseViewModel = viewModel()
 ) {
     val browseState      by vm.browseState.collectAsStateWithLifecycle()
@@ -81,7 +84,7 @@ fun BrowseScreen(
         Column(modifier = Modifier.fillMaxSize()) {
 
             // ── Top bar — always avatar/logo/download, never swaps modes ───
-            TopNavBar(onDownloadsClick = onDownloadsClick)
+            TopNavBar(onDownloadsClick = onDownloadsClick, onSettingsClick = onSettingsClick)
 
             // Search lives exclusively in the SearchOverlay (opened from the
             // bottom nav) — the homepage itself is browse-only, no inline bar.
@@ -104,7 +107,7 @@ fun BrowseScreen(
 // Solid white bar (Material You style) — never transparent, never swaps modes.
 // avatar (left) · logo (true center, via Box alignment) · download (right).
 @Composable
-private fun TopNavBar(onDownloadsClick: (() -> Unit)?) {
+private fun TopNavBar(onDownloadsClick: (() -> Unit)?, onSettingsClick: (() -> Unit)? = null) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -124,7 +127,9 @@ private fun TopNavBar(onDownloadsClick: (() -> Unit)?) {
                     .size(34.dp)
                     .clip(CircleShape)
                     .background(MaterialTheme.colorScheme.primaryContainer)
-                    .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f), CircleShape),
+                    .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f), CircleShape)
+                    // CHANGE: avatar now opens the source picker (was inert before)
+                    .clickable(enabled = onSettingsClick != null) { onSettingsClick?.invoke() },
                 contentAlignment = Alignment.Center
             ) {
                 Text(

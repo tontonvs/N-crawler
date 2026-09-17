@@ -12,41 +12,32 @@ import org.jsoup.nodes.Element
 import java.util.concurrent.TimeUnit
 
 /**
- * Scraper for freewebnovel.com — all selectors verified from live HTML.
+ * Scraper for novellive.com.
  *
- * Confirmed URL patterns:
- *   Homepage    : /sort/latest-release/english-novel
- *   Search      : /search/?searchkey=<query>
- *   Novel detail: /novel/<slug>
- *   Chapter     : /novel/<slug>/chapter-<N>   (no .html extension)
+ * ⚠️ UNVERIFIED — NOT live-tested against raw HTML like FreeWebNovelScraper
+ * was. What IS confirmed (via search-result snippets, not a raw fetch):
+ *   - Identical boilerplate wording to freewebnovel.com ("Read X novel
+ *     online free from your Mobile, Table, PC...") — same site template
+ *   - Same JS chapter-pagination pattern (C.1-C.40 / C.41-C.80 / ...) —
+ *     confirmed present on a real novellive.com detail page
+ *   - URL path segment is "/book/<slug>", NOT "/novel/<slug>" like
+ *     FreeWebNovel — confirmed from multiple novellive.com URLs seen in
+ *     search results (e.g. novellive.com/book/cultivation-online-novel)
  *
- * Confirmed selectors:
- *   Novel listing cards : h3 > a[href*='/novel/']
- *   Cover (listing)     : img above each h3 card
- *   Cover (detail)      : meta[property=og:image]
- *   Title (detail)      : meta[property=og:title] or h3 in .det-info
- *   Synopsis            : meta[property=og:description]
- *   Genres              : meta[property=og:novel:genre]
- *   Status              : meta[property=og:novel:status]
- *   Latest chapter URL  : meta[property=og:novel:lastest_chapter_url]
- *   Chapter links       : a[href*='/novel/<slug>/chapter-']
- *   Chapter content     : div.txt p  (plain paragraphs, verified in live HTML)
- *   Chapter title       : h1 or the breadcrumb last item
- *
- * CHANGE (multi-source): now implements NovelSource so NovelRepository can
- * treat this the same as any other site. No scraping logic changed — id,
- * displayName and baseUrl are the only additions, and BASE is now open so
- * NovelLiveSource (confirmed same template, different domain) doesn't have
- * to duplicate anything beyond swapping that one value in its own file.
+ * NOT confirmed: exact CSS/meta selectors (og: tags, h3>a card structure,
+ * div.txt chapter content div). This is a best-effort port of
+ * FreeWebNovelScraper's proven logic with /novel/ → /book/ swapped
+ * everywhere. Expect this to need one round of live debugging via logcat —
+ * same workflow that fixed every selector bug in FreeWebNovelScraper.
  */
-class FreeWebNovelScraper : NovelSource {
+class NovelLiveSource : NovelSource {
 
-    override val id = "freewebnovel"
-    override val displayName = "FreeWebNovel"
+    override val id = "novellive"
+    override val displayName = "NovelLive"
     override val baseUrl get() = BASE
 
-    private val BASE = "https://freewebnovel.com"
-    private val TAG  = "NCrawler_Scraper"
+    private val BASE = "https://novellive.com"
+    private val TAG  = "NCrawler_NovelLive"
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
@@ -59,7 +50,7 @@ class FreeWebNovelScraper : NovelSource {
                 .header("Accept",
                     "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
                 .header("Accept-Language", "en-US,en;q=0.9")
-                .header("Referer", "$BASE/home")
+                .header("Referer", "$BASE/")
                 .build()
             chain.proceed(req)
         }
@@ -74,12 +65,13 @@ class FreeWebNovelScraper : NovelSource {
         Jsoup.parse(body, url)
     }
 
-    // ── Homepage ──────────────────────────────────────────────────────────────
-    // Confirmed URL: /sort/latest-release/english-novel
+    // Path assumed identical in SHAPE to FreeWebNovel's (same template),
+    // "novel" → "book" swapped, "english-novel" segment dropped since it's
+    // unconfirmed here — falls back to bare /sort/latest-release if that 404s.
     override suspend fun fetchHomepage(): List<NovelEntity> {
         Log.d(TAG, "fetchHomepage()")
         return try {
-            val doc = fetch("$BASE/sort/latest-release/english-novel")
+            val doc = fetch("$BASE/sort/latest-release")
             parseNovelCards(doc)
         } catch (e: Exception) {
             Log.e(TAG, "fetchHomepage failed: ${e.message}", e)
@@ -87,9 +79,6 @@ class FreeWebNovelScraper : NovelSource {
         }
     }
 
-    // ── Popular ───────────────────────────────────────────────────────────────
-    // Confirmed URL: /sort/most-popular — same card markup as the homepage
-    // listing, just a different sort order, so it reuses parseNovelCards.
     override suspend fun fetchPopular(): List<NovelEntity> {
         Log.d(TAG, "fetchPopular()")
         return try {
@@ -101,16 +90,9 @@ class FreeWebNovelScraper : NovelSource {
         }
     }
 
-    // ── Genre listing (paginated) ───────────────────────────────────────────
-    // URL pattern inferred from the confirmed /sort/latest-release/english-novel
-    // pagination (…/english-novel/2, /3, …) — genre pages are built by the same
-    // site template, so page 1 is /genre/<Genre> and further pages are
-    // /genre/<Genre>/<page>. Not yet verified live against page 2+; if this
-    // turns out wrong, the logcat GET/HTTP lines below will show exactly what
-    // URL was hit and what came back, same as how the cover bug got diagnosed.
     override suspend fun fetchGenre(genre: String, page: Int): List<NovelEntity> {
         Log.d(TAG, "fetchGenre(genre=$genre, page=$page)")
-        val encodedGenre = java.net.URLEncoder.encode(genre, "UTF-8").replace("+", "+")
+        val encodedGenre = java.net.URLEncoder.encode(genre, "UTF-8")
         val url = if (page <= 1) "$BASE/genre/$encodedGenre" else "$BASE/genre/$encodedGenre/$page"
         return try {
             val doc = fetch(url)
@@ -121,8 +103,6 @@ class FreeWebNovelScraper : NovelSource {
         }
     }
 
-    // ── Search ────────────────────────────────────────────────────────────────
-    // Confirmed URL: /search/?searchkey=<query>
     override suspend fun search(query: String): List<NovelEntity> {
         val encoded = java.net.URLEncoder.encode(query, "UTF-8")
         return try {
@@ -134,16 +114,14 @@ class FreeWebNovelScraper : NovelSource {
         }
     }
 
-    // ── Novel detail + chapter list ───────────────────────────────────────────
-    // Confirmed URL: /novel/<slug>
+    // Confirmed URL shape: /book/<slug>
     override suspend fun fetchDetail(slug: String): Pair<NovelEntity, List<ChapterLink>>? {
         return try {
-            val doc = fetch("$BASE/novel/$slug")
+            val doc = fetch("$BASE/book/$slug")
 
-            // Use og: meta tags — most reliable, confirmed present in live HTML
             val title    = doc.select("meta[property=og:title]").attr("content")
                 .ifBlank { doc.select("h3").firstOrNull()?.text() ?: return null }
-                .removeSuffix(" | Free Web Novel").trim()
+                .trim()
             val cover    = doc.select("meta[property=og:image]").attr("content")
             val synopsis = doc.select("meta[property=og:description]").attr("content").trim()
             val genres   = doc.select("meta[property=og:novel:genre]").attr("content")
@@ -152,25 +130,7 @@ class FreeWebNovelScraper : NovelSource {
 
             Log.d(TAG, "Detail: title=$title cover=${cover.take(40)} genres=$genres")
 
-            // Chapter links — confirmed pattern: a[href*='/novel/<slug>/chapter-']
-            //
-            // The page actually has TWO separate widgets using this same href
-            // pattern: a "N Latest Chapters" teaser (just the newest few, real
-            // numbers) and a paginated "Chapter List" whose server HTML only
-            // ever contains its FIRST tab (chapters 1-40) — the other tabs
-            // (C.41-C.80, C.81-C.120, ...) are client-side JS pagination we
-            // never see. Scraping the anchors alone gives 1-40 + the latest
-            // handful, with a gap in between (e.g. jumps from 2627 straight
-            // to 40) — exactly the "weird numbering" bug.
-            //
-            // Fix: since the URL pattern is fully predictable AND we know the
-            // true latest chapter number (og:novel:lastest_chapter_url), we
-            // synthesize the complete 1..N range ourselves — using the real
-            // scraped title wherever we have one (1-40 and the latest few),
-            // and a plain "Chapter N" placeholder everywhere else. This is
-            // the same fallback title format already used elsewhere for
-            // chapters resolved purely from the cached URL map.
-            val anchorList = doc.select("a[href*='/novel/$slug/chapter-']").toList()
+            val anchorList = doc.select("a[href*='/book/$slug/chapter-']").toList()
             Log.d(TAG, "Found ${anchorList.size} chapter anchor tags")
 
             val seenUrls = mutableSetOf<String>()
@@ -198,8 +158,6 @@ class FreeWebNovelScraper : NovelSource {
                     )
                 }.toMutableList()
             } else {
-                // Couldn't determine the true latest number — fall back to
-                // whatever was actually scraped rather than guessing a range.
                 scrapedByNum.values.toMutableList()
             }
             chapters.sortByDescending { it.num }
@@ -225,30 +183,20 @@ class FreeWebNovelScraper : NovelSource {
         }
     }
 
-    // ── Chapter content ───────────────────────────────────────────────────────
-    // Confirmed URL: /novel/<slug>/chapter-<N>  (no .html extension)
-    // Confirmed content: chapter text is in plain <p> tags in div.txt
-    // Title: confirmed in h1 / breadcrumb area
     override suspend fun fetchChapterByUrl(url: String): Pair<String, String> {
         Log.d(TAG, "fetchChapter: $url")
         return try {
             val doc = fetch(url)
 
-            // Title from h1 or page title meta — .attr() never returns null
-            // (empty string when absent), so the old `?: "Chapter"` after it
-            // was dead code; .ifBlank{} actually catches the empty case.
             val title = doc.select("h1").firstOrNull()?.text()?.trim()?.ifBlank { null }
                 ?: doc.select("meta[property=og:novel:chapter_name]").attr("content").trim().ifBlank { "Chapter" }
 
-            // Content: div.txt p — confirmed in live chapter HTML
-            // Each paragraph is a <p> tag inside div.txt
             var paragraphs = doc.select("div.txt p").toList()
                 .map { it.text().trim() }
                 .filter { it.isNotBlank() }
 
             Log.d(TAG, "div.txt p: got ${paragraphs.size} paragraphs")
 
-            // Fallback: all p tags with substantial text
             if (paragraphs.isEmpty()) {
                 paragraphs = doc.select("p").toList()
                     .map { it.text().trim() }
@@ -256,10 +204,9 @@ class FreeWebNovelScraper : NovelSource {
                 Log.d(TAG, "Fallback p: got ${paragraphs.size} paragraphs")
             }
 
-            // Strip site watermark lines
             val content = paragraphs
                 .filter { p ->
-                    !p.contains("freewebnovel", ignoreCase = true) &&
+                    !p.contains("novellive", ignoreCase = true) &&
                     !p.contains("libread", ignoreCase = true)
                 }
                 .joinToString("\n\n")
@@ -276,29 +223,10 @@ class FreeWebNovelScraper : NovelSource {
         }
     }
 
-    // ── Novel card parser ─────────────────────────────────────────────────────
-    // Confirmed structure from live HTML:
-    //   <img src="...cover..."> inside an <a href="/novel/slug">
-    //   <h3><a href="/novel/slug">Title</a></h3>
-    //   Rating number as plain text
-    //
-    // Listing thumbnails are lazy-loaded: the real URL lives in a data-*
-    // attribute, and plain `src` is a blank placeholder until the browser
-    // scrolls the image into view — which never happens for Jsoup. That's
-    // why cards/hero (built from this parser) came back with no cover while
-    // the detail page (og:image meta, no lazy-loading involved) worked fine.
     private val coverAttrs = listOf("data-src", "data-original", "data-lazy-src", "data-echo", "src")
 
     private fun extractCoverUrl(card: Element): String {
         val imgs = card.select("img")
-        // Prefer the confirmed article-image path, across any lazy-load attribute
-        for (img in imgs) {
-            for (attr in coverAttrs) {
-                val url = img.attr("abs:$attr")
-                if (url.isNotBlank() && url.contains("/files/article/image/")) return url
-            }
-        }
-        // Fallback: first non-blank image URL from any attribute
         for (img in imgs) {
             for (attr in coverAttrs) {
                 val url = img.attr("abs:$attr")
@@ -308,15 +236,6 @@ class FreeWebNovelScraper : NovelSource {
         return ""
     }
 
-    // Confirmed via a live fetch of the listing page: covers are plain,
-    // non-lazy `src` attrs pointing straight at /files/article/image/... —
-    // so the lazy-load attribute check above is a defensive no-op here, not
-    // the actual fix. The real bug: h3's immediate parent does NOT contain
-    // the <img> — the cover <a><img></a> and the <h3> title are siblings
-    // under a shared row wrapper one or more levels further up (a common
-    // "image column / text column" card layout). Climb from h3 until an
-    // ancestor's subtree actually contains an <img>, instead of assuming a
-    // fixed depth that breaks the moment the markup nests differently.
     private fun findCoverNear(start: Element, maxDepth: Int = 5): String {
         var el: Element? = start
         var depth = 0
@@ -332,8 +251,7 @@ class FreeWebNovelScraper : NovelSource {
     private fun parseNovelCards(doc: Document): List<NovelEntity> {
         val result = mutableListOf<NovelEntity>()
 
-        // Select all h3 > a links pointing to /novel/ pages
-        val novelLinks = doc.select("h3 > a[href*='/novel/']").toList()
+        val novelLinks = doc.select("h3 > a[href*='/book/']").toList()
         Log.d(TAG, "parseNovelCards: found ${novelLinks.size} h3>a novel links")
 
         novelLinks.forEach { a ->
@@ -343,17 +261,13 @@ class FreeWebNovelScraper : NovelSource {
 
             val title = a.text().trim().ifBlank { return@forEach }
 
-            // Cover: climb from the title link until we find an ancestor
-            // whose subtree contains the row's <img> (see findCoverNear above)
             val h3     = a.parent() ?: return@forEach
             val cover  = findCoverNear(h3)
 
-            // Rating: text content near the card (plain number like "4.6")
             val infoBlock  = h3.parent() ?: h3
             val ratingText = infoBlock.select("em, [class*=score]")
                 .firstOrNull()?.text()?.trim() ?: ""
 
-            // Genres: the 1-2 genre tag links shown per card (e.g. Fantasy, Romance)
             val genresText = infoBlock.select("a[href*='/genre/']")
                 .eachText().joinToString(", ")
 
@@ -370,13 +284,11 @@ class FreeWebNovelScraper : NovelSource {
         return result.distinctBy { it.slug }.take(60)
     }
 
-    // ── Predictable chapter URL builder ───────────────────────────────────────
-    // Confirmed pattern: /novel/<slug>/chapter-<N>
     override fun buildChapterUrl(slug: String, chapterNum: Int) =
-        "$BASE/novel/$slug/chapter-$chapterNum"
+        "$BASE/book/$slug/chapter-$chapterNum"
 
     private fun slugFromUrl(url: String): String? =
-        Regex("freewebnovel\\.com/novel/([^/?#]+)").find(url)
+        Regex("novellive\\.com/book/([^/?#]+)").find(url)
             ?.groupValues?.get(1)
             ?.takeIf { it.isNotBlank() }
 }
