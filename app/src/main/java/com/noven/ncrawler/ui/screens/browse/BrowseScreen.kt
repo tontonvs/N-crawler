@@ -11,6 +11,7 @@ import androidx.compose.foundation.shape.*
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material.icons.rounded.*
@@ -65,6 +66,7 @@ fun BrowseScreen(
     // card and the "See all" header link, both of which now route to the
     // existing DiscoverScreen (which already lists every genre as a card).
     onDiscoverClick: (() -> Unit)? = null,
+    onSettingsClick: (() -> Unit)? = null,
     vm: BrowseViewModel = viewModel()
 ) {
     val browseState      by vm.browseState.collectAsStateWithLifecycle()
@@ -81,7 +83,7 @@ fun BrowseScreen(
         Column(modifier = Modifier.fillMaxSize()) {
 
             // ── Top bar — always avatar/logo/download, never swaps modes ───
-            TopNavBar(onDownloadsClick = onDownloadsClick)
+            TopNavBar(onDownloadsClick = onDownloadsClick, onSettingsClick = onSettingsClick)
 
             // Search lives exclusively in the SearchOverlay (opened from the
             // bottom nav) — the homepage itself is browse-only, no inline bar.
@@ -104,7 +106,7 @@ fun BrowseScreen(
 // Solid white bar (Material You style) — never transparent, never swaps modes.
 // avatar (left) · logo (true center, via Box alignment) · download (right).
 @Composable
-private fun TopNavBar(onDownloadsClick: (() -> Unit)?) {
+private fun TopNavBar(onDownloadsClick: (() -> Unit)?, onSettingsClick: (() -> Unit)?) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -119,7 +121,9 @@ private fun TopNavBar(onDownloadsClick: (() -> Unit)?) {
         ) {
             // Avatar — left, shifted in a bit further, bigger, a full
             // circle — border/bg both theme colors, so it adapts
-            // automatically between light/dark mode.
+            // automatically between light/dark mode. Tap opens Settings —
+            // the natural, standard place for it now that NavGraph wires
+            // onSettingsClick through.
             Box(
                 modifier = Modifier
                     .align(Alignment.CenterStart)
@@ -127,7 +131,10 @@ private fun TopNavBar(onDownloadsClick: (() -> Unit)?) {
                     .size(42.dp)
                     .clip(CircleShape)
                     .background(MaterialTheme.colorScheme.primaryContainer)
-                    .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f), CircleShape),
+                    .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f), CircleShape)
+                    .clickable(enabled = onSettingsClick != null) {
+                        onSettingsClick?.invoke()
+                    },
                 contentAlignment = Alignment.Center
             ) {
                 Text(
@@ -1024,7 +1031,7 @@ private fun SeeMoreGenreCard(onClick: () -> Unit, modifier: Modifier = Modifier)
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Icon(
-                Icons.Rounded.ArrowForward,
+                Icons.AutoMirrored.Rounded.ArrowForward,
                 contentDescription = "See more genres",
                 tint     = AccentBlue,
                 modifier = Modifier.size(16.dp)
