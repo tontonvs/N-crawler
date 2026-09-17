@@ -22,8 +22,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalFocusManager
@@ -159,32 +164,61 @@ private fun TopNavBar(onDownloadsClick: (() -> Unit)?, onSettingsClick: (() -> U
                 color = MaterialTheme.colorScheme.onSurface
             )
 
-            // Download icon — right, shifted in a bit further, bigger,
-            // squarish (2dp radius). No fill — transparent so the top bar's
-            // own surface color shows through and it just follows the theme;
-            // a thin border keeps the tap target legible without a filled
-            // background. Outlined (not Rounded/Filled) for a genuinely
-            // thin ~2px stroke instead of a solid glyph.
+            // Download button — exact match to the mockup: 48dp full
+            // circle, 2px solid black border, transparent background,
+            // custom stroke-drawn "tray" arrow (not a Material icon — the
+            // mockup's glyph doesn't exist in the icon set, so it's drawn
+            // by hand below to match the SVG exactly).
+            val downloadInteraction = remember { MutableInteractionSource() }
+            val downloadPressed by downloadInteraction.collectIsPressedAsState()
+            val downloadAlpha = if (downloadPressed) 0.7f else 1f
             Box(
                 modifier = Modifier
                     .align(Alignment.CenterEnd)
                     .padding(end = 8.dp)
-                    .size(42.dp)
-                    .clip(RoundedCornerShape(2.dp))
-                    .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f), RoundedCornerShape(2.dp))
-                    .clickable(enabled = onDownloadsClick != null) {
+                    .size(48.dp)
+                    .clip(CircleShape)
+                    .border(2.dp, Color.Black.copy(alpha = downloadAlpha), CircleShape)
+                    .clickable(
+                        enabled           = onDownloadsClick != null,
+                        interactionSource = downloadInteraction,
+                        indication        = null
+                    ) {
                         onDownloadsClick?.invoke()
                     },
                 contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    Icons.Outlined.Download,
-                    contentDescription = "Downloads",
-                    tint     = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.size(20.dp)
+                DownloadTrayIcon(
+                    modifier = Modifier.size(22.dp),
+                    tint     = Color.Black.copy(alpha = downloadAlpha)
                 )
             }
         }
+    }
+}
+
+// ── Download tray icon ─────────────────────────────────────────────────────────
+// Hand-drawn to match the mockup's SVG exactly (viewBox 0 0 24 24): a shaft
+// from (12,4) to (12,14), a chevron arrowhead (8,10)-(12,14)-(16,10), and a
+// base line (7,18)-(17,18) — 2px round-capped strokes, no fill.
+@Composable
+private fun DownloadTrayIcon(modifier: Modifier = Modifier, tint: Color = Color.Black) {
+    Canvas(modifier = modifier) {
+        val scale = size.width / 24f
+        val strokePx = 2.dp.toPx()
+
+        fun pt(x: Float, y: Float) = Offset(x * scale, y * scale)
+
+        drawLine(tint, pt(12f, 4f), pt(12f, 14f), strokeWidth = strokePx, cap = StrokeCap.Round)
+
+        val head = Path().apply {
+            moveTo(pt(8f, 10f).x, pt(8f, 10f).y)
+            lineTo(pt(12f, 14f).x, pt(12f, 14f).y)
+            lineTo(pt(16f, 10f).x, pt(16f, 10f).y)
+        }
+        drawPath(head, tint, style = Stroke(width = strokePx, cap = StrokeCap.Round, join = StrokeJoin.Round))
+
+        drawLine(tint, pt(7f, 18f), pt(17f, 18f), strokeWidth = strokePx, cap = StrokeCap.Round)
     }
 }
 
