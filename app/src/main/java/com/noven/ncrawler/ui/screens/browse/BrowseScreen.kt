@@ -133,7 +133,7 @@ private fun TopNavBar(onDownloadsClick: (() -> Unit)?, onSettingsClick: (() -> U
                 modifier = Modifier
                     .align(Alignment.CenterStart)
                     .padding(start = 8.dp)
-                    .size(42.dp)
+                    .size(38.dp)
                     .clip(CircleShape)
                     .background(MaterialTheme.colorScheme.primaryContainer)
                     .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f), CircleShape)
@@ -147,7 +147,7 @@ private fun TopNavBar(onDownloadsClick: (() -> Unit)?, onSettingsClick: (() -> U
                     color = MaterialTheme.colorScheme.onPrimaryContainer,
                     style = MaterialTheme.typography.labelLarge.copy(
                         fontWeight = FontWeight.ExtraBold,
-                        fontSize   = 18.sp
+                        fontSize   = 20.sp
                     )
                 )
             }
@@ -164,11 +164,11 @@ private fun TopNavBar(onDownloadsClick: (() -> Unit)?, onSettingsClick: (() -> U
                 color = MaterialTheme.colorScheme.onSurface
             )
 
-            // Download button — exact match to the mockup: 48dp full
-            // circle, 2px solid black border, transparent background,
-            // custom stroke-drawn "tray" arrow (not a Material icon — the
-            // mockup's glyph doesn't exist in the icon set, so it's drawn
-            // by hand below to match the SVG exactly).
+            // Download button — matches the mockup: full circle, 2px solid
+            // black border, transparent background, custom stroke-drawn
+            // "tray" arrow (not a Material icon — the mockup's glyph
+            // doesn't exist in the icon set, so it's drawn by hand below
+            // to match the SVG exactly).
             val downloadInteraction = remember { MutableInteractionSource() }
             val downloadPressed by downloadInteraction.collectIsPressedAsState()
             val downloadAlpha = if (downloadPressed) 0.7f else 1f
@@ -176,7 +176,7 @@ private fun TopNavBar(onDownloadsClick: (() -> Unit)?, onSettingsClick: (() -> U
                 modifier = Modifier
                     .align(Alignment.CenterEnd)
                     .padding(end = 8.dp)
-                    .size(48.dp)
+                    .size(40.dp)
                     .clip(CircleShape)
                     .border(2.dp, Color.Black.copy(alpha = downloadAlpha), CircleShape)
                     .clickable(
@@ -189,7 +189,7 @@ private fun TopNavBar(onDownloadsClick: (() -> Unit)?, onSettingsClick: (() -> U
                 contentAlignment = Alignment.Center
             ) {
                 DownloadTrayIcon(
-                    modifier = Modifier.size(22.dp),
+                    modifier = Modifier.size(26.dp),
                     tint     = Color.Black.copy(alpha = downloadAlpha)
                 )
             }
