@@ -73,6 +73,7 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.noven.ncrawler.data.db.NovelEntity
 import com.noven.ncrawler.data.scraper.ChapterLink
+import com.noven.ncrawler.ui.theme.MontserratFamily
 import com.noven.ncrawler.viewmodel.DetailUiState
 import com.noven.ncrawler.viewmodel.DetailViewModel
 import kotlinx.coroutines.Dispatchers
@@ -452,6 +453,7 @@ private fun CinematicDetail(
                 Text(
                     text          = primaryGenre.uppercase().ifBlank { "NOVEL" },
                     color         = accent,
+                    fontFamily    = MontserratFamily,
                     fontSize      = 11.sp,
                     fontWeight    = FontWeight.SemiBold,
                     letterSpacing = 2.sp,
@@ -469,6 +471,7 @@ private fun CinematicDetail(
                 Text(
                     text       = novel.title,
                     color      = Color.White,
+                    fontFamily = MontserratFamily,
                     fontSize   = 32.sp,
                     fontWeight = FontWeight.ExtraBold,
                     lineHeight = 36.sp,
@@ -590,6 +593,7 @@ private fun CinematicDetail(
                         Text(
                             text          = "SUMMARY",
                             color         = accent,
+                            fontFamily    = MontserratFamily,
                             fontSize      = 10.sp,
                             fontWeight    = FontWeight.SemiBold,
                             letterSpacing = 1.5.sp,
@@ -635,6 +639,7 @@ private fun CinematicDetail(
                             Text(
                                 text       = "Chapters",
                                 color      = Color.White,
+                                fontFamily = MontserratFamily,
                                 fontSize   = 14.sp,
                                 fontWeight = FontWeight.Bold,
                             )
