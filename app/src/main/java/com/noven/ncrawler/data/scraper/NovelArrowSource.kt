@@ -213,7 +213,8 @@ class NovelArrowSource : NovelSource {
 
             for (i in 0 until items.length()) {
                 val ch = items.getJSONObject(i)
-                val chapterId = ch.optString("chapter_id").ifBlank { continue }
+                val chapterId = ch.optString("chapter_id")
+                if (chapterId.isBlank()) continue
                 val chapterName = ch.optString("chapter_name").ifBlank { "Chapter" }
                 // Extract the leading number for sorting/display; falls back
                 // to list position if a chapter_id is ever non-numeric-prefixed.
