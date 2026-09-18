@@ -164,21 +164,22 @@ private fun TopNavBar(onDownloadsClick: (() -> Unit)?, onSettingsClick: (() -> U
                 color = MaterialTheme.colorScheme.onSurface
             )
 
-            // Download button — matches the mockup: full circle, 2px solid
-            // black border, transparent background, custom stroke-drawn
-            // "tray" arrow (not a Material icon — the mockup's glyph
-            // doesn't exist in the icon set, so it's drawn by hand below
-            // to match the SVG exactly).
+            // Download button — matches the mockup shape (full circle, 2px
+            // border, transparent background, hand-drawn "tray" arrow), but
+            // the border/icon color is now theme-adaptive (onSurface)
+            // instead of hardcoded black — the mockup was light-mode only,
+            // and a pure-black circle disappears against a dark top bar.
             val downloadInteraction = remember { MutableInteractionSource() }
             val downloadPressed by downloadInteraction.collectIsPressedAsState()
             val downloadAlpha = if (downloadPressed) 0.7f else 1f
+            val downloadTint = MaterialTheme.colorScheme.onSurface
             Box(
                 modifier = Modifier
                     .align(Alignment.CenterEnd)
                     .padding(end = 8.dp)
                     .size(40.dp)
                     .clip(CircleShape)
-                    .border(2.dp, Color.Black.copy(alpha = downloadAlpha), CircleShape)
+                    .border(2.dp, downloadTint.copy(alpha = downloadAlpha), CircleShape)
                     .clickable(
                         enabled           = onDownloadsClick != null,
                         interactionSource = downloadInteraction,
@@ -190,7 +191,7 @@ private fun TopNavBar(onDownloadsClick: (() -> Unit)?, onSettingsClick: (() -> U
             ) {
                 DownloadTrayIcon(
                     modifier = Modifier.size(26.dp),
-                    tint     = Color.Black.copy(alpha = downloadAlpha)
+                    tint     = downloadTint.copy(alpha = downloadAlpha)
                 )
             }
         }
@@ -948,7 +949,7 @@ private fun GenreDecorativeCard(
             .height(72.dp)
             .shadow(elevation = 8.dp, shape = RoundedCornerShape(16.dp), clip = false)
             .clip(RoundedCornerShape(16.dp))
-            .background(GlassSurfaceLight)
+            .background(glassSurface())
             .clickable(onClick = onClick)
             .padding(6.dp),
         contentAlignment = Alignment.Center
@@ -1115,8 +1116,8 @@ private fun SectionHeader(title: String) {
 // uses GenreShowcaseRow above instead.
 @Composable
 private fun GenreChip(name: String, isActive: Boolean, onClick: () -> Unit) {
-    val bg        = if (isActive) AccentBlue else GlassSurfaceLight
-    val border    = if (isActive) Color.Transparent else GlassBorderLight
+    val bg        = if (isActive) AccentBlue else glassSurface()
+    val border    = if (isActive) Color.Transparent else glassBorder()
     val textColor = if (isActive) Color.White else MaterialTheme.colorScheme.onSurface
 
     Box(
@@ -1339,56 +1340,88 @@ private fun BrowseSkeleton() {
                 .clip(RoundedCornerShape(20.dp))
                 .background(shimmer)
         )
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(24.dp))
 
-        // Chips row — 50dp tall
+        // Recently Read skeleton — label + row of 140x210dp portrait cards
+        SkeletonLabel(shimmer, width = 130.dp)
+        Spacer(Modifier.height(14.dp))
         Row(
             Modifier.padding(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            repeat(4) {
+            repeat(2) {
                 Box(
                     Modifier
-                        .size(80.dp, 50.dp)
-                        .clip(RoundedCornerShape(25.dp))
+                        .width(140.dp)
+                        .height(210.dp)
+                        .clip(RoundedCornerShape(16.dp))
                         .background(shimmer)
                 )
             }
         }
         Spacer(Modifier.height(24.dp))
 
-        // Section label
-        Box(
-            Modifier
-                .padding(horizontal = 16.dp)
-                .size(120.dp, 16.dp)
-                .clip(RoundedCornerShape(4.dp))
-                .background(shimmer)
-        )
-        Spacer(Modifier.height(12.dp))
-
-        // Novel cards — 2-col landscape grid
-        Column(
+        // Genre showcase skeleton — "Genre"/"See all" header + row of
+        // 104x72dp cards, matching GenreShowcaseRow exactly
+        SkeletonLabel(shimmer, width = 90.dp)
+        Spacer(Modifier.height(14.dp))
+        Row(
             Modifier.padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            repeat(2) {
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    repeat(2) {
-                        Column(
-                            Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(shimmer)
-                        ) {
-                            Spacer(Modifier.fillMaxWidth().height(130.dp))
-                            Spacer(Modifier.height(30.dp))
-                        }
+            repeat(4) {
+                Box(
+                    Modifier
+                        .width(104.dp)
+                        .height(72.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(shimmer)
+                )
+            }
+        }
+        Spacer(Modifier.height(24.dp))
+
+        // Two genre-row sections (Latest Updates / Popular) — section label
+        // + a labeled row + a horizontal scroll of 130dp-wide novel cards,
+        // matching GenreRow exactly
+        repeat(2) {
+            SkeletonLabel(shimmer, width = 140.dp, height = 16.dp)
+            Spacer(Modifier.height(16.dp))
+            SkeletonLabel(shimmer, width = 100.dp)
+            Spacer(Modifier.height(10.dp))
+            Row(
+                Modifier.padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                repeat(3) {
+                    Column(
+                        Modifier
+                            .width(130.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(shimmer)
+                    ) {
+                        Spacer(Modifier.fillMaxWidth().height(130.dp))
+                        Spacer(Modifier.height(40.dp))
                     }
                 }
             }
+            Spacer(Modifier.height(24.dp))
         }
     }
+}
+
+// Small shimmer bar standing in for a text label — used throughout the
+// skeleton above instead of repeating the same Box(...).background(shimmer)
+// four times with slightly different sizes.
+@Composable
+private fun SkeletonLabel(shimmer: Color, width: androidx.compose.ui.unit.Dp, height: androidx.compose.ui.unit.Dp = 20.dp) {
+    Box(
+        Modifier
+            .padding(horizontal = 16.dp)
+            .size(width, height)
+            .clip(RoundedCornerShape(4.dp))
+            .background(shimmer)
+    )
 }
 
 @Composable

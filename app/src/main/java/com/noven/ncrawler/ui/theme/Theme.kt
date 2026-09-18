@@ -31,6 +31,16 @@ val GlassBorderLight   = Color(0x59FFFFFF)  // hairline highlight, light mode
 val GlassSurfaceDark   = Color(0xE6111827)  // dark-mode glass fill
 val GlassBorderDark    = Color(0x33FFFFFF)  // dark-mode hairline highlight
 
+// These two existed but nothing actually read them — every glass surface on
+// Home was hardcoded to the light variant regardless of system theme. Use
+// these instead of GlassSurfaceLight/GlassBorderLight directly anywhere a
+// glass card can appear in dark mode too.
+@Composable
+fun glassSurface(): Color = if (isSystemInDarkTheme()) GlassSurfaceDark else GlassSurfaceLight
+
+@Composable
+fun glassBorder(): Color = if (isSystemInDarkTheme()) GlassBorderDark else GlassBorderLight
+
 // ── Light scheme ──────────────────────────────────────────────────────────────
 private val LightColors = lightColorScheme(
     primary            = AccentBlue,
