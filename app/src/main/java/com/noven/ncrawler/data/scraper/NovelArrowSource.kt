@@ -15,26 +15,33 @@ import java.util.concurrent.TimeUnit
 /**
  * Scraper for novelarrow.com.
  *
- * Unlike FreeWebNovel/NovelLive (plain server-rendered HTML), this is a
- * Next.js site with a genuinely clean backing JSON API for detail + search —
- * both live-verified via direct curl, no Cloudflare wall on either. Only the
- * homepage/genre LISTINGS and chapter CONTENT still require HTML scraping,
- * since no equivalent JSON endpoint was found for those (confirmed via
- * DevTools: the homepage's only real API call is an analytics ping).
- *
  * Confirmed live:
- *   Detail  : GET /api-web/novels/<slug>                         → clean JSON
- *   Search  : GET /api-web/novels?...&sort=SEARCH_KEYWORD&keyword=<q>  → clean JSON
- *   Listing : HTML — <a href="/novel/<slug>"> cards with title in a
- *             "line-clamp-2 ... font-bold" span, cover <img> inside a
- *             "novel-cover-frame" wrapper, rating as counted ★ glyphs
- *             (class contains "text-site-rating"), status as an SVG
- *             <title>Completed</title> / <title>Ongoing</title>
- *   Chapter : URL /chapter/<slug>/chapter-<N> — content is NOT plain HTML,
- *             it's embedded in a React Server Component streaming payload
- *             (self.__next_f.push(...)) as an escaped HTML string referenced
- *             by a numeric id (e.g. "chapter_content":"$25" → a "25:T<hex>,"
- *             chunk elsewhere in the page holding the actual <p> HTML)
+ *   Detail       : GET /api-web/novels/<slug>                                → clean JSON
+ *   Chapter list : GET /api-web/novels/<slug>/chapters?page=&limit=          → clean JSON,
+ *                  REAL chapter_id per chapter (title-suffixed, e.g.
+ *                  "chapter-1-chen-xuan-system-activation") — the `limit`
+ *                  param isn't reliably honored by the API (a 234-chapter
+ *                  novel returned all 234 in one page despite limit=50), so
+ *                  this always checks pagination.totalPages and loops if >1
+ *                  rather than trusting a single page is ever guaranteed.
+ *   Search       : GET /api-web/novels?...&sort=SEARCH_KEYWORD&keyword=<q>   → clean JSON
+ *   Listing      : HTML — <a href="/novel/<slug>"> cards, title in a
+ *                  "line-clamp-2 ... font-bold" span, cover <img> inside a
+ *                  "novel-cover-frame" wrapper, rating as counted ★ glyphs
+ *                  (class contains "text-site-rating"), status as an SVG
+ *                  <title>Completed</title> / <title>Ongoing</title>
+ *   Chapter body : URL /chapter/<slug>/<real chapter_id> — content is NOT
+ *                  plain HTML, it's embedded in a React Server Component
+ *                  streaming payload (self.__next_f.push(...)) as an
+ *                  escaped HTML string referenced by a numeric id
+ *
+ * CHANGE: fetchDetail() previously synthesized chapter-<N> URLs using only
+ * totalChapter + first/recentChapter's real titles — this broke for any
+ * novel whose chapter IDs carry a title suffix (which turned out to be
+ * every chapter EXCEPT the one novel used during initial investigation).
+ * Confirmed 404 in production: GET /chapter/<slug>/chapter-1 for a novel
+ * whose real id was chapter-1-chen-xuan-system-activation. Now uses the
+ * real /chapters endpoint for exact ids on every chapter — no guessing.
  *
  * Rating scale: the API's avgPoint is 0–5, but the rest of this app treats
  * NovelEntity.rating as an "out of 10" string (DetailScreen's star widget
@@ -43,8 +50,10 @@ import java.util.concurrent.TimeUnit
  *
  * Premium chapters: some novels here have paid/platinum chapters
  * (coin_price > 0). This scraper does not attempt to fetch those — it
- * detects the premium/platinum flag and returns a clear "requires purchase"
- * message instead of trying to bypass the paywall.
+ * detects the premium/platinum flag at fetch-content time and returns a
+ * clear "requires purchase" message instead of trying to bypass the
+ * paywall. (Not yet flagged in the chapter LIST itself — see note below
+ * buildChapterUrl.)
  */
 class NovelArrowSource : NovelSource {
 
@@ -93,10 +102,6 @@ class NovelArrowSource : NovelSource {
         }
     }
 
-    // /novels/hot is referenced from the site's own 404 page ("Hot Novels"
-    // link) but its card markup hasn't been live-verified the way the
-    // homepage's has — falls back to the homepage listing if it 404s or the
-    // page shape turns out different than expected.
     override suspend fun fetchPopular(): List<NovelEntity> {
         Log.d(TAG, "fetchPopular()")
         return try {
@@ -107,10 +112,6 @@ class NovelArrowSource : NovelSource {
         }
     }
 
-    // Genre route_name values are lowercase/hyphenated (e.g. "sci-fi",
-    // "anime-&-comics") per the confirmed genre list — caller passes the
-    // route_name, not the display name. Page markup assumed same template
-    // as the homepage; not independently live-verified.
     override suspend fun fetchGenre(genre: String, page: Int): List<NovelEntity> {
         Log.d(TAG, "fetchGenre(genre=$genre, page=$page)")
         val url = if (page <= 1) "$BASE/genre/$genre" else "$BASE/genre/$genre/$page"
@@ -123,7 +124,6 @@ class NovelArrowSource : NovelSource {
     }
 
     // ── Search — confirmed clean JSON API, no Cloudflare wall ─────────────────
-    // GET /api-web/novels?limit=&page=&status=all&sort=SEARCH_KEYWORD&genre=ALL&keyword=
     override suspend fun search(query: String): List<NovelEntity> {
         val encoded = java.net.URLEncoder.encode(query, "UTF-8")
         val url = "$API/novels?limit=30&page=1&status=all&sort=SEARCH_KEYWORD&genre=ALL&keyword=$encoded"
@@ -157,7 +157,6 @@ class NovelArrowSource : NovelSource {
     }
 
     // ── Detail — confirmed clean JSON API ──────────────────────────────────────
-    // GET /api-web/novels/<slug>
     override suspend fun fetchDetail(slug: String): Pair<NovelEntity, List<ChapterLink>>? {
         return try {
             val json = JSONObject(fetchText("$API/novels/$slug"))
@@ -169,33 +168,23 @@ class NovelArrowSource : NovelSource {
             val genres = info.optJSONArray("novel_genres")?.let { arr ->
                 (0 until arr.length()).joinToString(", ") { arr.getString(it) }
             } ?: ""
-            val rating         = ratingOutOfTen(info.optJSONObject("avgPoint"))
-            val totalChapters  = info.optInt("totalChapter", 0)
-            val statusCode     = info.optInt("novel_status", 0)
+            val rating        = ratingOutOfTen(info.optJSONObject("avgPoint"))
+            val totalChapters = info.optInt("totalChapter", 0)
+            val statusCode    = info.optInt("novel_status", 0)
             val recentChapterName = info.optJSONObject("recentChapter")?.optString("chapter_name") ?: ""
-            val firstChapterName  = info.optJSONObject("firstChapter")?.optString("chapter_name") ?: ""
 
             Log.d(TAG, "Detail: title=$title totalChapters=$totalChapters rating=$rating")
 
-            // Chapter list synthesis — totalChapter here is authoritative
-            // (straight from the site's DB, not a URL-regex guess), so this
-            // range is exact. Real titles are only known for the first and
-            // most recent chapter from this endpoint; everything in between
-            // gets a plain "Chapter N" placeholder until actually opened.
-            val chapters = (1..totalChapters).map { n ->
-                val realTitle = when (n) {
-                    1              -> firstChapterName.ifBlank { null }
-                    totalChapters  -> recentChapterName.ifBlank { null }
-                    else           -> null
-                }
-                ChapterLink(num = n, title = realTitle ?: "Chapter $n", url = buildChapterUrl(slug, n))
-            }.sortedByDescending { it.num }
+            // Real chapter list — every id/title/url straight from the site's
+            // own data, nothing synthesized or guessed.
+            val chapters = fetchAllChapters(slug)
+            Log.d(TAG, "fetchAllChapters returned ${chapters.size} chapters (expected $totalChapters)")
 
             val urlMap = chapters.joinToString("\t") { "${it.num}|${it.url}" }
             val novel = NovelEntity(
                 slug = slug, title = title, coverUrl = coverUrlFor(slug),
                 synopsis = synopsis, status = statusFromCode(statusCode), rating = rating,
-                genres = genres, chapterCount = totalChapters,
+                genres = genres, chapterCount = chapters.size.takeIf { it > 0 } ?: totalChapters,
                 latestChapter = recentChapterName, chapterUrls = urlMap
             )
             Pair(novel, chapters)
@@ -203,6 +192,38 @@ class NovelArrowSource : NovelSource {
             Log.e(TAG, "fetchDetail($slug) failed: ${e.message}", e)
             null
         }
+    }
+
+    // ── Chapter list — confirmed clean JSON API ─────────────────────────────────
+    // GET /api-web/novels/<slug>/chapters?page=&limit= — `limit` isn't
+    // reliably honored (observed a 234-chapter novel return everything in
+    // one page despite limit=50), so this always checks pagination and
+    // loops rather than assuming a single request is ever guaranteed
+    // complete. Capped at 20 pages (10,000+ chapters at limit=500) as a
+    // sanity bound against a pathological response, not a realistic ceiling.
+    private suspend fun fetchAllChapters(slug: String): List<ChapterLink> {
+        val all = mutableListOf<ChapterLink>()
+        var page = 1
+        var totalPages = 1
+
+        while (page <= totalPages && page <= 20) {
+            val json = JSONObject(fetchText("$API/novels/$slug/chapters?page=$page&limit=500"))
+            val items = json.optJSONArray("items") ?: JSONArray()
+            totalPages = json.optJSONObject("pagination")?.optInt("totalPages", 1) ?: 1
+
+            for (i in 0 until items.length()) {
+                val ch = items.getJSONObject(i)
+                val chapterId = ch.optString("chapter_id").ifBlank { continue }
+                val chapterName = ch.optString("chapter_name").ifBlank { "Chapter" }
+                // Extract the leading number for sorting/display; falls back
+                // to list position if a chapter_id is ever non-numeric-prefixed.
+                val num = Regex("^chapter-(\\d+)").find(chapterId)
+                    ?.groupValues?.get(1)?.toIntOrNull() ?: (all.size + 1)
+                all.add(ChapterLink(num = num, title = chapterName, url = chapterUrlFor(slug, chapterId)))
+            }
+            page++
+        }
+        return all.sortedByDescending { it.num }
     }
 
     // ── Chapter content ─────────────────────────────────────────────────────────
@@ -216,8 +237,7 @@ class NovelArrowSource : NovelSource {
 
             // Premium/platinum check — scoped to the chapterInfo block only
             // (anchored on a substring confirmed unique to it) so this can't
-            // false-positive on unrelated flags elsewhere on the page (e.g.
-            // chapterAds.internalApp.enabled).
+            // false-positive on unrelated flags elsewhere on the page.
             val infoAnchor = html.indexOf("\"chapterInfo\":{\"chapter_status\"")
             if (infoAnchor != -1) {
                 val window = html.substring(infoAnchor, minOf(infoAnchor + 400, html.length))
@@ -229,8 +249,6 @@ class NovelArrowSource : NovelSource {
                 }
             }
 
-            // Find the RSC reference id for chapter_content (e.g. "$25" → "25"),
-            // then pull that numbered chunk's raw string: "25:T<hex>,<html...>"
             val refId = Regex("\"chapter_content\":\"\\$(\\w+)\"").find(html)?.groupValues?.get(1)
 
             val content = refId?.let { id ->
@@ -244,7 +262,7 @@ class NovelArrowSource : NovelSource {
             }
 
             if (content.isNullOrBlank()) {
-                Log.w(TAG, "Could not extract chapter_content — refId=$refId")
+                Log.w(TAG, "Could not extract chapter_content — refId=$refId url=$url")
                 return Pair(title, "Could not load chapter content. Please try again.")
             }
             Log.d(TAG, "Chapter content: ${content.length} chars")
@@ -255,9 +273,6 @@ class NovelArrowSource : NovelSource {
         }
     }
 
-    // Next.js escapes a chapter's HTML for safe embedding inside a JS string
-    // literal — unescape just the handful of sequences confirmed present
-    // (angle brackets, ampersand, quotes, backslash), not a full JS decoder.
     private fun unescapeNextJs(s: String): String =
         s.replace("\\u003c", "<")
          .replace("\\u003e", ">")
@@ -265,8 +280,6 @@ class NovelArrowSource : NovelSource {
          .replace("\\\"", "\"")
          .replace("\\\\", "\\")
 
-    // Shared by synopsis (novel_desc) and chapter content — both arrive as
-    // an HTML string ("<p>...</p><p>...</p>") rather than plain text.
     private fun htmlToPlainText(html: String): String {
         if (html.isBlank()) return ""
         val paragraphs = Jsoup.parse(html).select("p")
@@ -276,21 +289,24 @@ class NovelArrowSource : NovelSource {
     }
 
     private fun coverUrlFor(slug: String) = "$IMG/novel/$slug.jpg"
+    private fun chapterUrlFor(slug: String, chapterId: String) = "$BASE/chapter/$slug/$chapterId"
 
-    // avgPoint from the API is 0–5; the rest of the app treats
-    // NovelEntity.rating as out-of-10 (DetailScreen halves it for its
-    // 5-star widget) — doubled here so it renders correctly everywhere
-    // without needing to change that shared logic.
     private fun ratingOutOfTen(avgPoint: JSONObject?): String {
         val raw = avgPoint?.optString("\$numberDecimal")?.toDoubleOrNull() ?: return ""
         return "%.1f".format(raw * 2)
     }
 
-    // novel_status mapping is INFERRED, not documented — 0 has only been
-    // observed on novels still actively receiving new chapters. Adjust here
-    // if a completed novel is later found with a different code.
     private fun statusFromCode(code: Int): String = if (code == 0) "Ongoing" else "Completed"
 
+    // NOT authoritative — real chapter URLs need the full title-suffixed
+    // chapter_id (see fetchAllChapters), which this signature doesn't have
+    // access to. This is only ever hit by NovelRepository as a last-resort
+    // fallback when a chapter number is missing from the cached URL map —
+    // which fetchAllChapters populating the COMPLETE list on every detail
+    // fetch should make essentially unreachable in practice. Kept as a
+    // best-effort guess (matches chapters whose real id has no title
+    // suffix) rather than throwing, so a stale/partial cache degrades
+    // gracefully instead of crashing.
     override fun buildChapterUrl(slug: String, chapterNum: Int) =
         "$BASE/chapter/$slug/chapter-$chapterNum"
 
@@ -311,13 +327,9 @@ class NovelArrowSource : NovelSource {
             val cover = a.selectFirst("img")?.attr("abs:src")?.ifBlank { null }
                 ?: coverUrlFor(slug)
 
-            // Rating: count filled ★ glyphs in elements whose class contains
-            // "text-site-rating" (confirmed on both listing and detail pages).
-            // Scaled ×2 for the same out-of-10 convention as ratingOutOfTen().
             val starCount = a.select("[class*=text-site-rating]").count { it.text().contains("★") }
             val rating = if (starCount > 0) (starCount * 2).toString() else ""
 
-            // Status badge: SVG <title> text, confirmed "Completed"/"Ongoing"
             val statusTitle = a.selectFirst("svg title")?.text()?.trim().orEmpty()
 
             result.add(NovelEntity(
