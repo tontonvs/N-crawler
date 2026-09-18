@@ -12,6 +12,11 @@ object SourceRegistry {
     private val all: List<NovelSource> = listOf(
         FreeWebNovelScraper(),
         NovelLiveSource(),
+        // CHANGE: NovelArrow added — clean JSON API for detail + search (no
+        // Cloudflare wall, live-verified), HTML scraping for listings,
+        // JSON-embedded-HTML extraction for chapter content. See
+        // NovelArrowSource.kt header for the full confirmed structure.
+        NovelArrowSource(),
     )
 
     fun all(): List<NovelSource> = all
