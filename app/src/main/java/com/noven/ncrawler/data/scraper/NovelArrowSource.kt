@@ -426,8 +426,18 @@ class NovelArrowSource : NovelSource {
             val slug = Regex("^/novel/([^/?#]+)").find(href)?.groupValues?.get(1) ?: return@forEach
             if (result.any { it.slug == slug }) return@forEach
 
-            val title = a.selectFirst("[class*=line-clamp-2]")?.text()?.trim()
-                .orEmpty().ifBlank { return@forEach }
+            // FIX: /novels/hot (and possibly other listing pages) render the
+            // title inside an <h2> styled with "truncate", not
+            // "line-clamp-2" — the old selector matched zero elements there
+            // (confirmed: 60 links found, 0 kept). Every one of the site's
+            // card anchors carries the full title as a semantic `title`
+            // attribute regardless of which Tailwind classes wrap it, so
+            // that's tried first; the old class-based lookup stays as a
+            // fallback rather than being removed, in case some page variant
+            // doesn't set the attribute.
+            val title = a.attr("title").trim()
+                .ifBlank { a.selectFirst("[class*=line-clamp-2]")?.text()?.trim().orEmpty() }
+                .ifBlank { return@forEach }
 
             val cover = a.selectFirst("img")?.attr("abs:src")?.ifBlank { null }
                 ?: coverUrlFor(slug)
