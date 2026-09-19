@@ -24,10 +24,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
@@ -156,6 +158,7 @@ fun ReaderScreen(
                 ReaderHeader(
                     fg              = fg,
                     accent          = accent,
+                    bg              = bg,
                     audioSelected   = audioSelected,
                     onBack          = onBack,
                     onAudioClick    = { audioSelected = true; showAudioOverlay = true },
@@ -175,23 +178,72 @@ fun ReaderScreen(
             }
         }
 
-        // ── Settings bottom sheet ─────────────────────────────────────────
+        // ── Bottom gradient scrim behind nav bar (change 3) ──────────────
+        // Always present so the chapter nav bar reads clearly over content.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(160.dp)
+                .align(Alignment.BottomCenter)
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            bg.copy(alpha = 0f),
+                            bg.copy(alpha = 0.80f),
+                            bg.copy(alpha = 0.96f)
+                        )
+                    )
+                )
+        )
+
+        // ── Settings bottom sheet (change 4: tap-outside scrim + no X) ───
+        // Full-screen invisible scrim catches taps outside the sheet and
+        // dismisses it — same UX as a standard ModalBottomSheet.
         AnimatedVisibility(
             visible  = showSettings,
-            enter    = fadeIn() + slideInVertically(initialOffsetY = { it }),
-            exit     = fadeOut() + slideOutVertically(targetOffsetY = { it }),
-            modifier = Modifier.align(Alignment.BottomCenter)
+            enter    = fadeIn(),
+            exit     = fadeOut(),
+            modifier = Modifier.fillMaxSize()
         ) {
-            ReaderSettingsSheet(
-                settings    = settings,
-                swatches    = swatches,
-                onClose     = { showSettings = false },
-                onBrightness = vm::setBrightness,
-                onSelectSwatch = vm::selectSwatch,
-                onDecreaseFont = vm::decreaseFontSize,
-                onIncreaseFont = vm::increaseFontSize,
-                onSetAlign     = vm::setTextAlign
-            )
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Transparent)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication        = null,
+                        onClick           = { showSettings = false }
+                    )
+            ) {
+                // Sheet itself — stopPropagation via its own clickable so taps
+                // inside the sheet don't bubble up to the scrim and close it.
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication        = null,
+                            onClick           = {}          // consume — do nothing
+                        )
+                ) {
+                    AnimatedVisibility(
+                        visible  = showSettings,
+                        enter    = slideInVertically(initialOffsetY = { it }),
+                        exit     = slideOutVertically(targetOffsetY = { it })
+                    ) {
+                        ReaderSettingsSheet(
+                            settings       = settings,
+                            swatches       = swatches,
+                            onClose        = { showSettings = false },
+                            onBrightness   = vm::setBrightness,
+                            onSelectSwatch = vm::selectSwatch,
+                            onDecreaseFont = vm::decreaseFontSize,
+                            onIncreaseFont = vm::increaseFontSize,
+                            onSetAlign     = vm::setTextAlign
+                        )
+                    }
+                }
+            }
         }
 
         // ── Chapter TOC drawer ────────────────────────────────────────────
@@ -244,11 +296,15 @@ private fun ReaderContent(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(scrollState)
-            .padding(top = 128.dp, bottom = 140.dp, start = 24.dp, end = 24.dp)
+            // Change 2: top padding increased from 128dp → 184dp to clear the
+            // taller split header (pill row + back/settings row + nav bar).
+            .padding(top = 184.dp, bottom = 140.dp, start = 24.dp, end = 24.dp)
     ) {
+        // Change 1: chapter title now uses FontFamily.Default (system font)
+        // matching the UI body/label font convention in Theme.kt.
         Text(
             text       = chapter.title,
-            fontFamily = MontserratFamily,
+            fontFamily = FontFamily.Default,
             fontWeight = FontWeight.ExtraBold,
             fontSize   = 26.sp,
             color      = fg,
@@ -265,16 +321,16 @@ private fun ReaderContent(
 
         paragraphs.forEachIndexed { index, para ->
             if (index == 0 && para.isNotEmpty()) {
-                // Drop-cap approximation: the first letter set large and
-                // bold inline — Compose has no CSS-style float/wrap, so this
-                // reads as "big first letter" rather than a true multi-line
-                // wrap-around, but carries the same visual intent.
+                // Drop-cap: accent letter keeps MontserratFamily for decorative
+                // intent; body text after it uses FontFamily.Default (change 1).
                 val annotated = buildAnnotatedString {
                     withStyle(SpanStyle(fontSize = (settings.fontSize * 2.4f).sp, fontWeight = FontWeight.Black,
                         fontFamily = MontserratFamily, color = accent)) {
                         append(para.first().toString())
                     }
-                    append(para.substring(1))
+                    withStyle(SpanStyle(fontFamily = FontFamily.Default)) {
+                        append(para.substring(1))
+                    }
                 }
                 Text(
                     text      = annotated,
@@ -287,8 +343,10 @@ private fun ReaderContent(
                         .padding(bottom = (settings.fontSize * 0.8f).dp)
                 )
             } else {
+                // Change 1: body paragraphs use FontFamily.Default
                 Text(
                     text       = para,
+                    fontFamily = FontFamily.Default,
                     fontSize   = settings.fontSize.sp,
                     color      = fg,
                     textAlign  = align,
@@ -302,65 +360,98 @@ private fun ReaderContent(
     }
 }
 
-// ── Header: back / Audio-Text segmented control / settings gear ───────────
+// ── Header: Audio-Text pill at top, then back + settings on a row below ───────
+// Change 2: pill row stays at the status bar; back and settings shift down
+// into their own row so the segmented control is visually "above" the nav
+// actions rather than sandwiched between them.
+// Change 3: a vertical gradient scrim behind both rows so content underneath
+// doesn't bleed through — fades from bg at 92% opacity to transparent.
 @Composable
 private fun ReaderHeader(
     fg: Color,
     accent: Color,
+    bg: Color,
     audioSelected: Boolean,
     onBack: () -> Unit,
     onAudioClick: () -> Unit,
     onTextClick: () -> Unit,
     onSettingsClick: () -> Unit
 ) {
-    Row(
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .statusBarsPadding()
-            .padding(horizontal = 20.dp, vertical = 12.dp),
-        verticalAlignment     = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
+            // Change 3: gradient scrim — solid bg at top fades to transparent
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(
+                        bg.copy(alpha = 0.96f),
+                        bg.copy(alpha = 0.80f),
+                        bg.copy(alpha = 0f)
+                    )
+                )
+            )
     ) {
-        // Back button
-        Box(
+        Column(
             modifier = Modifier
-                .size(40.dp)
-                .clip(RoundedCornerShape(16.dp))
-                .background(glassFill(fg))
-                .border(1.dp, glassBorder(fg), RoundedCornerShape(16.dp))
-                .clickable(onClick = onBack),
-            contentAlignment = Alignment.Center
+                .fillMaxWidth()
+                .statusBarsPadding()
         ) {
-            Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = fg, modifier = Modifier.size(20.dp))
-        }
-
-        // Audio / Text segmented pill
-        Box(
-            modifier = Modifier
-                .width(144.dp)
-                .height(36.dp)
-                .clip(RoundedCornerShape(50))
-                .background(glassFill(fg))
-                .border(1.dp, glassBorder(fg), RoundedCornerShape(50))
-                .padding(3.dp)
-        ) {
-            Row(Modifier.fillMaxSize()) {
-                SegmentPill("Audio", audioSelected, accent, fg, Modifier.weight(1f), onAudioClick)
-                SegmentPill("Text", !audioSelected, accent, fg, Modifier.weight(1f), onTextClick)
+            // Row 1 — Audio / Text segmented pill centered at the very top
+            Row(
+                modifier              = Modifier.fillMaxWidth().padding(top = 10.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment     = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .width(144.dp)
+                        .height(36.dp)
+                        .clip(RoundedCornerShape(50))
+                        .background(glassFill(fg))
+                        .border(1.dp, glassBorder(fg), RoundedCornerShape(50))
+                        .padding(3.dp)
+                ) {
+                    Row(Modifier.fillMaxSize()) {
+                        SegmentPill("Audio", audioSelected, accent, fg, Modifier.weight(1f), onAudioClick)
+                        SegmentPill("Text", !audioSelected, accent, fg, Modifier.weight(1f), onTextClick)
+                    }
+                }
             }
-        }
 
-        // Settings gear
-        Box(
-            modifier = Modifier
-                .size(40.dp)
-                .clip(RoundedCornerShape(16.dp))
-                .background(glassFill(fg))
-                .border(1.dp, glassBorder(fg), RoundedCornerShape(16.dp))
-                .clickable(onClick = onSettingsClick),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(Icons.Default.Settings, "Reader settings", tint = fg, modifier = Modifier.size(20.dp))
+            // Row 2 — Back (left) and Settings (right), moved down from status bar
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment     = Alignment.CenterVertically
+            ) {
+                // Back button
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(glassFill(fg))
+                        .border(1.dp, glassBorder(fg), RoundedCornerShape(16.dp))
+                        .clickable(onClick = onBack),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = fg, modifier = Modifier.size(20.dp))
+                }
+
+                // Settings gear
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(glassFill(fg))
+                        .border(1.dp, glassBorder(fg), RoundedCornerShape(16.dp))
+                        .clickable(onClick = onSettingsClick),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.Default.Settings, "Reader settings", tint = fg, modifier = Modifier.size(20.dp))
+                }
+            }
         }
     }
 }
@@ -496,12 +587,31 @@ private fun ReaderSettingsSheet(
         color           = Color(0xFFF5F0EA),
         shadowElevation = 12.dp
     ) {
-        Column(Modifier.padding(20.dp).navigationBarsPadding()) {
+        Column(Modifier.padding(horizontal = 20.dp, vertical = 0.dp).navigationBarsPadding()) {
+            // Change 4: centered dash handle replaces the X button.
+            // Indicates the sheet slides down to dismiss; tapping outside also
+            // dismisses via the scrim (see call site). No close button needed.
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 12.dp, bottom = 16.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Box(
+                    modifier = Modifier
+                        .width(40.dp)
+                        .height(4.dp)
+                        .clip(RoundedCornerShape(50))
+                        .background(Color(0xFFB8AFA4))
+                )
+            }
+
+            // Sheet title row — no X button
             Row(
                 Modifier
                     .fillMaxWidth()
                     .padding(bottom = 14.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.Start,
                 verticalAlignment     = Alignment.CenterVertically
             ) {
                 Text(
@@ -512,9 +622,6 @@ private fun ReaderSettingsSheet(
                     letterSpacing = 1.sp,
                     color         = Color(0xFF1A1714)
                 )
-                IconButton(onClick = onClose, modifier = Modifier.size(28.dp)) {
-                    Icon(Icons.Default.Close, "Close", tint = Color(0xFF9C9188))
-                }
             }
 
             // Brightness
