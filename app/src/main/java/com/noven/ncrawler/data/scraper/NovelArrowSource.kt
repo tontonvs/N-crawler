@@ -253,23 +253,23 @@ class NovelArrowSource : NovelSource {
                 return Pair(title, "This chapter requires purchase on NovelArrow.")
             }
 
-            // chapter_content's value is either:
-            //  - a short reference like "$25" pointing at a separately
-            //    streamed chunk ("25:T<hex>,<html>") elsewhere on the page
-            //    — Next.js does this for LARGER content strings
-            //  - the actual escaped HTML inline, directly as this value
-            //    — used for SHORTER content strings
+            // chapter_content's value is one of THREE confirmed shapes:
+            //  A. the actual escaped HTML inline, directly as this value
+            //     — used for shorter content strings
+            //  B. a reference like "$25" pointing at a "25:T<hex>,<html>"
+            //     chunk elsewhere on the page, with the full content
+            //     present right after the comma, in that SAME push() call
+            //  C. the same "$25" reference, but the "25:T<hex>," marker
+            //     declares an upcoming byte length with ZERO bytes
+            //     actually inline — the server flushed the real payload
+            //     as a SEPARATE, immediately-following push() call that
+            //     has no id-prefix of its own, as a raw continuation of
+            //     that same logical value. Confirmed live: this happens
+            //     when the server's stream flushes mid-value.
             val rawValue = extractJsonStringValue(html, "chapter_content")
             val content = rawValue?.let { raw ->
                 if (Regex("^\\$[A-Za-z0-9]+$").matches(raw)) {
-                    val refId = raw.substring(1)
-                    val chunkPattern = Regex(
-                        Regex.escape("$refId:T") + "[0-9a-f]+,(.*?)\"\\]\\)\\s*</script>",
-                        RegexOption.DOT_MATCHES_ALL
-                    )
-                    chunkPattern.find(html)?.groupValues?.get(1)?.let { chunk ->
-                        htmlToPlainText(unescapeNextJs(chunk))
-                    }
+                    htmlToPlainText(unescapeNextJs(extractStreamedChunk(html, raw.substring(1)) ?: ""))
                 } else {
                     htmlToPlainText(unescapeNextJs(raw))
                 }
@@ -352,6 +352,30 @@ class NovelArrowSource : NovelSource {
             tail.startsWith("false") -> false
             else -> null
         }
+    }
+
+    // Handles shapes B and C from the comment above: finds the
+    // "<refId>:T<hexlen>," marker and reads whatever content immediately
+    // follows it, within that SAME push() call (shape B). If that comes
+    // back empty (shape C — the marker declared a byte count but the
+    // actual bytes were flushed in the NEXT push() call instead), falls
+    // back to reading that entire following push() call's raw string
+    // argument as the content, since it has no id-prefix of its own.
+    private fun extractStreamedChunk(html: String, refId: String): String? {
+        val markerPattern = Regex(
+            Regex.escape("$refId:T") + "[0-9a-f]+,(.*?)\"\\]\\)\\s*</script>",
+            RegexOption.DOT_MATCHES_ALL
+        )
+        val markerMatch = markerPattern.find(html) ?: return null
+        val inline = markerMatch.groupValues[1]
+        if (inline.isNotBlank()) return inline
+
+        val afterMarker = markerMatch.range.last + 1
+        val nextPushPattern = Regex(
+            "self\\.__next_f\\.push\\(\\[1,\"(.*?)\"\\]\\)\\s*</script>",
+            RegexOption.DOT_MATCHES_ALL
+        )
+        return nextPushPattern.find(html, afterMarker)?.groupValues?.get(1)
     }
 
     private fun unescapeNextJs(s: String): String =
