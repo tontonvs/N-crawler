@@ -228,42 +228,55 @@ class NovelArrowSource : NovelSource {
     }
 
     // ── Chapter content ─────────────────────────────────────────────────────────
+    // CHANGE: different chapters nest their SSR payload at DIFFERENT
+    // backslash-escaping depths — confirmed live: the chapter used during
+    // initial investigation had its data at depth 0 (plain, unescaped JSON
+    // in the page), while a different novel's chapter-1 had the exact same
+    // keys nested one level deeper (single-backslash-escaped, e.g.
+    // \"chapter_content\" instead of "chapter_content"). Extraction no
+    // longer assumes a fixed depth — extractJsonStringValue/BooleanValue
+    // below detect it per-call by counting the backslashes actually
+    // present around each key, so this works regardless of which depth a
+    // given chapter's payload happens to use.
     override suspend fun fetchChapterByUrl(url: String): Pair<String, String> {
         Log.d(TAG, "fetchChapter: $url")
         return try {
             val html = fetchText(url)
 
-            val title = Regex("\"chapter_name\":\"([^\"]*)\"").find(html)
-                ?.groupValues?.get(1)?.ifBlank { null } ?: "Chapter"
+            val title = extractJsonStringValue(html, "chapter_name")
+                ?.let { unescapeNextJs(it) }?.ifBlank { null } ?: "Chapter"
 
-            // Premium/platinum check — scoped to the chapterInfo block only
-            // (anchored on a substring confirmed unique to it) so this can't
-            // false-positive on unrelated flags elsewhere on the page.
-            val infoAnchor = html.indexOf("\"chapterInfo\":{\"chapter_status\"")
-            if (infoAnchor != -1) {
-                val window = html.substring(infoAnchor, minOf(infoAnchor + 400, html.length))
-                val isPremium = window.contains("\"premium_content\":true") ||
-                                window.contains("\"platinum_content\":true")
-                if (isPremium) {
-                    Log.d(TAG, "Chapter is premium/platinum — skipping content fetch")
-                    return Pair(title, "This chapter requires purchase on NovelArrow.")
-                }
+            val isPremium = extractJsonBooleanValue(html, "premium_content") == true ||
+                             extractJsonBooleanValue(html, "platinum_content") == true
+            if (isPremium) {
+                Log.d(TAG, "Chapter is premium/platinum — skipping content fetch")
+                return Pair(title, "This chapter requires purchase on NovelArrow.")
             }
 
-            val refId = Regex("\"chapter_content\":\"\\$(\\w+)\"").find(html)?.groupValues?.get(1)
-
-            val content = refId?.let { id ->
-                val chunkPattern = Regex(
-                    Regex.escape("$id:T") + "[0-9a-f]+,(.*?)\"\\]\\)\\s*</script>",
-                    RegexOption.DOT_MATCHES_ALL
-                )
-                chunkPattern.find(html)?.groupValues?.get(1)?.let { raw ->
+            // chapter_content's value is either:
+            //  - a short reference like "$25" pointing at a separately
+            //    streamed chunk ("25:T<hex>,<html>") elsewhere on the page
+            //    — Next.js does this for LARGER content strings
+            //  - the actual escaped HTML inline, directly as this value
+            //    — used for SHORTER content strings
+            val rawValue = extractJsonStringValue(html, "chapter_content")
+            val content = rawValue?.let { raw ->
+                if (Regex("^\\$[A-Za-z0-9]+$").matches(raw)) {
+                    val refId = raw.substring(1)
+                    val chunkPattern = Regex(
+                        Regex.escape("$refId:T") + "[0-9a-f]+,(.*?)\"\\]\\)\\s*</script>",
+                        RegexOption.DOT_MATCHES_ALL
+                    )
+                    chunkPattern.find(html)?.groupValues?.get(1)?.let { chunk ->
+                        htmlToPlainText(unescapeNextJs(chunk))
+                    }
+                } else {
                     htmlToPlainText(unescapeNextJs(raw))
                 }
             }
 
             if (content.isNullOrBlank()) {
-                Log.w(TAG, "Could not extract chapter_content — refId=$refId url=$url")
+                Log.w(TAG, "Could not extract chapter_content — url=$url")
                 return Pair(title, "Could not load chapter content. Please try again.")
             }
             Log.d(TAG, "Chapter content: ${content.length} chars")
@@ -271,6 +284,73 @@ class NovelArrowSource : NovelSource {
         } catch (e: Exception) {
             Log.e(TAG, "fetchChapter failed: ${e.message}", e)
             Pair("Error", "Failed to load chapter: ${e.message}")
+        }
+    }
+
+    // Finds a JSON key ANYWHERE in the raw page text and extracts its
+    // string value, at whatever backslash-escaping depth that key
+    // actually happens to be nested at on this particular page — detected
+    // by counting the backslashes immediately surrounding the key itself,
+    // rather than assuming a fixed depth (see fetchChapterByUrl comment
+    // above for why a fixed assumption broke on a different chapter).
+    private fun extractJsonStringValue(html: String, key: String): String? {
+        val keyIdx = html.indexOf(key)
+        if (keyIdx == -1) return null
+
+        var i = keyIdx - 1
+        var depth = 0
+        while (i >= 0 && html[i] == '\\') { depth++; i-- }
+        if (i < 0 || html[i] != '"') return null
+
+        val delim = "\\".repeat(depth) + "\""
+        val afterKey = keyIdx + key.length
+        val closeKeyIdx = html.indexOf(delim, afterKey)
+        if (closeKeyIdx == -1) return null
+        val colonIdx = html.indexOf(':', closeKeyIdx + delim.length)
+        if (colonIdx == -1) return null
+        val openValueIdx = html.indexOf(delim, colonIdx + 1)
+        if (openValueIdx == -1) return null
+        val valueStart = openValueIdx + delim.length
+
+        // Find the closing delimiter at the SAME depth — a candidate match
+        // at a deeper depth (more backslashes) means it's an escaped quote
+        // INSIDE the value's own content, not our real closing delimiter,
+        // so skip past it and keep looking.
+        var searchFrom = valueStart
+        while (true) {
+            val candidate = html.indexOf(delim, searchFrom)
+            if (candidate == -1) return null
+            var j = candidate - 1
+            var actualDepth = 0
+            while (j >= 0 && html[j] == '\\') { actualDepth++; j-- }
+            if (actualDepth == depth) return html.substring(valueStart, candidate - depth)
+            searchFrom = candidate + delim.length
+        }
+    }
+
+    // Same depth-detection approach as extractJsonStringValue, for a plain
+    // (unquoted) true/false literal instead of a string value.
+    private fun extractJsonBooleanValue(html: String, key: String): Boolean? {
+        val keyIdx = html.indexOf(key)
+        if (keyIdx == -1) return null
+
+        var i = keyIdx - 1
+        var depth = 0
+        while (i >= 0 && html[i] == '\\') { depth++; i-- }
+        if (i < 0 || html[i] != '"') return null
+
+        val delim = "\\".repeat(depth) + "\""
+        val afterKey = keyIdx + key.length
+        val closeKeyIdx = html.indexOf(delim, afterKey)
+        if (closeKeyIdx == -1) return null
+        val colonIdx = html.indexOf(':', closeKeyIdx + delim.length)
+        if (colonIdx == -1) return null
+
+        val tail = html.substring(colonIdx + 1, minOf(colonIdx + 10, html.length))
+        return when {
+            tail.startsWith("true")  -> true
+            tail.startsWith("false") -> false
+            else -> null
         }
     }
 
