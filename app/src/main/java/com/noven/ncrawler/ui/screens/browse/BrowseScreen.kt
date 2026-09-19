@@ -425,9 +425,19 @@ private fun BrowseContent(
             // "Latest" from novels.drop(1), "Popular" from the separate
             // /sort/most-popular fetch (a genuinely different source, not a
             // slice of the same list).
-            val latestGenreRows  = remember(novels) { groupByTopGenres(novels.drop(1)) }
-            val popularNovels    = (popularState as? BrowseUiState.Success)?.novels ?: emptyList()
-            val popularGenreRows = remember(popularNovels) { groupByTopGenres(popularNovels) }
+            // FIX: some sources (NovelArrow's homepage/listing scrape) can't
+            // supply per-card genre tags — those cards come back with
+            // genres = "" and groupByTopGenres() drops them entirely, which
+            // silently renders NOTHING even though novels/popularNovels are
+            // non-empty. Each section below now falls back to one flat,
+            // ungrouped row instead of disappearing whenever grouping
+            // yields zero rows.
+            val latestList        = novels.drop(1)
+            val latestGenreRows   = remember(novels) { groupByTopGenres(latestList) }
+            val showFlatLatest    = latestGenreRows.isEmpty() && latestList.isNotEmpty()
+            val popularNovels     = (popularState as? BrowseUiState.Success)?.novels ?: emptyList()
+            val popularGenreRows  = remember(popularNovels) { groupByTopGenres(popularNovels) }
+            val showFlatPopular   = popularGenreRows.isEmpty() && popularNovels.isNotEmpty()
 
             // CHANGE: showcase genres now come from the real data (top 8 by
             // how many novels carry them) instead of a hardcoded 3-item list.
@@ -512,6 +522,23 @@ private fun BrowseContent(
                             onSeeMore    = { onGenreClick(genre) }
                         )
                     }
+                } else if (showFlatLatest) {
+                    // FIX: no genre data to group by (e.g. NovelArrow) —
+                    // show everything fetched as one flat row instead of
+                    // nothing at all.
+                    item {
+                        Spacer(Modifier.height(24.dp))
+                        SectionHeader("Latest Updates")
+                    }
+                    item {
+                        Spacer(Modifier.height(16.dp))
+                        GenreRow(
+                            genre        = "Latest",
+                            novels       = latestList,
+                            onNovelClick = onNovelClick,
+                            onSeeMore    = { onDiscoverClick?.invoke() }
+                        )
+                    }
                 }
 
                 // ── Popular — same pattern, sourced from /sort/most-popular ──
@@ -527,6 +554,23 @@ private fun BrowseContent(
                             novels       = rowNovels,
                             onNovelClick = onNovelClick,
                             onSeeMore    = { onGenreClick(genre) }
+                        )
+                    }
+                    item { Spacer(Modifier.height(20.dp)) }
+                } else if (showFlatPopular) {
+                    // FIX: same fallback as Latest — flat row when there's
+                    // no genre data to group by.
+                    item {
+                        Spacer(Modifier.height(28.dp))
+                        SectionHeader("Popular")
+                    }
+                    item {
+                        Spacer(Modifier.height(16.dp))
+                        GenreRow(
+                            genre        = "Popular",
+                            novels       = popularNovels,
+                            onNovelClick = onNovelClick,
+                            onSeeMore    = { onDiscoverClick?.invoke() }
                         )
                     }
                     item { Spacer(Modifier.height(20.dp)) }
