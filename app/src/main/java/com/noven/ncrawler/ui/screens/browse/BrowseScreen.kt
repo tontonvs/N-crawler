@@ -1,5 +1,6 @@
 package com.noven.ncrawler.ui.screens.browse
 
+import android.provider.Settings
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
@@ -24,12 +25,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
@@ -648,11 +651,46 @@ private fun GenreRow(
 // height is the only dimension that can double) and no glass left on it: no
 // rim border, and the frosted "Start Reading / Resume" pill is now plain
 // icon + text with no rectangle behind it.
+// CHANGE: the cover slowly drifts (a Ken Burns pan + zoom) instead of sitting
+// still — see the heroDrift block below.
 // resumeChapter != null → this IS the continue-reading novel: CTA becomes
 // "Resume Chapter N" and taps the given onClick (which jumps straight to
 // that chapter), instead of "Start Reading" opening the detail page.
 @Composable
 private fun HeroBanner(novel: NovelEntity, resumeChapter: Int?, onClick: () -> Unit) {
+    // ── Slow cover drift ────────────────────────────────────────────────────
+    // Three unhurried, back-and-forth loops with different lengths (zoom 22s,
+    // pan-x 17s, pan-y 23s), so the motion never visibly repeats in lockstep.
+    // The image is always zoomed at least 12% and only pans inside the slack
+    // that zoom creates (80% of it), so no edge is ever exposed. Values are
+    // read inside graphicsLayer {} — the draw phase — so this never triggers
+    // recomposition. Honours the system "Remove animations" setting.
+    val context = LocalContext.current
+    val reducedMotion = remember(context) {
+        Settings.Global.getFloat(
+            context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f
+        ) == 0f
+    }
+    val drift = rememberInfiniteTransition(label = "heroDrift")
+    val zoom by drift.animateFloat(
+        initialValue  = 0f,
+        targetValue   = 1f,
+        animationSpec = infiniteRepeatable(tween(22000, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+        label         = "heroZoom"
+    )
+    val panX by drift.animateFloat(
+        initialValue  = -1f,
+        targetValue   = 1f,
+        animationSpec = infiniteRepeatable(tween(17000, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+        label         = "heroPanX"
+    )
+    val panY by drift.animateFloat(
+        initialValue  = -1f,
+        targetValue   = 1f,
+        animationSpec = infiniteRepeatable(tween(23000, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+        label         = "heroPanY"
+    )
+
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -662,12 +700,22 @@ private fun HeroBanner(novel: NovelEntity, resumeChapter: Int?, onClick: () -> U
             .background(MaterialTheme.colorScheme.surfaceVariant)
             .clickable(onClick = onClick)
     ) {
-        // Cover image
+        // Cover image — drifting (the card's clip() trims the overscan)
         AsyncImage(
             model              = novel.coverUrl,
             contentDescription = novel.title,
             contentScale       = ContentScale.Crop,
-            modifier           = Modifier.fillMaxSize()
+            modifier           = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    if (!reducedMotion) {
+                        val scale = 1.12f + 0.08f * zoom          // 1.12 → 1.20
+                        scaleX = scale
+                        scaleY = scale
+                        translationX = panX * (scale - 1f) * size.width  * 0.4f
+                        translationY = panY * (scale - 1f) * size.height * 0.4f
+                    }
+                }
         )
 
         // Scrim — transparent top, dark bottom, so the text reads over any cover

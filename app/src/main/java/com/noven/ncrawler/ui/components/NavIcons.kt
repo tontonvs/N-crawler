@@ -13,8 +13,8 @@ import androidx.compose.ui.unit.dp
 // Lucide/Feather-style 24×24 icons — 2.2 stroke, round caps and joins — each in
 // an outline version (inactive) and a solid version (active, drawn inside the
 // sliding selector). The HTML only ships home / layers / folder / sparkles /
-// navigation, so the two extra icons the app needs (search, settings gear) are
-// drawn in exactly the same style.
+// navigation, so the icons the app needs beyond those (compass for Discover,
+// search, settings gear) are drawn in exactly the same style.
 //
 // Built from the SVG path data with PathParser, so the shapes are the HTML's
 // own. Colours are placeholders (black): always tint them via Icon(tint = …).
@@ -28,9 +28,10 @@ object NavIcons {
     val FolderOutline: ImageVector by lazy { strokeIcon("NavFolderOutline", FOLDER_OUTLINE) }
     val FolderFilled: ImageVector  by lazy { fillIcon("NavFolderFilled", FOLDER_FILLED) }
 
-    // Discover → the HTML's navigation arrow (an "explore" pointer)
+    // Discover → compass (replaces the HTML's paper-plane style navigation
+    // arrow). Solid version = a filled disc with the needle cut out (even-odd).
     val DiscoverOutline: ImageVector by lazy { strokeIcon("NavDiscoverOutline", DISCOVER_OUTLINE) }
-    val DiscoverFilled: ImageVector  by lazy { fillIcon("NavDiscoverFilled", DISCOVER_FILLED) }
+    val DiscoverFilled: ImageVector  by lazy { fillIcon("NavDiscoverFilled", DISCOVER_OUTLINE, evenOdd = true) }
 
     // Settings gear — solid version keeps the centre hole (even-odd fill)
     val SettingsOutline: ImageVector by lazy { strokeIcon("NavSettingsOutline", SETTINGS_OUTLINE) }
@@ -72,7 +73,7 @@ private fun fillIcon(name: String, pathData: String, evenOdd: Boolean = false): 
     ).build()
 
 // ── SVG path data ────────────────────────────────────────────────────────────
-// Home / folder / navigation: copied verbatim from the HTML snippet.
+// Home / folder: copied verbatim from the HTML snippet.
 private const val HOME_OUTLINE =
     "M3 10.25L12 3l9 7.25V20a1 1 0 0 1-1 1h-5a1 1 0 0 1-1-1v-5a1 1 0 0 0-1-1h-2a1 1 0 0 0-1 1v5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-9.75z"
 private const val HOME_FILLED =
@@ -83,11 +84,12 @@ private const val FOLDER_OUTLINE =
 private const val FOLDER_FILLED =
     "M19.5 21h-15A2.5 2.5 0 0 1 2 18.5v-12A2.5 2.5 0 0 1 4.5 4h4.382a2 2 0 0 1 1.414.586l1.414 1.414A1 1 0 0 0 12.414 6.5H19.5A2.5 2.5 0 0 1 22 9v9.5a2.5 2.5 0 0 1-2.5 2.5z"
 
-private const val DISCOVER_OUTLINE = "M3 11l19-9-9 19-2-8-8-2z"
-// The HTML draws the solid version as <polygon points="3 11 22 2 13 21 11 13 3 11"/>
-private const val DISCOVER_FILLED = "M3 11L22 2L13 21L11 13Z"
-
 // Drawn in the same style (2.2 stroke, round joins) — not in the HTML.
+// Compass = ring + needle.
+private const val DISCOVER_OUTLINE =
+    "M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0z " +
+    "M16.24 7.76l-1.804 5.411a2 2 0 0 1-1.265 1.265L7.76 16.24l1.804-5.411a2 2 0 0 1 1.265-1.265z"
+
 private const val SEARCH =
     "M19 11a8 8 0 1 1-16 0 8 8 0 0 1 16 0z M21 21l-4.3-4.3"
 

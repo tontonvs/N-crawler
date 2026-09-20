@@ -266,7 +266,7 @@ private fun FloatingNavBar(
 ) {
     Row(
         verticalAlignment     = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         PillNav(selectedIndex = selectedIndex, onTab = onTab)
         SearchFab(active = searchOpen, onClick = onSearchClick)
@@ -287,10 +287,15 @@ private val navTabs = listOf(
     NavTab(Routes.SETTINGS, "Settings", NavIcons.SettingsOutline, NavIcons.SettingsFilled)
 )
 
-// Same geometry as the HTML: 48dp buttons, 8dp apart, 12/10dp pill padding.
-private val NavItemSize = 48.dp
-private val NavItemGap  = 8.dp
-private val NavIconSize = 22.dp
+// CHANGE: a bit smaller than the HTML's geometry (48dp buttons, 8dp apart,
+// 12/10dp pill padding) — 44dp buttons, 4dp apart, and only 6/5dp between the
+// pill's edge and the buttons inside it. Everything (selector slide distance,
+// FAB size) derives from these, so resizing again is a few numbers.
+private val NavItemSize = 44.dp
+private val NavItemGap  = 4.dp
+private val NavIconSize = 20.dp
+private val NavPadH     = 6.dp
+private val NavPadV     = 5.dp
 
 // Light vs dark. The HTML pill is dark ink on a light page. On a dark app
 // background a dark pill would nearly vanish, so dark mode inverts it: light
@@ -343,7 +348,7 @@ private fun PillNav(selectedIndex: Int, onTab: (String) -> Unit) {
     Box(
         modifier = Modifier
             .shadow(
-                elevation    = 18.dp,
+                elevation    = 14.dp,
                 shape        = shape,
                 ambientColor = Color(0x330F172A),
                 spotColor    = Color(0x660F172A)
@@ -351,7 +356,7 @@ private fun PillNav(selectedIndex: Int, onTab: (String) -> Unit) {
             .clip(shape)
             .background(palette.pill)
             .border(1.dp, palette.edge, shape)
-            .padding(horizontal = 12.dp, vertical = 10.dp)
+            .padding(horizontal = NavPadH, vertical = NavPadV)
     ) {
         // Sliding selector circle
         Box(
@@ -432,7 +437,8 @@ private fun PillNavItem(
 }
 
 // ── Search FAB ───────────────────────────────────────────────────────────────
-// Copies the reader's circle buttons (back / prev / next): 48dp circle filled
+// Copies the reader's circle buttons (back / prev / next): circle (NavItemSize
+// now, so it matches the pill's buttons; the reader's are 48dp) filled
 // with the foreground colour at 13%, icon in the foreground colour. `fg` here
 // is onSurface — ink in light mode, near-white in dark mode — and the 13% is
 // composited onto the surface colour so the circle is solid (the reader's
@@ -468,10 +474,10 @@ private fun SearchFab(active: Boolean, onClick: () -> Unit) {
 
     Box(
         modifier = Modifier
-            .size(48.dp)
+            .size(NavItemSize)
             .graphicsLayer(scaleX = scale, scaleY = scale)
             .shadow(
-                elevation    = 12.dp,
+                elevation    = 10.dp,
                 shape        = CircleShape,
                 ambientColor = Color(0x260F172A),
                 spotColor    = Color(0x480F172A)
