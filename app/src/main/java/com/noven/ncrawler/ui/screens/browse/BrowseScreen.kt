@@ -21,7 +21,6 @@ import androidx.compose.ui.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -29,7 +28,6 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -46,6 +44,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import com.noven.ncrawler.data.db.NovelEntity
+import com.noven.ncrawler.ui.components.GenreGlassTile
+import com.noven.ncrawler.ui.components.NovelGlassCard
 import com.noven.ncrawler.ui.theme.*
 import com.noven.ncrawler.viewmodel.BrowseUiState
 import com.noven.ncrawler.viewmodel.BrowseViewModel
@@ -605,6 +605,9 @@ private fun groupByTopGenres(
 // the full infinite-scroll list for that genre (Discover's GenreScreen).
 // Cards are a fixed, narrower width here (130dp) than the old 2-col grid —
 // narrower cards read the (portrait) covers better at this card height.
+// CHANGE: cards now come from the shared NovelGlassCard (ui/components), and
+// the row de-dupes by slug — LazyRow keys must be unique, so a source that
+// repeats a novel inside one list used to crash with "Key was already used".
 @Composable
 private fun GenreRow(
     genre: String,
@@ -612,6 +615,7 @@ private fun GenreRow(
     onNovelClick: (String) -> Unit,
     onSeeMore: () -> Unit
 ) {
+    val uniqueNovels = remember(novels) { novels.distinctBy { it.slug } }
     Column {
         Row(
             modifier = Modifier
@@ -633,12 +637,14 @@ private fun GenreRow(
             )
         }
         Spacer(Modifier.height(10.dp))
+        // CHANGE: bottom = 8.dp — a LazyRow clips to its bounds, which was cutting
+        // off the cards' drop shadow at the bottom edge.
         LazyRow(
-            contentPadding        = PaddingValues(horizontal = 16.dp),
+            contentPadding        = PaddingValues(start = 16.dp, end = 16.dp, bottom = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            items(novels, key = { it.slug }) { novel ->
-                NovelCard(
+            items(uniqueNovels, key = { it.slug }) { novel ->
+                NovelGlassCard(
                     novel    = novel,
                     onClick  = { onNovelClick(novel.slug) },
                     modifier = Modifier.width(130.dp)
@@ -662,6 +668,8 @@ private fun HeroBanner(novel: NovelEntity, resumeChapter: Int?, onClick: () -> U
             .padding(horizontal = 16.dp)
             .height(160.dp)
             .clip(RoundedCornerShape(20.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .border(1.dp, OnImageGlassBorder, RoundedCornerShape(20.dp))
             .clickable(onClick = onClick)
     ) {
         // Cover image
@@ -812,12 +820,19 @@ private fun RecentCard(
     val novel = info.novel
     val progress = (info.progress.lastChapterNum.toFloat() / novel.chapterCount.coerceAtLeast(1))
         .coerceIn(0f, 1f)
+    // CHANGE: a novel with an unknown chapter count (0) used to read "Ch.5/0".
+    val chapterText = if (novel.chapterCount > 0)
+        "Ch.${info.progress.lastChapterNum}/${novel.chapterCount}"
+    else
+        "Ch.${info.progress.lastChapterNum}"
 
     Box(
         modifier = Modifier
             .width(140.dp)
             .height(210.dp)
             .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .border(1.dp, OnImageGlassBorder, RoundedCornerShape(16.dp))
             .clickable(onClick = onOpenReader)
     ) {
         AsyncImage(
@@ -861,8 +876,16 @@ private fun RecentCard(
                 textAlign = TextAlign.Start
             )
 
-            // Footer — info badge + chapter label, then progress bar
-            Column {
+            // Footer — frosted glass strip over the cover: info badge + chapter
+            // label, then progress bar
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(OnImageGlassFillMd)
+                    .border(1.dp, OnImageGlassBorder, RoundedCornerShape(12.dp))
+                    .padding(horizontal = 8.dp, vertical = 8.dp)
+            ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         modifier = Modifier
@@ -885,7 +908,7 @@ private fun RecentCard(
                     }
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        "Ch.${info.progress.lastChapterNum}/${novel.chapterCount}",
+                        chapterText,
                         color    = Color.White.copy(alpha = 0.85f),
                         fontSize = 11.sp,
                         fontWeight = FontWeight.SemiBold
@@ -915,7 +938,7 @@ private fun RecentCard(
 // ── Genre Showcase — decorative, colour-gradient typography per card ─────────
 // Horizontally scrolling row (was a fixed 3-card row) so any number of real
 // genres fit, each in one of 6 alternating decorative styles (was 3) — see
-// GenreDecorativeCard below. Ends in a "See More" card that opens the
+// GenreGlassTile (ui/components). Ends in a "See More" card that opens the
 // existing DiscoverScreen, which already lists every genre.
 @Composable
 private fun GenreShowcaseRow(
@@ -954,11 +977,11 @@ private fun GenreShowcaseRow(
         // CHANGE: fixed 3-card Row → LazyRow so the showcase can hold up to
         // 8 real genres plus a trailing "See More" card without squeezing.
         LazyRow(
-            contentPadding        = PaddingValues(horizontal = 16.dp),
+            contentPadding        = PaddingValues(start = 16.dp, end = 16.dp, bottom = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             itemsIndexed(genres, key = { _, g -> g }) { i, genre ->
-                GenreDecorativeCard(
+                GenreGlassTile(
                     genre    = genre,
                     styleIdx = i % 6,
                     onClick  = { onGenreClick(genre) },
@@ -977,121 +1000,9 @@ private fun GenreShowcaseRow(
     }
 }
 
-// CHANGE: height reduced 90dp → 72dp (per feedback), font sizes trimmed
-// slightly to match, and doubled from 3 to 6 decorative style variants —
-// reuses the same 3 bundled fonts (Pacifico / Cinzel / Anton) with fresh
-// gradient pairs so 8 genres in a row don't read as visibly repetitive.
-@Composable
-private fun GenreDecorativeCard(
-    genre: String,
-    styleIdx: Int,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Box(
-        modifier = modifier
-            .height(72.dp)
-            .shadow(elevation = 8.dp, shape = RoundedCornerShape(16.dp), clip = false)
-            .clip(RoundedCornerShape(16.dp))
-            .background(glassSurface())
-            .clickable(onClick = onClick)
-            .padding(6.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        when (styleIdx) {
-            // Style 0 — Pacifico cursive, warm pink-orange gradient
-            0 -> Text(
-                text  = genre,
-                style = TextStyle(
-                    fontFamily = PacificoFamily,
-                    fontSize   = 16.sp,
-                    brush      = Brush.linearGradient(
-                        colors = listOf(Color(0xFFFF416C), Color(0xFFFF4B2B))
-                    )
-                ),
-                textAlign = TextAlign.Center,
-                maxLines  = 2,
-                overflow  = TextOverflow.Ellipsis
-            )
-            // Style 1 — Cinzel serif bold, epic purple gradient
-            1 -> Text(
-                text  = genre,
-                style = TextStyle(
-                    fontFamily    = CinzelFamily,
-                    fontWeight    = FontWeight.Bold,
-                    fontSize      = 13.sp,
-                    letterSpacing = 1.5.sp,
-                    brush         = Brush.linearGradient(
-                        colors = listOf(Color(0xFF8E2DE2), Color(0xFF4A00E0))
-                    )
-                ),
-                textAlign = TextAlign.Center,
-                maxLines  = 2,
-                overflow  = TextOverflow.Ellipsis
-            )
-            // Style 2 — Anton (Impact-style) caps, fiery orange-red gradient
-            2 -> Text(
-                text  = genre.uppercase(),
-                style = TextStyle(
-                    fontFamily    = AntonFamily,
-                    fontSize      = 16.sp,
-                    letterSpacing = 0.5.sp,
-                    brush         = Brush.linearGradient(
-                        colors = listOf(Color(0xFFF97316), Color(0xFFDC2626))
-                    )
-                ),
-                textAlign = TextAlign.Center,
-                maxLines  = 2,
-                overflow  = TextOverflow.Ellipsis
-            )
-            // Style 3 — Pacifico cursive, cool teal-blue gradient
-            3 -> Text(
-                text  = genre,
-                style = TextStyle(
-                    fontFamily = PacificoFamily,
-                    fontSize   = 16.sp,
-                    brush      = Brush.linearGradient(
-                        colors = listOf(Color(0xFF06B6D4), Color(0xFF3B82F6))
-                    )
-                ),
-                textAlign = TextAlign.Center,
-                maxLines  = 2,
-                overflow  = TextOverflow.Ellipsis
-            )
-            // Style 4 — Cinzel serif bold, gold-amber gradient
-            4 -> Text(
-                text  = genre,
-                style = TextStyle(
-                    fontFamily    = CinzelFamily,
-                    fontWeight    = FontWeight.Bold,
-                    fontSize      = 13.sp,
-                    letterSpacing = 1.5.sp,
-                    brush         = Brush.linearGradient(
-                        colors = listOf(Color(0xFFF59E0B), Color(0xFFD97706))
-                    )
-                ),
-                textAlign = TextAlign.Center,
-                maxLines  = 2,
-                overflow  = TextOverflow.Ellipsis
-            )
-            // Style 5 — Anton caps, green-emerald gradient
-            else -> Text(
-                text  = genre.uppercase(),
-                style = TextStyle(
-                    fontFamily    = AntonFamily,
-                    fontSize      = 16.sp,
-                    letterSpacing = 0.5.sp,
-                    brush         = Brush.linearGradient(
-                        colors = listOf(Color(0xFF10B981), Color(0xFF059669))
-                    )
-                ),
-                textAlign = TextAlign.Center,
-                maxLines  = 2,
-                overflow  = TextOverflow.Ellipsis
-            )
-        }
-    }
-}
+// CHANGE: GenreDecorativeCard moved to ui/components/GlassCards.kt as
+// GenreGlassTile so Discover's genre grid can use the exact same tile (with
+// dark-mode-safe gradients). Its 72dp height / 6-style history lives there.
 
 // New — trailing card at the end of the genre showcase row. Distinct from
 // the decorative cards on purpose (outlined accent style, not white glass)
@@ -1183,115 +1094,8 @@ private fun GenreChip(name: String, isActive: Boolean, onClick: () -> Unit) {
 }
 
 // ── Novel Card ────────────────────────────────────────────────────────────────
-// Landscape card — mirrors the Moana/Encanto cards in the snippet exactly:
-// white rounded card, image fills the top, title below, then
-// `duration · play button · rating` row.
-@Composable
-private fun NovelCard(novel: NovelEntity, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isPressed by interactionSource.collectIsPressedAsState()
-    val scale by animateFloatAsState(
-        targetValue   = if (isPressed) 0.96f else 1f,
-        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessHigh),
-        label         = "cardPress"
-    )
-
-    Surface(
-        modifier = modifier
-            .graphicsLayer(scaleX = scale, scaleY = scale)
-            .clickable(
-                interactionSource = interactionSource,
-                indication        = null,
-                onClick           = onClick
-            ),
-        shape           = RoundedCornerShape(16.dp),
-        color           = MaterialTheme.colorScheme.surface,
-        shadowElevation = 3.dp
-    ) {
-        Column {
-            // Cover image — landscape, fills card width, top of card
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(130.dp)
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
-            ) {
-                AsyncImage(
-                    model              = novel.coverUrl,
-                    contentDescription = novel.title,
-                    contentScale       = ContentScale.Crop,
-                    modifier           = Modifier.fillMaxSize()
-                )
-            }
-
-            Column(modifier = Modifier.padding(10.dp)) {
-                // Title
-                Text(
-                    novel.title,
-                    style    = MaterialTheme.typography.labelMedium.copy(
-                        fontWeight = FontWeight.Bold,
-                        fontSize   = 12.sp
-                    ),
-                    color    = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-
-                Spacer(Modifier.height(6.dp))
-
-                // duration · play button · rating
-                Row(
-                    modifier              = Modifier.fillMaxWidth(),
-                    verticalAlignment     = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        text  = if (novel.latestChapter.isNotBlank())
-                            novel.latestChapter.take(7) else "Ch.—",
-                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1
-                    )
-
-                    // Small solid play button
-                    Box(
-                        modifier = Modifier
-                            .size(20.dp)
-                            .clip(CircleShape)
-                            .background(AccentBlue),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            Icons.Rounded.PlayArrow,
-                            contentDescription = "Read",
-                            tint     = Color.White,
-                            modifier = Modifier.size(12.dp)
-                        )
-                    }
-
-                    if (novel.rating.isNotBlank()) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                Icons.Rounded.Star,
-                                contentDescription = null,
-                                tint     = StarGold,
-                                modifier = Modifier.size(10.dp)
-                            )
-                            Spacer(Modifier.width(2.dp))
-                            Text(
-                                novel.rating,
-                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    } else {
-                        Spacer(Modifier.width(1.dp))
-                    }
-                }
-            }
-        }
-    }
-}
+// CHANGE: moved to ui/components/GlassCards.kt as NovelGlassCard — GenreScreen
+// carried a hand-copied duplicate that had already drifted from this one.
 
 // ── Search content ────────────────────────────────────────────────────────────
 @Composable
@@ -1445,7 +1249,7 @@ private fun BrowseSkeleton() {
                             .background(shimmer)
                     ) {
                         Spacer(Modifier.fillMaxWidth().height(130.dp))
-                        Spacer(Modifier.height(40.dp))
+                        Spacer(Modifier.height(76.dp))
                     }
                 }
             }

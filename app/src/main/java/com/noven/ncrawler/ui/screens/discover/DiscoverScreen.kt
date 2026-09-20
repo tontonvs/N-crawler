@@ -1,22 +1,23 @@
 package com.noven.ncrawler.ui.screens.discover
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.*
+import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.noven.ncrawler.ui.theme.GlassBorderLight
-import com.noven.ncrawler.ui.theme.GlassSurfaceLight
+import com.noven.ncrawler.ui.components.GenreGlassTile
 
 // Confirmed genre list — straight from freewebnovel.com's own genre sidebar.
 // Kept simple per the ask: a flat grid of tiles, tap one → GenreScreen.
@@ -30,6 +31,12 @@ private val ALL_GENRES = listOf(
     "Xuanhuan", "Yaoi"
 )
 
+// CHANGE: tiles are now the same GenreGlassTile the homepage's genre showcase
+// uses (gradient typography on frosted glass, 6 alternating styles by index)
+// instead of a plain text tile. The old tile filled itself with
+// GlassSurfaceLight directly, so in dark mode it drew near-white text on a
+// near-white fill — GenreGlassTile goes through glassSurface(), which follows
+// the system theme.
 @Composable
 fun DiscoverScreen(onGenreClick: (String) -> Unit) {
     Column(
@@ -48,27 +55,17 @@ fun DiscoverScreen(onGenreClick: (String) -> Unit) {
 
         LazyVerticalGrid(
             columns               = GridCells.Fixed(2),
-            contentPadding        = PaddingValues(16.dp, 0.dp, 16.dp, 120.dp),
+            contentPadding        = PaddingValues(16.dp, 8.dp, 16.dp, 120.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalArrangement   = Arrangement.spacedBy(12.dp)
+            verticalArrangement   = Arrangement.spacedBy(14.dp)
         ) {
-            items(ALL_GENRES) { genre ->
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(64.dp)
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(GlassSurfaceLight)
-                        .border(1.dp, GlassBorderLight, RoundedCornerShape(16.dp))
-                        .clickable { onGenreClick(genre) },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        genre,
-                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
+            itemsIndexed(ALL_GENRES, key = { _, genre -> genre }) { index, genre ->
+                GenreGlassTile(
+                    genre    = genre,
+                    styleIdx = index % 6,
+                    onClick  = { onGenreClick(genre) },
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
         }
     }

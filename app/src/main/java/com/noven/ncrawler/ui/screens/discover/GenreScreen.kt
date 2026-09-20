@@ -1,40 +1,45 @@
 package com.noven.ncrawler.ui.screens.discover
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.PlayArrow
-import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material.icons.rounded.WifiOff
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import coil.compose.AsyncImage
-import com.noven.ncrawler.data.db.NovelEntity
+import com.noven.ncrawler.ui.components.NovelGlassCard
 import com.noven.ncrawler.ui.theme.AccentBlue
-import com.noven.ncrawler.ui.theme.StarGold
 import com.noven.ncrawler.viewmodel.GenreViewModel
 
 // Simple infinite-scroll grid for one genre. Kept deliberately plain per the
@@ -52,11 +57,20 @@ fun GenreScreen(
     val state by vm.state.collectAsStateWithLifecycle()
     val gridState = rememberLazyGridState()
 
-    // Trigger the next page a couple rows before the actual end
+    // CHANGE: de-dupe by slug. Grid keys must be unique, and pagination can
+    // repeat a novel across pages when the site's list shifts between page
+    // fetches (a new update pushes old items down a page) — that used to crash
+    // with "Key was already used". The next-page trigger below counts the
+    // de-duped list too, so repeats can't make it think the end is farther off.
+    val novels = remember(state.novels) { state.novels.distinctBy { it.slug } }
+
+    // Trigger the next page a couple rows before the actual end.
+    // Keyed on the raw list size so a page that only returned repeats still
+    // re-arms the trigger instead of stalling.
     LaunchedEffect(gridState, state.novels.size) {
         snapshotFlow {
             val last = gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-            last to state.novels.size
+            last to novels.size
         }.collect { (lastVisible, total) ->
             if (total > 0 && lastVisible >= total - 4) vm.loadNextPage()
         }
@@ -88,12 +102,12 @@ fun GenreScreen(
         }
 
         when {
-            state.isLoading && state.novels.isEmpty() -> {
+            state.isLoading && novels.isEmpty() -> {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(color = AccentBlue)
                 }
             }
-            state.error != null && state.novels.isEmpty() -> {
+            state.error != null && novels.isEmpty() -> {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Icon(Icons.Rounded.WifiOff, null,
@@ -107,7 +121,7 @@ fun GenreScreen(
                     }
                 }
             }
-            state.novels.isEmpty() -> {
+            novels.isEmpty() -> {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text("No novels found in $genre",
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -121,8 +135,18 @@ fun GenreScreen(
                     horizontalArrangement = Arrangement.spacedBy(20.dp),
                     verticalArrangement   = Arrangement.spacedBy(16.dp)
                 ) {
-                    items(state.novels, key = { it.slug }) { novel ->
-                        GenreNovelCard(novel = novel, onClick = { onNovelClick(novel.slug) })
+                    // CHANGE: shared NovelGlassCard (same card as the homepage
+                    // rows) replaces the private GenreNovelCard copy. In this
+                    // grid the card is ~half the screen wide, so the cover
+                    // uses a slightly taller 6:7 ratio than the homepage's
+                    // 130dp square.
+                    items(novels, key = { it.slug }) { novel ->
+                        NovelGlassCard(
+                            novel       = novel,
+                            onClick     = { onNovelClick(novel.slug) },
+                            modifier    = Modifier.fillMaxWidth(),
+                            coverAspect = 6f / 7f
+                        )
                     }
                     if (state.isLoadingMore) {
                         item(span = { GridItemSpan(maxLineSpan) }) {
@@ -133,86 +157,6 @@ fun GenreScreen(
                                     color = AccentBlue
                                 )
                             }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-// Compact card — same visual language as the homepage's landscape NovelCard
-// (white rounded card, cover on top, title + rating below).
-@Composable
-private fun GenreNovelCard(novel: NovelEntity, onClick: () -> Unit) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isPressed by interactionSource.collectIsPressedAsState()
-    val scale by androidx.compose.animation.core.animateFloatAsState(
-        targetValue = if (isPressed) 0.96f else 1f,
-        label = "genreCardPress"
-    )
-
-    Surface(
-        modifier = Modifier
-            .graphicsLayer(scaleX = scale, scaleY = scale)
-            .clickable(interactionSource = interactionSource, indication = null, onClick = onClick),
-        shape           = RoundedCornerShape(16.dp),
-        color           = MaterialTheme.colorScheme.surface,
-        shadowElevation = 3.dp
-    ) {
-        Column {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(130.dp)
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
-            ) {
-                AsyncImage(
-                    model              = novel.coverUrl,
-                    contentDescription = novel.title,
-                    contentScale       = ContentScale.Crop,
-                    modifier           = Modifier.fillMaxSize()
-                )
-            }
-            Column(modifier = Modifier.padding(10.dp)) {
-                Text(
-                    novel.title,
-                    style    = MaterialTheme.typography.labelMedium.copy(
-                        fontWeight = FontWeight.Bold, fontSize = 12.sp
-                    ),
-                    color    = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Spacer(Modifier.height(6.dp))
-                Row(
-                    modifier              = Modifier.fillMaxWidth(),
-                    verticalAlignment     = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(20.dp)
-                            .clip(CircleShape)
-                            .background(AccentBlue),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            Icons.Rounded.PlayArrow,
-                            contentDescription = "Read",
-                            tint     = Color.White,
-                            modifier = Modifier.size(12.dp)
-                        )
-                    }
-                    if (novel.rating.isNotBlank()) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Rounded.Star, null, tint = StarGold, modifier = Modifier.size(10.dp))
-                            Spacer(Modifier.width(2.dp))
-                            Text(
-                                novel.rating,
-                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
                         }
                     }
                 }
