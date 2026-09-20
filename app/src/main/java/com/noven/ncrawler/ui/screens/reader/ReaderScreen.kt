@@ -83,6 +83,24 @@ fun ReaderScreen(
     val settings    by vm.settings.collectAsStateWithLifecycle()
     val swatches    by vm.swatches.collectAsStateWithLifecycle()
     val chapterList by vm.chapterList.collectAsStateWithLifecycle()
+    val readChapters by vm.readChapters.collectAsStateWithLifecycle()
+    val novelTitle   by vm.novelTitle.collectAsStateWithLifecycle()
+
+    // vm.currentChapterNum is 0 until load() runs — fall back to the route's
+    // chapter so nothing flashes "Chapter 0" on the first frame.
+    val currentNum = vm.currentChapterNum.takeIf { it > 0 } ?: chapterNum
+
+    // Real chapter title if we have one, else null → callers show "Chapter N".
+    // The scraped page heading can be the NOVEL's name, so it's only trusted
+    // once the novel title is known (and isn't equal to it).
+    val chapterTitle: String? = remember(chapterList, novelTitle, state, currentNum) {
+        resolveChapterTitle(
+            listTitle  = chapterList.firstOrNull { it.num == currentNum }?.title,
+            pageTitle  = if (novelTitle.isBlank()) null
+                         else (state as? ReaderUiState.Success)?.chapter?.title,
+            novelTitle = novelTitle
+        )
+    }
 
     val swatch = swatches.getOrElse(settings.swatchIndex) { swatches.last() }
     val bg     = swatch.background
@@ -141,6 +159,7 @@ fun ReaderScreen(
             is ReaderUiState.Success -> {
                 ReaderContent(
                     chapter     = s.chapter,
+                    title       = chapterTitle ?: "Chapter $currentNum",
                     settings    = settings,
                     fg          = fg,
                     accent      = accent,
@@ -196,10 +215,10 @@ fun ReaderScreen(
             ChapterNavBar(
                 fg        = fg,
                 accent    = accent,
-                title     = (state as? ReaderUiState.Success)?.chapter?.title ?: "Chapter $chapterNum",
-                chapterNum = vm.currentChapterNum,
+                title     = chapterTitle,
+                chapterNum = currentNum,
                 progress  = progress,
-                canGoPrev = vm.currentChapterNum > 1,
+                canGoPrev = currentNum > 1,
                 onPrev    = vm::loadPrev,
                 onNext    = vm::loadNext,
                 onOpenToc = { showSettings = false; showToc = !showToc }
@@ -232,9 +251,10 @@ fun ReaderScreen(
                 heightFraction = 0.85f
             ) { dismiss ->
                 ChapterTocContent(
-                    chapters   = chapterList,
-                    currentNum = vm.currentChapterNum,
-                    onSelect   = { num -> vm.jumpTo(num); dismiss() }
+                    chapters     = chapterList,
+                    currentNum   = currentNum,
+                    readChapters = readChapters,
+                    onSelect     = { num -> vm.jumpTo(num); dismiss() }
                 )
             }
         }
@@ -262,6 +282,7 @@ fun ReaderScreen(
 @Composable
 private fun ReaderContent(
     chapter: ChapterEntity,
+    title: String,
     settings: ReaderSettings,
     fg: Color,
     accent: Color,
@@ -280,8 +301,10 @@ private fun ReaderContent(
             .verticalScroll(scrollState)
             .padding(top = 150.dp, bottom = 170.dp, start = 24.dp, end = 24.dp)
     ) {
+        // CHANGE: heading is the chapter's title ("Chapter N" if it has none) —
+        // it used to print chapter.title as scraped, which could be the novel's name.
         Text(
-            text       = chapter.title,
+            text       = title,
             fontFamily = MontserratFamily,
             fontWeight = FontWeight.ExtraBold,
             fontSize   = 26.sp,
@@ -459,7 +482,7 @@ private fun SegmentPill(
 private fun ChapterNavBar(
     fg: Color,
     accent: Color,
-    title: String,
+    title: String?,          // null → no real chapter title, show just "Ch. N"
     chapterNum: Int,
     progress: Float,
     canGoPrev: Boolean,
@@ -525,25 +548,27 @@ private fun ChapterNavBar(
                         color         = accent,
                         letterSpacing = 0.4.sp
                     )
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        "·",
-                        fontFamily = MontserratFamily,
-                        fontWeight = FontWeight.Bold,
-                        fontSize   = 12.sp,
-                        color      = fg.copy(alpha = 0.4f)
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        title,
-                        fontFamily = MontserratFamily,
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize   = 12.sp,
-                        color      = fg.copy(alpha = 0.75f),
-                        maxLines   = 1,
-                        overflow   = TextOverflow.Ellipsis,
-                        modifier   = Modifier.weight(1f, fill = false)
-                    )
+                    if (title != null) {
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            "·",
+                            fontFamily = MontserratFamily,
+                            fontWeight = FontWeight.Bold,
+                            fontSize   = 12.sp,
+                            color      = fg.copy(alpha = 0.4f)
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            title,
+                            fontFamily = MontserratFamily,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize   = 12.sp,
+                            color      = fg.copy(alpha = 0.75f),
+                            maxLines   = 1,
+                            overflow   = TextOverflow.Ellipsis,
+                            modifier   = Modifier.weight(1f, fill = false)
+                        )
+                    }
                 }
             }
 
@@ -596,6 +621,29 @@ private fun ChapterNavBar(
     }
 }
 
+// A title that is just "Chapter 12" / "Ch. 12" carries no more information than
+// the number, so it doesn't count as a real chapter title.
+private val BARE_CHAPTER = Regex("""(?i)(?:chapter|ch\.?)\s*\d+""")
+
+// First usable title wins: the TOC's entry for this chapter, then the page's
+// own heading. "Usable" = not blank, not the novel's name, not a bare
+// "Chapter N". Returns null when nothing qualifies — callers fall back to the
+// chapter number.
+private fun resolveChapterTitle(
+    listTitle: String?,
+    pageTitle: String?,
+    novelTitle: String
+): String? {
+    fun usable(raw: String?): String? {
+        val t = raw?.trim().orEmpty()
+        if (t.isEmpty()) return null
+        if (novelTitle.isNotBlank() && t.equals(novelTitle.trim(), ignoreCase = true)) return null
+        if (BARE_CHAPTER.matches(t)) return null
+        return t
+    }
+    return usable(listTitle) ?: usable(pageTitle)
+}
+
 // Sheet + TOC palette. Every TOC text colour is picked *against the surface it
 // sits on* (see onColorFor) instead of a fixed grey / the adaptive swatch
 // accent — the accent could land on nearly the same tone as the sheet.
@@ -603,7 +651,7 @@ private val SheetCream   = Color(0xFFF5F0EA)   // surface shared by settings + T
 private val TocInk       = Color(0xFF1A1714)
 private val TocPaper     = Color(0xFFFAF6F0)
 private val TocReadBg    = Color(0xFFEDE7DF)
-private val TocReadGreen = Color(0xFF2E7D32)
+private val TocReadCheck = Color(0xFF7D746B)   // warm grey — was green
 
 // Ink on light surfaces, paper on dark ones. 0.179 is the WCAG luminance at
 // which black and white text have equal contrast, so this always picks the
@@ -934,7 +982,8 @@ private fun AlignButton(
 }
 
 // ── Table of contents (content of the shared ReaderSheet) ───────────────────
-// "Read" = chapter.num < currentNum (linear reading assumption).
+// "Read" = the reader actually opened that chapter (readChapters) — individual
+// chapters, NOT everything before the current one. Shown as a grey check.
 // "Current" = chapter.num == currentNum (the "Reading" badge).
 // Opens already scrolled to the chapter being read; flipping the sort order
 // glides the list back to the top so the change is visible.
@@ -942,6 +991,7 @@ private fun AlignButton(
 private fun ColumnScope.ChapterTocContent(
     chapters: List<ChapterLink>,
     currentNum: Int,
+    readChapters: Set<Int>,
     onSelect: (Int) -> Unit
 ) {
     var sortAscending by remember { mutableStateOf(true) }
@@ -1010,7 +1060,7 @@ private fun ColumnScope.ChapterTocContent(
             // Rows hold no state, so index-based reuse costs nothing.
             items(sorted) { chapter ->
                 val isCurrent = chapter.num == currentNum
-                val isRead    = chapter.num < currentNum
+                val isRead    = !isCurrent && chapter.num in readChapters
 
                 // The surface this row actually sits on — text colours below
                 // are derived from it, so they always counter the background.
@@ -1070,7 +1120,7 @@ private fun ColumnScope.ChapterTocContent(
                         }
                         isRead -> {
                             Spacer(Modifier.width(8.dp))
-                            ThickCheck(color = TocReadGreen)
+                            ThickCheck(color = TocReadCheck)
                         }
                     }
                 }

@@ -14,6 +14,7 @@ import coil.Coil
 import coil.request.ImageRequest
 import com.noven.ncrawler.NCrawlerApp
 import com.noven.ncrawler.data.db.ChapterEntity
+import com.noven.ncrawler.data.local.ReadChaptersStore
 import com.noven.ncrawler.data.local.ReaderPrefsStore
 import com.noven.ncrawler.data.scraper.ChapterLink
 import kotlinx.coroutines.Dispatchers
@@ -62,6 +63,7 @@ class ReaderViewModel(app: Application) : AndroidViewModel(app) {
 
     private val repo  = (app as NCrawlerApp).repository
     private val prefs = ReaderPrefsStore(app)
+    private val readStore = ReadChaptersStore(app)
     private val TAG   = "NCrawler_Reader"
 
     private val _state = MutableStateFlow<ReaderUiState>(ReaderUiState.Loading)
@@ -84,19 +86,39 @@ class ReaderViewModel(app: Application) : AndroidViewModel(app) {
     private val _chapterList = MutableStateFlow<List<ChapterLink>>(emptyList())
     val chapterList: StateFlow<List<ChapterLink>> = _chapterList.asStateFlow()
 
+    // Chapters actually opened in this novel — drives the TOC's "read" checks
+    // (individual chapters, not "everything before the current one").
+    private val _readChapters = MutableStateFlow<Set<Int>>(emptySet())
+    val readChapters: StateFlow<Set<Int>> = _readChapters.asStateFlow()
+
+    // The novel's own title. The reader uses it to tell a real chapter title
+    // apart from a scraped heading that is just the novel's name.
+    private val _novelTitle = MutableStateFlow("")
+    val novelTitle: StateFlow<String> = _novelTitle.asStateFlow()
+
     private var currentSlug    = ""
     private var currentChapter = 0
     private var swatchesLoadedForSlug = ""
+    private var readLoadedForSlug = ""
 
     fun load(slug: String, chapterNum: Int) {
         currentSlug    = slug
         currentChapter = chapterNum
+
+        // Load this novel's read-set once, before the first chapter lands
+        if (slug != readLoadedForSlug) {
+            readLoadedForSlug = slug
+            _readChapters.value = readStore.getRead(slug)
+        }
+
         viewModelScope.launch {
             _state.value = ReaderUiState.Loading
             _state.value = try {
                 val chapter = repo.downloadChapter(slug, chapterNum)
                 // Auto-save reading progress whenever a chapter loads
                 repo.saveReadingProgress(slug, chapterNum, chapter.title)
+                // Opening a chapter marks it read
+                _readChapters.value = readStore.markRead(slug, chapterNum)
                 ReaderUiState.Success(chapter)
             } catch (e: Exception) {
                 ReaderUiState.Error(e.message ?: "Failed to load chapter")
@@ -115,6 +137,7 @@ class ReaderViewModel(app: Application) : AndroidViewModel(app) {
     private fun loadSwatches(slug: String) {
         viewModelScope.launch {
             val novel = try { repo.getNovel(slug) } catch (e: Exception) { null }
+            _novelTitle.value = novel?.title.orEmpty()
             val cover = novel?.coverUrl.orEmpty()
             _swatches.value = if (cover.isBlank()) defaultSwatches() else computeSwatches(cover)
         }

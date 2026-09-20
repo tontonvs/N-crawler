@@ -811,12 +811,20 @@ private fun RecentlyReadRow(
     }
 }
 
+// CHANGE: the Recently Read card is now 2× its old size (was 140×210dp) and has
+// no glass left on it — no rim border, no frosted footer strip behind the
+// progress, and the "i" badge is a plain dark circle. Everything is derived
+// from RECENT_CARD_SCALE, so resizing it later is a one-number change.
+// Title uses the reader's font (Montserrat).
+private const val RECENT_CARD_SCALE = 2f
+
 @Composable
 private fun RecentCard(
     info: ContinueReadingInfo,
     onOpenReader: () -> Unit,
     onOpenDetail: () -> Unit
 ) {
+    val s = RECENT_CARD_SCALE
     val novel = info.novel
     val progress = (info.progress.lastChapterNum.toFloat() / novel.chapterCount.coerceAtLeast(1))
         .coerceIn(0f, 1f)
@@ -828,11 +836,10 @@ private fun RecentCard(
 
     Box(
         modifier = Modifier
-            .width(140.dp)
-            .height(210.dp)
-            .clip(RoundedCornerShape(16.dp))
+            .width((140 * s).dp)
+            .height((210 * s).dp)
+            .clip(RoundedCornerShape((16 * s).dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
-            .border(1.dp, OnImageGlassBorder, RoundedCornerShape(16.dp))
             .clickable(onClick = onOpenReader)
     ) {
         AsyncImage(
@@ -860,39 +867,30 @@ private fun RecentCard(
         Column(
             modifier            = Modifier
                 .fillMaxSize()
-                .padding(12.dp),
+                .padding((12 * s).dp),
             verticalArrangement = Arrangement.SpaceBetween
         ) {
             // Title — top
             Text(
                 novel.title,
-                style    = MaterialTheme.typography.labelLarge.copy(
-                    fontWeight = FontWeight.ExtraBold,
-                    fontSize   = 13.sp
-                ),
-                color    = Color.White,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                textAlign = TextAlign.Start
+                fontFamily = MontserratFamily,
+                fontWeight = FontWeight.ExtraBold,
+                fontSize   = (13 * s).sp,
+                lineHeight = (17 * s).sp,
+                color      = Color.White,
+                maxLines   = 3,
+                overflow   = TextOverflow.Ellipsis,
+                textAlign  = TextAlign.Start
             )
 
-            // Footer — frosted glass strip over the cover: info badge + chapter
-            // label, then progress bar
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(OnImageGlassFillMd)
-                    .border(1.dp, OnImageGlassBorder, RoundedCornerShape(12.dp))
-                    .padding(horizontal = 8.dp, vertical = 8.dp)
-            ) {
+            // Footer — plain: info badge + chapter label, then progress bar
+            Column {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         modifier = Modifier
-                            .size(24.dp)
+                            .size((24 * s).dp)
                             .clip(CircleShape)
-                            .background(Color.Black.copy(alpha = 0.35f))
-                            .border(1.dp, Color.White.copy(alpha = 0.35f), CircleShape)
+                            .background(Color.Black.copy(alpha = 0.55f))
                             // Nested clickable — consumes the tap here so the
                             // outer card's onOpenReader never fires for this spot.
                             .clickable(onClick = onOpenDetail),
@@ -903,30 +901,30 @@ private fun RecentCard(
                             color      = Color.White,
                             fontWeight = FontWeight.Bold,
                             fontStyle  = androidx.compose.ui.text.font.FontStyle.Italic,
-                            fontSize   = 13.sp
+                            fontSize   = (13 * s).sp
                         )
                     }
-                    Spacer(Modifier.width(8.dp))
+                    Spacer(Modifier.width((8 * s).dp))
                     Text(
                         chapterText,
-                        color    = Color.White.copy(alpha = 0.85f),
-                        fontSize = 11.sp,
+                        color      = Color.White.copy(alpha = 0.85f),
+                        fontSize   = (11 * s).sp,
                         fontWeight = FontWeight.SemiBold
                     )
                 }
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height((8 * s).dp))
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(4.dp)
-                        .clip(RoundedCornerShape(2.dp))
+                        .height((4 * s).dp)
+                        .clip(RoundedCornerShape((2 * s).dp))
                         .background(Color.White.copy(alpha = 0.28f))
                 ) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth(progress)
                             .fillMaxHeight()
-                            .clip(RoundedCornerShape(2.dp))
+                            .clip(RoundedCornerShape((2 * s).dp))
                             .background(Color.White)
                     )
                 }
@@ -1190,22 +1188,21 @@ private fun BrowseSkeleton() {
         )
         Spacer(Modifier.height(24.dp))
 
-        // Recently Read skeleton — label + row of 140x210dp portrait cards
+        // Recently Read skeleton — label + one card at the RecentCard size
+        // (2× now, so a second one wouldn't fit the row anyway)
         SkeletonLabel(shimmer, width = 130.dp)
         Spacer(Modifier.height(14.dp))
         Row(
             Modifier.padding(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            repeat(2) {
-                Box(
-                    Modifier
-                        .width(140.dp)
-                        .height(210.dp)
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(shimmer)
-                )
-            }
+            Box(
+                Modifier
+                    .width((140 * RECENT_CARD_SCALE).dp)
+                    .height((210 * RECENT_CARD_SCALE).dp)
+                    .clip(RoundedCornerShape((16 * RECENT_CARD_SCALE).dp))
+                    .background(shimmer)
+            )
         }
         Spacer(Modifier.height(24.dp))
 
@@ -1249,7 +1246,7 @@ private fun BrowseSkeleton() {
                             .background(shimmer)
                     ) {
                         Spacer(Modifier.fillMaxWidth().height(130.dp))
-                        Spacer(Modifier.height(76.dp))
+                        Spacer(Modifier.height(48.dp))
                     }
                 }
             }
