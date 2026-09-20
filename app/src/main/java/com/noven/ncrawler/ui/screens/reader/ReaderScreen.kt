@@ -1,5 +1,6 @@
 package com.noven.ncrawler.ui.screens.reader
 
+import android.provider.Settings
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
@@ -29,7 +30,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalAccessibilityManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -49,6 +51,7 @@ import com.noven.ncrawler.viewmodel.ReaderSwatch
 import com.noven.ncrawler.viewmodel.ReaderTextAlign
 import com.noven.ncrawler.viewmodel.ReaderUiState
 import com.noven.ncrawler.viewmodel.ReaderViewModel
+import kotlinx.coroutines.launch
 import kotlin.math.cos
 import kotlin.math.roundToInt
 import kotlin.math.sin
@@ -598,11 +601,26 @@ private fun DraggableSettingsSheet(
     onIncreaseFont: () -> Unit,
     onSetAlign: (ReaderTextAlign) -> Unit
 ) {
-    val accessibilityManager = LocalAccessibilityManager.current
-    val reducedMotion = accessibilityManager?.isEnabled == true
+    // FIX: Compose's AccessibilityManager has no `isEnabled` (and "any
+    // accessibility service on" isn't "reduced motion" anyway). Android's
+    // real signal is the system animator scale — "Remove animations" in
+    // Accessibility (or Developer options) sets it to 0.
+    val context = LocalContext.current
+    val reducedMotion = remember(context) {
+        Settings.Global.getFloat(
+            context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f
+        ) == 0f
+    }
+
+    // FIX: the sheet now STARTS off-screen (Animatable's initial value) instead
+    // of starting at 0 and being snapped down in LaunchedEffect — that left one
+    // frame with the sheet fully visible before it jumped away and slid in.
+    // 640.dp (converted to px) always clears the sheet, unlike the old flat
+    // 1000px, which on dense screens was shorter than the sheet itself.
+    val startOffsetPx = with(LocalDensity.current) { 640.dp.toPx() }
 
     // Animate the sheet's vertical offset via Animatable for smooth snap-back
-    val offsetY  = remember { Animatable(0f) }
+    val offsetY  = remember { Animatable(if (reducedMotion) 0f else startOffsetPx) }
     val scope    = androidx.compose.runtime.rememberCoroutineScope()
     var isDragging   by remember { mutableStateOf(false) }
     var handleHeld   by remember { mutableStateOf(false) }
@@ -614,7 +632,6 @@ private fun DraggableSettingsSheet(
     // Enter animation — sheet slides up from bottom on first composition
     LaunchedEffect(Unit) {
         if (!reducedMotion) {
-            offsetY.snapTo(1000f)
             offsetY.animateTo(
                 targetValue    = 0f,
                 animationSpec  = tween(320, easing = FastOutSlowInEasing)
