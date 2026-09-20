@@ -204,8 +204,9 @@ private fun DownloadTrayIcon(modifier: Modifier = Modifier, tint: Color = Color.
 }
 
 // ── Search Overlay ────────────────────────────────────────────────────────────
-// Opened from the bottom nav's Search icon — full-screen, autofocused field,
-// recent searches (max 5) when empty, live results once typing, X to close.
+// Opened from the search FAB in the floating nav — full-screen, autofocused
+// field, recent searches (max 5, each a rounded rectangle with its own "x") when
+// empty, live results once typing, X to close. All text is Montserrat.
 @Composable
 fun SearchOverlay(
     vm: BrowseViewModel,
@@ -219,6 +220,10 @@ fun SearchOverlay(
     val focusManager    = LocalFocusManager.current
     val keyboard        = LocalSoftwareKeyboardController.current
     val focusRequester   = remember { FocusRequester() }
+
+    // The field's thick border + search glyph are black in light mode; black on
+    // the dark background would disappear, so dark mode uses the text colour.
+    val fieldInk = if (isSystemInDarkTheme()) MaterialTheme.colorScheme.onSurface else Color.Black
 
     // Autofocus + open the keyboard the moment the overlay appears
     LaunchedEffect(Unit) {
@@ -246,7 +251,7 @@ fun SearchOverlay(
                 Box(
                     modifier = Modifier
                         .weight(1f)
-                        .border(2.5.dp, Color.Black, RoundedCornerShape(16.dp))
+                        .border(2.5.dp, fieldInk, RoundedCornerShape(16.dp))
                 ) {
                     TextField(
                         value         = query,
@@ -266,7 +271,7 @@ fun SearchOverlay(
                             // Filled, solid glyph — TikTok-style, not the
                             // softer Rounded family used elsewhere.
                             Icon(Icons.Filled.Search, contentDescription = null,
-                                tint = Color.Black)
+                                tint = fieldInk)
                         },
                         textStyle = LocalTextStyle.current.copy(
                             fontFamily = MontserratFamily,
@@ -305,52 +310,59 @@ fun SearchOverlay(
 
             if (query.isBlank()) {
                 // ── Recent searches (max 5) ─────────────────────────────────
+                // CHANGE: each recent search is now its own rounded rectangle —
+                // the term, and an "x" to remove it — instead of a plain list row
+                // with a clock icon. Tapping the rectangle runs the search again.
+                // Solid surface + outline so it reads in both light and dark mode.
+                // Montserrat (the reader/detail font) throughout; the old
+                // "deliberately not Montserrat" row font is gone.
                 if (recentSearches.isNotEmpty()) {
                     Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
                         Text(
                             "Recent Searches",
-                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            fontFamily = MontserratFamily,
+                            fontWeight = FontWeight.Bold,
+                            fontSize   = 14.sp,
+                            color      = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        Spacer(Modifier.height(8.dp))
-                        recentSearches.take(5).forEach { term ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .clickable { vm.onQueryChange(term) }
-                                    .padding(vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                // Filled clock icon — same solid-glyph language
-                                // as the search icon above.
-                                Icon(
-                                    Icons.Filled.History,
-                                    contentDescription = null,
-                                    tint     = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                                Spacer(Modifier.width(10.dp))
-                                Text(
-                                    term,
-                                    // Deliberately NOT Montserrat — a second,
-                                    // distinct font from the bold search-bar
-                                    // text, and bigger than the old bodyMedium.
-                                    fontFamily = FontFamily.Default,
-                                    fontSize   = 17.sp,
-                                    color      = MaterialTheme.colorScheme.onSurface,
-                                    modifier   = Modifier.weight(1f)
-                                )
-                                IconButton(
-                                    onClick  = { vm.removeRecentSearch(term) },
-                                    modifier = Modifier.size(32.dp)
+                        Spacer(Modifier.height(10.dp))
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            recentSearches.take(5).forEach { term ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(16.dp))
+                                        .background(MaterialTheme.colorScheme.surface)
+                                        .border(
+                                            1.5.dp,
+                                            MaterialTheme.colorScheme.outline,
+                                            RoundedCornerShape(16.dp)
+                                        )
+                                        .clickable { vm.onQueryChange(term) }
+                                        .padding(start = 16.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Icon(
-                                        Icons.Filled.Close,
-                                        contentDescription = "Remove \"$term\" from recent searches",
-                                        tint     = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.size(16.dp)
+                                    Text(
+                                        term,
+                                        fontFamily = MontserratFamily,
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize   = 16.sp,
+                                        color      = MaterialTheme.colorScheme.onSurface,
+                                        maxLines   = 1,
+                                        overflow   = TextOverflow.Ellipsis,
+                                        modifier   = Modifier.weight(1f)
                                     )
+                                    IconButton(
+                                        onClick  = { vm.removeRecentSearch(term) },
+                                        modifier = Modifier.size(40.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Filled.Close,
+                                            contentDescription = "Remove \"$term\" from recent searches",
+                                            tint     = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -359,8 +371,9 @@ fun SearchOverlay(
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text(
                             "Search for a novel by title",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            fontFamily = MontserratFamily,
+                            fontSize   = 15.sp,
+                            color      = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
@@ -1135,7 +1148,11 @@ private fun SearchContent(
         is BrowseUiState.Loading -> SearchSkeleton()
         is BrowseUiState.Empty   -> SearchEmpty(query)
         is BrowseUiState.Error   -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-            Text(state.message, color = MaterialTheme.colorScheme.error)
+            Text(
+                state.message,
+                fontFamily = MontserratFamily,
+                color      = MaterialTheme.colorScheme.error
+            )
         }
         is BrowseUiState.Success -> LazyColumn(
             contentPadding      = PaddingValues(16.dp),
@@ -1177,17 +1194,21 @@ private fun SearchRow(novel: NovelEntity, onClick: () -> Unit) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 novel.title,
-                style    = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                color    = MaterialTheme.colorScheme.onBackground
+                fontFamily = MontserratFamily,
+                fontWeight = FontWeight.SemiBold,
+                fontSize   = 15.sp,
+                lineHeight = 20.sp,
+                maxLines   = 2,
+                overflow   = TextOverflow.Ellipsis,
+                color      = MaterialTheme.colorScheme.onBackground
             )
             if (novel.genres.isNotBlank()) {
                 Spacer(Modifier.height(3.dp))
                 Text(
                     novel.genres.split(",").take(2).joinToString(" · "),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    fontFamily = MontserratFamily,
+                    fontSize   = 12.sp,
+                    color      = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }
@@ -1346,8 +1367,9 @@ private fun SearchEmpty(query: String) {
             Spacer(Modifier.height(12.dp))
             Text(
                 "No results for \"$query\"",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.bodyMedium
+                fontFamily = MontserratFamily,
+                fontSize   = 15.sp,
+                color      = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }
