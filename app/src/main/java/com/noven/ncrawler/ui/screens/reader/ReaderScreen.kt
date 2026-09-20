@@ -1,16 +1,21 @@
 package com.noven.ncrawler.ui.screens.reader
 
 import android.provider.Settings
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -28,16 +33,25 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -208,19 +222,21 @@ fun ReaderScreen(
             )
         }
 
-        // ── TOC drawer ────────────────────────────────────────────────────
-        AnimatedVisibility(
-            visible  = showToc,
-            enter    = fadeIn() + slideInVertically(initialOffsetY = { it }),
-            exit     = fadeOut() + slideOutVertically(targetOffsetY = { it }),
-            modifier = Modifier.fillMaxSize()
-        ) {
-            ChapterTocDrawer(
-                chapters   = chapterList,
-                currentNum = vm.currentChapterNum,
-                onSelect   = { num -> vm.jumpTo(num); showToc = false },
-                onClose    = { showToc = false }
-            )
+        // ── TOC sheet — same chrome as the settings sheet (drag handle,
+        // slide-up/slide-down animation, drag-to-dismiss), just taller. No
+        // close button: drag the dash down, tap outside, or press back.
+        if (showToc) {
+            ReaderSheet(
+                accent         = accent,
+                onDismiss      = { showToc = false },
+                heightFraction = 0.85f
+            ) { dismiss ->
+                ChapterTocContent(
+                    chapters   = chapterList,
+                    currentNum = vm.currentChapterNum,
+                    onSelect   = { num -> vm.jumpTo(num); dismiss() }
+                )
+            }
         }
 
         // ── Audio overlay ─────────────────────────────────────────────────
@@ -580,26 +596,40 @@ private fun ChapterNavBar(
     }
 }
 
-// ── Draggable settings sheet (change 7) ──────────────────────────────────────
-// Motion weighting: Jakub primary (mobile consumer app).
-// Enter: slideInVertically upward + fadeIn, 320ms FastOutSlowInEasing.
-// Exit: slideOutVertically downward, 260ms. Subtler exit per Jakub.
-// Drag: direct transform update (no CSS variable cascade). Velocity-based
-// dismissal (>0.3 px/ms threshold). Handle colour changes on press.
-// prefers-reduced-motion: when accessibility service flags reduced motion,
-// skip slide animations — instant show/hide only.
+// Sheet + TOC palette. Every TOC text colour is picked *against the surface it
+// sits on* (see onColorFor) instead of a fixed grey / the adaptive swatch
+// accent — the accent could land on nearly the same tone as the sheet.
+private val SheetCream   = Color(0xFFF5F0EA)   // surface shared by settings + TOC sheets
+private val TocInk       = Color(0xFF1A1714)
+private val TocPaper     = Color(0xFFFAF6F0)
+private val TocReadBg    = Color(0xFFEDE7DF)
+private val TocReadGreen = Color(0xFF2E7D32)
+
+// Ink on light surfaces, paper on dark ones. 0.179 is the WCAG luminance at
+// which black and white text have equal contrast, so this always picks the
+// better of the two.
+private fun onColorFor(background: Color): Color =
+    if (background.luminance() > 0.179f) TocInk else TocPaper
+
+// ── Shared bottom-sheet chrome (settings + table of contents) ────────────────
+// One implementation of the drag-handle sheet so the TOC is *exactly* the
+// settings menu's look and motion, just taller (heightFraction). Motion
+// weighting: Jakub primary (mobile consumer app).
+// Enter: slides up from below the screen, 320ms FastOutSlowInEasing.
+// Exit: slides back down, 260ms, then calls onDismiss — every dismiss path
+// (scrim tap, drag past the threshold, back press, content calling dismiss())
+// goes through the same animated exit.
+// Drag: direct transform update on the handle; velocity-based dismissal
+// (>0.3 px/ms) or >120px dragged. Handle colour changes on press.
+// Reduced motion (system "Remove animations"): no slide, instant show/hide.
+// heightFraction == null → wraps its content (settings); otherwise fixed to
+// that fraction of the screen height (TOC).
 @Composable
-private fun DraggableSettingsSheet(
-    fg: Color,
+private fun ReaderSheet(
     accent: Color,
-    settings: ReaderSettings,
-    swatches: List<ReaderSwatch>,
     onDismiss: () -> Unit,
-    onBrightness: (Float) -> Unit,
-    onSelectSwatch: (Int) -> Unit,
-    onDecreaseFont: () -> Unit,
-    onIncreaseFont: () -> Unit,
-    onSetAlign: (ReaderTextAlign) -> Unit
+    heightFraction: Float? = null,
+    content: @Composable ColumnScope.(dismiss: () -> Unit) -> Unit
 ) {
     // FIX: Compose's AccessibilityManager has no `isEnabled` (and "any
     // accessibility service on" isn't "reduced motion" anyway). Android's
@@ -612,24 +642,48 @@ private fun DraggableSettingsSheet(
         ) == 0f
     }
 
-    // FIX: the sheet now STARTS off-screen (Animatable's initial value) instead
-    // of starting at 0 and being snapped down in LaunchedEffect — that left one
+    // FIX: the sheet STARTS off-screen (Animatable's initial value) instead of
+    // starting at 0 and being snapped down in LaunchedEffect — that left one
     // frame with the sheet fully visible before it jumped away and slid in.
-    // 640.dp (converted to px) always clears the sheet, unlike the old flat
-    // 1000px, which on dense screens was shorter than the sheet itself.
-    val startOffsetPx = with(LocalDensity.current) { 640.dp.toPx() }
+    // The wrap-content sheet uses 640.dp (always clears it); the tall sheet
+    // uses the full screen height so it clears itself too.
+    val density       = LocalDensity.current
+    val configuration = LocalConfiguration.current
+    val hiddenPx = with(density) {
+        (if (heightFraction == null) 640.dp else configuration.screenHeightDp.dp).toPx()
+    }
 
     // Animate the sheet's vertical offset via Animatable for smooth snap-back
-    val offsetY  = remember { Animatable(if (reducedMotion) 0f else startOffsetPx) }
+    val offsetY  = remember { Animatable(if (reducedMotion) 0f else hiddenPx) }
     val scope    = androidx.compose.runtime.rememberCoroutineScope()
-    var isDragging   by remember { mutableStateOf(false) }
     var handleHeld   by remember { mutableStateOf(false) }
+    var dismissing   by remember { mutableStateOf(false) }
 
     // Track drag velocity for threshold dismissal
     var lastDragTime by remember { mutableStateOf(0L) }
     var lastDragY    by remember { mutableStateOf(0f) }
 
-    // Enter animation — sheet slides up from bottom on first composition
+    // Animated exit, then tell the host to remove the sheet. Guarded so a
+    // second tap / drag-end during the 260ms exit can't start it twice.
+    val dismiss: () -> Unit = {
+        if (!dismissing) {
+            dismissing = true
+            scope.launch {
+                if (!reducedMotion) {
+                    offsetY.animateTo(hiddenPx, tween(260, easing = FastOutLinearInEasing))
+                }
+                onDismiss()
+            }
+        }
+    }
+    // The drag handler below lives in pointerInput(Unit) and would otherwise
+    // keep the first composition's `dismiss` forever.
+    val currentDismiss by rememberUpdatedState(dismiss)
+
+    // Back closes the sheet (animated) instead of leaving the reader.
+    BackHandler(onBack = dismiss)
+
+    // Enter animation — sheet slides up from below on first composition
     LaunchedEffect(Unit) {
         if (!reducedMotion) {
             offsetY.animateTo(
@@ -639,6 +693,8 @@ private fun DraggableSettingsSheet(
         }
     }
 
+    val fillHeight = if (heightFraction != null) Modifier.fillMaxHeight() else Modifier
+
     // Scrim — tapping outside dismisses
     Box(
         modifier = Modifier
@@ -646,13 +702,14 @@ private fun DraggableSettingsSheet(
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication        = null,
-                onClick           = onDismiss
+                onClick           = dismiss
             )
     ) {
         // Sheet — anchored to bottom, consumes clicks so they don't reach scrim
         Box(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
+                .then(if (heightFraction != null) Modifier.fillMaxHeight(heightFraction) else Modifier)
                 .offset { IntOffset(x = 0, y = offsetY.value.roundToInt()) }
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
@@ -661,14 +718,18 @@ private fun DraggableSettingsSheet(
                 )
         ) {
             Surface(
-                modifier        = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                modifier        = Modifier
+                    .fillMaxWidth()
+                    .then(fillHeight)
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
                 shape           = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
-                color           = Color(0xFFF5F0EA),
+                color           = SheetCream,
                 shadowElevation = 16.dp
             ) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .then(fillHeight)
                         .navigationBarsPadding()
                         .padding(horizontal = 20.dp)
                 ) {
@@ -681,18 +742,16 @@ private fun DraggableSettingsSheet(
                                 detectVerticalDragGestures(
                                     onDragStart = {
                                         handleHeld   = true
-                                        isDragging   = true
                                         lastDragTime = System.currentTimeMillis()
                                         lastDragY    = offsetY.value
                                     },
                                     onDragEnd = {
                                         handleHeld = false
-                                        isDragging = false
                                         val elapsed  = (System.currentTimeMillis() - lastDragTime).coerceAtLeast(1)
                                         val velocity = (offsetY.value - lastDragY) / elapsed
                                         if (offsetY.value > 120f || velocity > 0.3f) {
                                             // Fast downward flick or dragged far enough → dismiss
-                                            onDismiss()
+                                            currentDismiss()
                                         } else {
                                             // Snap back up
                                             scope.launch {
@@ -705,7 +764,6 @@ private fun DraggableSettingsSheet(
                                     },
                                     onDragCancel = {
                                         handleHeld = false
-                                        isDragging = false
                                         scope.launch {
                                             offsetY.animateTo(0f, spring())
                                         }
@@ -735,96 +793,116 @@ private fun DraggableSettingsSheet(
                         )
                     }
 
-                    Text(
-                        "READER SETTINGS",
-                        fontFamily    = MontserratFamily,
-                        fontWeight    = FontWeight.ExtraBold,
-                        fontSize      = 12.sp,
-                        letterSpacing = 1.sp,
-                        color         = Color(0xFF1A1714),
-                        modifier      = Modifier.padding(bottom = 18.dp)
-                    )
-
-                    // Brightness
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier          = Modifier.padding(bottom = 20.dp)
-                    ) {
-                        Icon(Icons.Default.LightMode, null, tint = Color(0xFF6B6259), modifier = Modifier.size(18.dp))
-                        Slider(
-                            value         = settings.brightness,
-                            onValueChange = onBrightness,
-                            valueRange    = 0f..0.7f,
-                            modifier      = Modifier.weight(1f).padding(horizontal = 12.dp),
-                            colors = SliderDefaults.colors(
-                                thumbColor         = Color.White,
-                                activeTrackColor   = Color(0xFF2D2420),
-                                inactiveTrackColor = Color(0xFFDCD5CB)
-                            )
-                        )
-                        Icon(Icons.Default.LightMode, null, tint = Color(0xFF1A1714), modifier = Modifier.size(26.dp))
-                    }
-
-                    // Theme swatches
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.fillMaxWidth().padding(bottom = 20.dp)
-                    ) {
-                        swatches.forEachIndexed { index, swatch ->
-                            val selected = index == settings.swatchIndex
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .height(48.dp)
-                                    .clip(RoundedCornerShape(16.dp))
-                                    .background(swatch.background)
-                                    .border(
-                                        width = if (selected) 2.5.dp else 0.dp,
-                                        color = if (selected) Color(0xFF1A1714) else Color.Transparent,
-                                        shape = RoundedCornerShape(16.dp)
-                                    )
-                                    .shadow(if (selected) 4.dp else 0.dp, RoundedCornerShape(16.dp))
-                                    .clickable { onSelectSwatch(index) }
-                            )
-                        }
-                    }
-
-                    // Font size
-                    Row(
-                        modifier              = Modifier.fillMaxWidth().padding(bottom = 20.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment     = Alignment.CenterVertically
-                    ) {
-                        FontSizeButton("–", onDecreaseFont)
-                        Box(
-                            Modifier
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(Color(0xFFEDE7DF))
-                                .padding(horizontal = 28.dp, vertical = 10.dp)
-                        ) {
-                            Text(
-                                settings.fontSize.toInt().toString(),
-                                fontFamily = MontserratFamily,
-                                fontWeight = FontWeight.ExtraBold,
-                                fontSize   = 20.sp,
-                                color      = Color(0xFF1A1714)
-                            )
-                        }
-                        FontSizeButton("+", onIncreaseFont)
-                    }
-
-                    // Text alignment
-                    Row(
-                        modifier              = Modifier.fillMaxWidth().padding(bottom = 12.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        AlignButton(Icons.Filled.FormatAlignLeft,    settings.textAlign == ReaderTextAlign.LEFT)    { onSetAlign(ReaderTextAlign.LEFT) }
-                        AlignButton(Icons.Filled.FormatAlignCenter,  settings.textAlign == ReaderTextAlign.CENTER)  { onSetAlign(ReaderTextAlign.CENTER) }
-                        AlignButton(Icons.Filled.FormatAlignRight,   settings.textAlign == ReaderTextAlign.RIGHT)   { onSetAlign(ReaderTextAlign.RIGHT) }
-                        AlignButton(Icons.Filled.FormatAlignJustify, settings.textAlign == ReaderTextAlign.JUSTIFY) { onSetAlign(ReaderTextAlign.JUSTIFY) }
-                    }
+                    this.content(dismiss)
                 }
             }
+        }
+    }
+}
+
+// ── Draggable settings sheet (change 7) ──────────────────────────────────────
+// Now just the settings content inside the shared ReaderSheet chrome above.
+@Composable
+private fun DraggableSettingsSheet(
+    fg: Color,
+    accent: Color,
+    settings: ReaderSettings,
+    swatches: List<ReaderSwatch>,
+    onDismiss: () -> Unit,
+    onBrightness: (Float) -> Unit,
+    onSelectSwatch: (Int) -> Unit,
+    onDecreaseFont: () -> Unit,
+    onIncreaseFont: () -> Unit,
+    onSetAlign: (ReaderTextAlign) -> Unit
+) {
+    ReaderSheet(accent = accent, onDismiss = onDismiss) { _ ->
+        Text(
+            "READER SETTINGS",
+            fontFamily    = MontserratFamily,
+            fontWeight    = FontWeight.ExtraBold,
+            fontSize      = 12.sp,
+            letterSpacing = 1.sp,
+            color         = Color(0xFF1A1714),
+            modifier      = Modifier.padding(bottom = 18.dp)
+        )
+
+        // Brightness
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier          = Modifier.padding(bottom = 20.dp)
+        ) {
+            Icon(Icons.Default.LightMode, null, tint = Color(0xFF6B6259), modifier = Modifier.size(18.dp))
+            Slider(
+                value         = settings.brightness,
+                onValueChange = onBrightness,
+                valueRange    = 0f..0.7f,
+                modifier      = Modifier.weight(1f).padding(horizontal = 12.dp),
+                colors = SliderDefaults.colors(
+                    thumbColor         = Color.White,
+                    activeTrackColor   = Color(0xFF2D2420),
+                    inactiveTrackColor = Color(0xFFDCD5CB)
+                )
+            )
+            Icon(Icons.Default.LightMode, null, tint = Color(0xFF1A1714), modifier = Modifier.size(26.dp))
+        }
+
+        // Theme swatches
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth().padding(bottom = 20.dp)
+        ) {
+            swatches.forEachIndexed { index, swatch ->
+                val selected = index == settings.swatchIndex
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(swatch.background)
+                        .border(
+                            width = if (selected) 2.5.dp else 0.dp,
+                            color = if (selected) Color(0xFF1A1714) else Color.Transparent,
+                            shape = RoundedCornerShape(16.dp)
+                        )
+                        .shadow(if (selected) 4.dp else 0.dp, RoundedCornerShape(16.dp))
+                        .clickable { onSelectSwatch(index) }
+                )
+            }
+        }
+
+        // Font size
+        Row(
+            modifier              = Modifier.fillMaxWidth().padding(bottom = 20.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment     = Alignment.CenterVertically
+        ) {
+            FontSizeButton("–", onDecreaseFont)
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color(0xFFEDE7DF))
+                    .padding(horizontal = 28.dp, vertical = 10.dp)
+            ) {
+                Text(
+                    settings.fontSize.toInt().toString(),
+                    fontFamily = MontserratFamily,
+                    fontWeight = FontWeight.ExtraBold,
+                    fontSize   = 20.sp,
+                    color      = Color(0xFF1A1714)
+                )
+            }
+            FontSizeButton("+", onIncreaseFont)
+        }
+
+        // Text alignment
+        Row(
+            modifier              = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            AlignButton(Icons.Filled.FormatAlignLeft,    settings.textAlign == ReaderTextAlign.LEFT)    { onSetAlign(ReaderTextAlign.LEFT) }
+            AlignButton(Icons.Filled.FormatAlignCenter,  settings.textAlign == ReaderTextAlign.CENTER)  { onSetAlign(ReaderTextAlign.CENTER) }
+            AlignButton(Icons.Filled.FormatAlignRight,   settings.textAlign == ReaderTextAlign.RIGHT)   { onSetAlign(ReaderTextAlign.RIGHT) }
+            AlignButton(Icons.Filled.FormatAlignJustify, settings.textAlign == ReaderTextAlign.JUSTIFY) { onSetAlign(ReaderTextAlign.JUSTIFY) }
         }
     }
 }
@@ -855,144 +933,241 @@ private fun AlignButton(
     }
 }
 
-// ── Table of contents drawer ─────────────────────────────────────────────────
-// Changes: sort toggle (asc/desc by chapter number) + read/current indicators.
+// ── Table of contents (content of the shared ReaderSheet) ───────────────────
 // "Read" = chapter.num < currentNum (linear reading assumption).
-// "Current" = chapter.num == currentNum (existing "Reading" badge).
+// "Current" = chapter.num == currentNum (the "Reading" badge).
+// Opens already scrolled to the chapter being read; flipping the sort order
+// glides the list back to the top so the change is visible.
 @Composable
-private fun ChapterTocDrawer(
+private fun ColumnScope.ChapterTocContent(
     chapters: List<ChapterLink>,
     currentNum: Int,
-    onSelect: (Int) -> Unit,
-    onClose: () -> Unit
+    onSelect: (Int) -> Unit
 ) {
     var sortAscending by remember { mutableStateOf(true) }
+    val listState = rememberLazyListState()
 
-    Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFFF5F0EA)) {
-        Column(Modifier.fillMaxSize().statusBarsPadding()) {
+    // distinctBy: a repeated chapter number in the scraped list would show the
+    // same row twice (and would crash a keyed list).
+    val sorted = remember(chapters, sortAscending) {
+        val unique = chapters.distinctBy { it.num }
+        if (sortAscending) unique.sortedBy { it.num } else unique.sortedByDescending { it.num }
+    }
 
-            // Header row: title | sort button | close
-            Row(
-                modifier              = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment     = Alignment.CenterVertically
-            ) {
-                Text(
-                    "Table of Contents",
-                    fontFamily = MontserratFamily,
-                    fontWeight = FontWeight.ExtraBold,
-                    fontSize   = 18.sp,
-                    color      = Color(0xFF1A1714)
-                )
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    // Sort toggle
-                    IconButton(onClick = { sortAscending = !sortAscending }) {
-                        Icon(
-                            if (sortAscending) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowUp,
-                            contentDescription = if (sortAscending) "Sort descending" else "Sort ascending",
-                            tint = Color(0xFF6B6259)
-                        )
-                    }
-                    IconButton(onClick = onClose) {
-                        Icon(Icons.Default.Close, "Close", tint = Color(0xFF9C9188))
-                    }
+    // Auto-scroll to the chapter being read, once, as soon as the list exists
+    // (the chapter list loads separately from the sheet opening). Instant, not
+    // animated: from chapter 1 to chapter 2000 an animation would be a blur.
+    // Lands 3 rows below the top so there's context above the current row.
+    var positioned by remember { mutableStateOf(false) }
+    LaunchedEffect(sorted.isNotEmpty()) {
+        if (sorted.isNotEmpty() && !positioned) {
+            positioned = true
+            val index = sorted.indexOfFirst { it.num == currentNum }
+            listState.scrollToItem((index - 3).coerceAtLeast(0))
+        }
+    }
+
+    // Sort flipped → glide to the top. Skips the first run (that's just the
+    // sheet opening, and it must stay on the current chapter).
+    var sortSeen by remember { mutableStateOf(false) }
+    LaunchedEffect(sortAscending) {
+        if (!sortSeen) sortSeen = true else smoothScrollToTop(listState)
+    }
+
+    // Header: title | sort pill (no close button — drag the handle, tap
+    // outside, or press back)
+    Row(
+        modifier              = Modifier.fillMaxWidth().padding(bottom = 14.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment     = Alignment.CenterVertically
+    ) {
+        Text(
+            "TABLE OF CONTENTS",
+            fontFamily    = MontserratFamily,
+            fontWeight    = FontWeight.ExtraBold,
+            fontSize      = 12.sp,
+            letterSpacing = 1.sp,
+            color         = TocInk
+        )
+        SortPill(ascending = sortAscending, onClick = { sortAscending = !sortAscending })
+    }
+
+    HorizontalDivider(color = Color(0xFFE3DCD2))
+
+    if (sorted.isEmpty()) {
+        Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator(color = Color(0xFF3C1D18))
+        }
+    } else {
+        LazyColumn(
+            state          = listState,
+            modifier       = Modifier.fillMaxWidth().weight(1f),
+            contentPadding = PaddingValues(vertical = 12.dp)
+        ) {
+            // No `key` on purpose: with keys, LazyColumn re-anchors to the row
+            // that WAS at the top after the sort flips — i.e. it would leap to
+            // the far end of a 2000-chapter list before our glide-to-top runs.
+            // Rows hold no state, so index-based reuse costs nothing.
+            items(sorted) { chapter ->
+                val isCurrent = chapter.num == currentNum
+                val isRead    = chapter.num < currentNum
+
+                // The surface this row actually sits on — text colours below
+                // are derived from it, so they always counter the background.
+                val rowBg = when {
+                    isCurrent -> TocInk
+                    isRead    -> TocReadBg
+                    else      -> SheetCream
                 }
-            }
+                val onRow = onColorFor(rowBg)
 
-            HorizontalDivider(color = Color(0xFFE3DCD2))
-
-            if (chapters.isEmpty()) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = Color(0xFF3C1D18))
-                }
-            } else {
-                val sorted = remember(chapters, sortAscending) {
-                    if (sortAscending) chapters.sortedBy { it.num }
-                    else               chapters.sortedByDescending { it.num }
-                }
-
-                LazyColumn(
-                    modifier       = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 6.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(if (isCurrent || isRead) rowBg else Color.Transparent)
+                        .clickable { onSelect(chapter.num) }
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment     = Alignment.CenterVertically
                 ) {
-                    items(sorted, key = { it.num }) { chapter ->
-                        val isCurrent = chapter.num == currentNum
-                        val isRead    = chapter.num < currentNum
-
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(bottom = 6.dp)
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(
-                                    when {
-                                        isCurrent -> Color(0xFF1A1714)
-                                        isRead    -> Color(0xFFEDE7DF)
-                                        else      -> Color.Transparent
-                                    }
-                                )
-                                .clickable { onSelect(chapter.num) }
-                                .padding(horizontal = 16.dp, vertical = 14.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment     = Alignment.CenterVertically
-                        ) {
-                            // Chapter number badge
-                            Text(
-                                "Ch.${chapter.num}",
-                                fontFamily = MontserratFamily,
-                                fontWeight = FontWeight.ExtraBold,
-                                fontSize   = 10.sp,
-                                color      = when {
-                                    isCurrent -> Color.White
-                                    isRead    -> Color(0xFF9C9188)
-                                    else      -> Color(0xFF9C9188)
-                                },
-                                modifier   = Modifier.padding(end = 10.dp)
-                            )
-                            // Title — takes available space
-                            Text(
-                                chapter.title,
-                                fontFamily = MontserratFamily,
-                                fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
-                                fontSize   = 14.sp,
-                                color      = when {
-                                    isCurrent -> Color.White
-                                    isRead    -> Color(0xFF9C9188)
-                                    else      -> Color(0xFF1A1714)
-                                },
-                                maxLines   = 1,
-                                overflow   = TextOverflow.Ellipsis,
-                                modifier   = Modifier.weight(1f)
-                            )
-                            // Right badge
-                            when {
-                                isCurrent -> {
-                                    Spacer(Modifier.width(8.dp))
-                                    Box(
-                                        Modifier
-                                            .clip(RoundedCornerShape(50))
-                                            .background(Color.White.copy(alpha = 0.2f))
-                                            .padding(horizontal = 10.dp, vertical = 4.dp)
-                                    ) {
-                                        Text("Reading", fontFamily = MontserratFamily, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
-                                    }
-                                }
-                                isRead -> {
-                                    Spacer(Modifier.width(8.dp))
-                                    Icon(
-                                        Icons.Default.Check,
-                                        contentDescription = "Read",
-                                        tint     = Color(0xFF9C9188),
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                }
+                    // Chapter number — full-contrast ink/paper, 12sp (was a
+                    // 10sp grey that nearly vanished on the read-row tint)
+                    Text(
+                        "Ch.${chapter.num}",
+                        fontFamily = MontserratFamily,
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize   = 12.sp,
+                        color      = onRow,
+                        maxLines   = 1,
+                        modifier   = Modifier.padding(end = 10.dp)
+                    )
+                    // Title — takes available space. Read titles are muted but
+                    // stay above AA contrast (the old grey was ~2.4:1).
+                    Text(
+                        chapter.title,
+                        fontFamily = MontserratFamily,
+                        fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
+                        fontSize   = 14.sp,
+                        color      = if (isRead) Color(0xFF6B6259) else onRow,
+                        maxLines   = 1,
+                        overflow   = TextOverflow.Ellipsis,
+                        modifier   = Modifier.weight(1f)
+                    )
+                    // Right badge
+                    when {
+                        isCurrent -> {
+                            Spacer(Modifier.width(8.dp))
+                            Box(
+                                Modifier
+                                    .clip(RoundedCornerShape(50))
+                                    .background(onRow.copy(alpha = 0.2f))
+                                    .padding(horizontal = 10.dp, vertical = 4.dp)
+                            ) {
+                                Text("Reading", fontFamily = MontserratFamily, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = onRow)
                             }
+                        }
+                        isRead -> {
+                            Spacer(Modifier.width(8.dp))
+                            ThickCheck(color = TocReadGreen)
                         }
                     }
                 }
             }
         }
     }
+}
+
+// Sort button — a labelled pill with a swap icon that flips 180° when the
+// order changes (replaces the bare chevron, which read as "expand/collapse").
+@Composable
+private fun SortPill(ascending: Boolean, onClick: () -> Unit) {
+    val rotation by animateFloatAsState(
+        targetValue   = if (ascending) 0f else 180f,
+        animationSpec = tween(320, easing = FastOutSlowInEasing),
+        label         = "sortRotation"
+    )
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(TocReadBg)
+            .border(1.dp, Color(0xFFDCD5CB), RoundedCornerShape(50))
+            .clickable(onClickLabel = "Reverse chapter order", onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            Icons.Default.SwapVert,
+            contentDescription = null,
+            tint     = TocInk,
+            modifier = Modifier
+                .size(18.dp)
+                .graphicsLayer { rotationZ = rotation }
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(
+            if (ascending) "Oldest first" else "Newest first",
+            fontFamily = MontserratFamily,
+            fontWeight = FontWeight.Bold,
+            fontSize   = 12.sp,
+            color      = TocInk
+        )
+    }
+}
+
+// Hand-drawn check so the stroke width is exact: 5dp, round caps, in a 24dp box
+// (the Material check icon is fixed-weight and can't be thickened).
+@Composable
+private fun ThickCheck(
+    color: Color,
+    modifier: Modifier = Modifier,
+    boxSize: Dp = 24.dp,
+    strokeWidth: Dp = 5.dp
+) {
+    Canvas(
+        modifier = modifier
+            .size(boxSize)
+            .semantics { contentDescription = "Read" }
+    ) {
+        val w = size.width
+        val h = size.height
+        val check = Path().apply {
+            // points sit far enough inside the box that the 5dp round caps
+            // (2.5dp past each end point) never get clipped
+            moveTo(w * 0.15f, h * 0.55f)
+            lineTo(w * 0.40f, h * 0.78f)
+            lineTo(w * 0.86f, h * 0.24f)
+        }
+        drawPath(
+            path  = check,
+            color = color,
+            style = Stroke(width = strokeWidth.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+        )
+    }
+}
+
+// Glide to the top of a (possibly huge) list slowly enough to be seen. A list
+// of 2000+ chapters can't be animated end-to-end, so if we're far down it
+// jumps to 8 rows from the top first and animates the remaining distance.
+private const val TOC_SORT_SCROLL_MS = 650
+
+private suspend fun smoothScrollToTop(state: LazyListState) {
+    if (state.firstVisibleItemIndex > 8) state.scrollToItem(8)
+
+    // Row pitch (height + gap) from two neighbouring visible rows.
+    val visible = state.layoutInfo.visibleItemsInfo
+    val pitch = when {
+        visible.size >= 2 -> (visible[1].offset - visible[0].offset).toFloat()
+        visible.size == 1 -> visible[0].size.toFloat()
+        else              -> 0f
+    }
+    val distance = state.firstVisibleItemIndex * pitch + state.firstVisibleItemScrollOffset
+    if (distance > 0f) {
+        state.animateScrollBy(-distance, tween(TOC_SORT_SCROLL_MS, easing = FastOutSlowInEasing))
+    }
+    // Pin the exact top in case the distance estimate was a few px off.
+    state.scrollToItem(0)
 }
 
 // ── Audio "coming soon" overlay ──────────────────────────────────────────────
