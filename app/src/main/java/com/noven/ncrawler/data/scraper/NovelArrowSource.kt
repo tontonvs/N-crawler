@@ -354,28 +354,48 @@ class NovelArrowSource : NovelSource {
         }
     }
 
-    // Handles shapes B and C from the comment above: finds the
-    // "<refId>:T<hexlen>," marker and reads whatever content immediately
-    // follows it, within that SAME push() call (shape B). If that comes
-    // back empty (shape C — the marker declared a byte count but the
-    // actual bytes were flushed in the NEXT push() call instead), falls
-    // back to reading that entire following push() call's raw string
-    // argument as the content, since it has no id-prefix of its own.
+    // Handles shapes B and C from the comment above. A "<refId>:T<hexlen>,"
+    // marker declares exactly how many (decoded) bytes belong to this
+    // chunk's value. Those bytes can be inline in the SAME push() call
+    // (shape B), or flushed as one or more SEPARATE, unlabelled push()
+    // calls immediately after it (shape C). The previous version assumed
+    // exactly one follow-up call was always enough — not guaranteed for a
+    // long chapter — so this now keeps consuming follow-up push() calls
+    // until the declared length is actually satisfied, logging targetLen
+    // vs. what's been assembled at each step so a future failure shows
+    // exactly where it falls short instead of just "could not extract."
     private fun extractStreamedChunk(html: String, refId: String): String? {
+        // Lookbehind guards against "25:T" matching as a substring of a
+        // longer id elsewhere on the page (e.g. "125:T").
         val markerPattern = Regex(
-            Regex.escape("$refId:T") + "[0-9a-f]+,(.*?)\"\\]\\)\\s*</script>",
+            "(?<![0-9])" + Regex.escape("$refId:T") + "([0-9a-f]+),(.*?)\"\\]\\)\\s*</script>",
             RegexOption.DOT_MATCHES_ALL
         )
-        val markerMatch = markerPattern.find(html) ?: return null
-        val inline = markerMatch.groupValues[1]
-        if (inline.isNotBlank()) return inline
+        val markerMatch = markerPattern.find(html) ?: run {
+            Log.w(TAG, "extractStreamedChunk($refId): marker not found")
+            return null
+        }
+        val targetLen = markerMatch.groupValues[1].toInt(16)
+        val sb = StringBuilder(markerMatch.groupValues[2])
+        Log.d(TAG, "extractStreamedChunk($refId): targetLen=$targetLen bytes, inline=${sb.length} chars")
 
-        val afterMarker = markerMatch.range.last + 1
         val nextPushPattern = Regex(
             "self\\.__next_f\\.push\\(\\[1,\"(.*?)\"\\]\\)\\s*</script>",
             RegexOption.DOT_MATCHES_ALL
         )
-        return nextPushPattern.find(html, afterMarker)?.groupValues?.get(1)
+        var searchFrom = markerMatch.range.last + 1
+        var callsConsumed = 0
+        while (unescapeNextJs(sb.toString()).length < targetLen && callsConsumed < 10) {
+            val next = nextPushPattern.find(html, searchFrom) ?: break
+            sb.append(next.groupValues[1])
+            searchFrom = next.range.last + 1
+            callsConsumed++
+        }
+
+        val decodedLen = unescapeNextJs(sb.toString()).length
+        Log.d(TAG, "extractStreamedChunk($refId): assembled ${sb.length} raw chars " +
+                "across ${callsConsumed + 1} push call(s), decoded=$decodedLen, target=$targetLen")
+        return sb.toString().ifBlank { null }
     }
 
     private fun unescapeNextJs(s: String): String =
