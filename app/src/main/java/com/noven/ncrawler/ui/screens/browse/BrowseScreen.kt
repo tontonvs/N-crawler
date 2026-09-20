@@ -29,6 +29,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
@@ -601,11 +602,21 @@ private fun groupByTopGenres(
         .map { it.key to it.value.take(perGenre) }
 }
 
+// Width of one card in Discover's GenreScreen grid: 2 columns, 16dp page padding
+// on each side, 20dp between them. Homepage rows use the same width so a novel
+// card is the same size on both screens (GenreScreen keeps the 6:7 cover
+// ratio that NovelGlassCard defaults to).
+@Composable
+private fun novelCardWidth(): androidx.compose.ui.unit.Dp {
+    val screenWidthDp = LocalConfiguration.current.screenWidthDp
+    return ((screenWidthDp - 16 - 16 - 20) / 2).dp
+}
+
 // ── Genre Row — a labeled horizontal sample with a "See more" that opens
 // the full infinite-scroll list for that genre (Discover's GenreScreen).
-// Cards are a fixed, narrower width here (130dp) than the old 2-col grid —
-// narrower cards read the (portrait) covers better at this card height.
-// CHANGE: cards now come from the shared NovelGlassCard (ui/components), and
+// CHANGE: cards are now exactly the size of the cards on Discover's genre grid
+// (see novelCardWidth — same width, same 6:7 cover), longer than the old
+// 130dp squares. They come from the shared NovelGlassCard (ui/components), and
 // the row de-dupes by slug — LazyRow keys must be unique, so a source that
 // repeats a novel inside one list used to crash with "Key was already used".
 @Composable
@@ -616,6 +627,7 @@ private fun GenreRow(
     onSeeMore: () -> Unit
 ) {
     val uniqueNovels = remember(novels) { novels.distinctBy { it.slug } }
+    val cardWidth = novelCardWidth()
     Column {
         Row(
             modifier = Modifier
@@ -647,16 +659,19 @@ private fun GenreRow(
                 NovelGlassCard(
                     novel    = novel,
                     onClick  = { onNovelClick(novel.slug) },
-                    modifier = Modifier.width(130.dp)
+                    modifier = Modifier.width(cardWidth)
                 )
             }
         }
     }
 }
 
-// ── Hero Banner — inset card, rounded corners, compact height ─────────────────
-// NOT full-bleed: horizontal page padding + ~20dp corner radius, ~160dp tall
-// (like the Disney+ "featured banner" card, not the full-screen Luca poster).
+// ── Hero Banner — inset card, rounded corners ─────────────────────────────────
+// NOT full-bleed: horizontal page padding + ~20dp corner radius.
+// CHANGE: 2× its old height (160 → 320dp — it already spans the page width, so
+// height is the only dimension that can double) and no glass left on it: no
+// rim border, and the frosted "Start Reading / Resume" pill is now plain
+// icon + text with no rectangle behind it.
 // resumeChapter != null → this IS the continue-reading novel: CTA becomes
 // "Resume Chapter N" and taps the given onClick (which jumps straight to
 // that chapter), instead of "Start Reading" opening the detail page.
@@ -666,10 +681,9 @@ private fun HeroBanner(novel: NovelEntity, resumeChapter: Int?, onClick: () -> U
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp)
-            .height(160.dp)
+            .height(320.dp)
             .clip(RoundedCornerShape(20.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
-            .border(1.dp, OnImageGlassBorder, RoundedCornerShape(20.dp))
             .clickable(onClick = onClick)
     ) {
         // Cover image
@@ -680,7 +694,7 @@ private fun HeroBanner(novel: NovelEntity, resumeChapter: Int?, onClick: () -> U
             modifier           = Modifier.fillMaxSize()
         )
 
-        // Scrim — transparent top, dark bottom, tuned for the shorter card
+        // Scrim — transparent top, dark bottom, so the text reads over any cover
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -689,60 +703,55 @@ private fun HeroBanner(novel: NovelEntity, resumeChapter: Int?, onClick: () -> U
                         colorStops = arrayOf(
                             0f    to Color.Black.copy(alpha = 0.05f),
                             0.45f to Color.Black.copy(alpha = 0.15f),
-                            1f    to Color.Black.copy(alpha = 0.80f)
+                            1f    to Color.Black.copy(alpha = 0.82f)
                         )
                     )
                 )
         )
 
-        // Content — bottom-aligned, compact
+        // Content — bottom-aligned
         Column(
             modifier = Modifier
                 .align(Alignment.BottomStart)
-                .padding(start = 14.dp, end = 14.dp, bottom = 12.dp)
+                .padding(start = 18.dp, end = 18.dp, bottom = 18.dp)
         ) {
-            // Title — one line, tight
+            // Title — up to two lines now that the card is taller
             Text(
                 novel.title,
                 style = MaterialTheme.typography.titleLarge.copy(
                     fontWeight    = FontWeight.ExtraBold,
-                    fontSize      = 19.sp,
+                    fontSize      = 28.sp,
+                    lineHeight    = 34.sp,
                     letterSpacing = (-0.3).sp
                 ),
                 color    = Color.White,
-                maxLines = 1,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
 
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(12.dp))
 
-            // Row: frosted "Start Reading" pill + rating badge
+            // Row: play + label (plain — no pill), rating
             Row(
                 verticalAlignment     = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                // Frosted-glass pill — on-image, so white-translucent still reads
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(50.dp))
-                        .background(OnImageGlassFillMd)
-                        .border(1.dp, OnImageGlassBorder, RoundedCornerShape(50.dp))
-                        .padding(horizontal = 12.dp, vertical = 6.dp)
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            Icons.Rounded.PlayArrow,
-                            contentDescription = null,
-                            tint     = Color.White,
-                            modifier = Modifier.size(14.dp)
-                        )
-                        Spacer(Modifier.width(4.dp))
-                        Text(
-                            if (resumeChapter != null) "Resume Ch. $resumeChapter" else "Start Reading",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = Color.White
-                        )
-                    }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Rounded.PlayArrow,
+                        contentDescription = null,
+                        tint     = Color.White,
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        if (resumeChapter != null) "Resume Ch. $resumeChapter" else "Start Reading",
+                        style = MaterialTheme.typography.labelLarge.copy(
+                            fontWeight = FontWeight.Bold,
+                            fontSize   = 15.sp
+                        ),
+                        color = Color.White
+                    )
                 }
 
                 // Rating badge
@@ -752,12 +761,12 @@ private fun HeroBanner(novel: NovelEntity, resumeChapter: Int?, onClick: () -> U
                             Icons.Rounded.Star,
                             contentDescription = null,
                             tint     = StarGold,
-                            modifier = Modifier.size(12.dp)
+                            modifier = Modifier.size(16.dp)
                         )
-                        Spacer(Modifier.width(3.dp))
+                        Spacer(Modifier.width(4.dp))
                         Text(
                             novel.rating,
-                            style = MaterialTheme.typography.labelMedium.copy(
+                            style = MaterialTheme.typography.labelLarge.copy(
                                 fontWeight = FontWeight.Bold
                             ),
                             color = Color.White
@@ -811,20 +820,16 @@ private fun RecentlyReadRow(
     }
 }
 
-// CHANGE: the Recently Read card is now 2× its old size (was 140×210dp) and has
-// no glass left on it — no rim border, no frosted footer strip behind the
-// progress, and the "i" badge is a plain dark circle. Everything is derived
-// from RECENT_CARD_SCALE, so resizing it later is a one-number change.
-// Title uses the reader's font (Montserrat).
-private const val RECENT_CARD_SCALE = 2f
-
+// Recently Read card: 140×210dp portrait. CHANGE (kept): the frosted rectangle
+// behind the info badge / progress bar is gone — badge, chapter label and
+// progress sit straight on the cover's dark scrim. Title uses the reader's
+// font (Montserrat).
 @Composable
 private fun RecentCard(
     info: ContinueReadingInfo,
     onOpenReader: () -> Unit,
     onOpenDetail: () -> Unit
 ) {
-    val s = RECENT_CARD_SCALE
     val novel = info.novel
     val progress = (info.progress.lastChapterNum.toFloat() / novel.chapterCount.coerceAtLeast(1))
         .coerceIn(0f, 1f)
@@ -836,9 +841,9 @@ private fun RecentCard(
 
     Box(
         modifier = Modifier
-            .width((140 * s).dp)
-            .height((210 * s).dp)
-            .clip(RoundedCornerShape((16 * s).dp))
+            .width(140.dp)
+            .height(210.dp)
+            .clip(RoundedCornerShape(16.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
             .clickable(onClick = onOpenReader)
     ) {
@@ -867,7 +872,7 @@ private fun RecentCard(
         Column(
             modifier            = Modifier
                 .fillMaxSize()
-                .padding((12 * s).dp),
+                .padding(12.dp),
             verticalArrangement = Arrangement.SpaceBetween
         ) {
             // Title — top
@@ -875,20 +880,20 @@ private fun RecentCard(
                 novel.title,
                 fontFamily = MontserratFamily,
                 fontWeight = FontWeight.ExtraBold,
-                fontSize   = (13 * s).sp,
-                lineHeight = (17 * s).sp,
+                fontSize   = 13.sp,
+                lineHeight = 17.sp,
                 color      = Color.White,
-                maxLines   = 3,
+                maxLines   = 2,
                 overflow   = TextOverflow.Ellipsis,
                 textAlign  = TextAlign.Start
             )
 
-            // Footer — plain: info badge + chapter label, then progress bar
+            // Footer — info badge + chapter label, then progress bar
             Column {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         modifier = Modifier
-                            .size((24 * s).dp)
+                            .size(24.dp)
                             .clip(CircleShape)
                             .background(Color.Black.copy(alpha = 0.55f))
                             // Nested clickable — consumes the tap here so the
@@ -901,30 +906,30 @@ private fun RecentCard(
                             color      = Color.White,
                             fontWeight = FontWeight.Bold,
                             fontStyle  = androidx.compose.ui.text.font.FontStyle.Italic,
-                            fontSize   = (13 * s).sp
+                            fontSize   = 13.sp
                         )
                     }
-                    Spacer(Modifier.width((8 * s).dp))
+                    Spacer(Modifier.width(8.dp))
                     Text(
                         chapterText,
                         color      = Color.White.copy(alpha = 0.85f),
-                        fontSize   = (11 * s).sp,
+                        fontSize   = 11.sp,
                         fontWeight = FontWeight.SemiBold
                     )
                 }
-                Spacer(Modifier.height((8 * s).dp))
+                Spacer(Modifier.height(8.dp))
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height((4 * s).dp)
-                        .clip(RoundedCornerShape((2 * s).dp))
+                        .height(4.dp)
+                        .clip(RoundedCornerShape(2.dp))
                         .background(Color.White.copy(alpha = 0.28f))
                 ) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth(progress)
                             .fillMaxHeight()
-                            .clip(RoundedCornerShape((2 * s).dp))
+                            .clip(RoundedCornerShape(2.dp))
                             .background(Color.White)
                     )
                 }
@@ -1177,32 +1182,33 @@ private fun BrowseSkeleton() {
     val shimmer = MaterialTheme.colorScheme.surfaceVariant
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // Hero skeleton — inset, rounded, ~160dp
+        // Hero skeleton — inset, rounded, 320dp (matches HeroBanner)
         Box(
             Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp)
-                .height(160.dp)
+                .height(320.dp)
                 .clip(RoundedCornerShape(20.dp))
                 .background(shimmer)
         )
         Spacer(Modifier.height(24.dp))
 
-        // Recently Read skeleton — label + one card at the RecentCard size
-        // (2× now, so a second one wouldn't fit the row anyway)
+        // Recently Read skeleton — label + row of 140x210dp portrait cards
         SkeletonLabel(shimmer, width = 130.dp)
         Spacer(Modifier.height(14.dp))
         Row(
             Modifier.padding(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            Box(
-                Modifier
-                    .width((140 * RECENT_CARD_SCALE).dp)
-                    .height((210 * RECENT_CARD_SCALE).dp)
-                    .clip(RoundedCornerShape((16 * RECENT_CARD_SCALE).dp))
-                    .background(shimmer)
-            )
+            repeat(2) {
+                Box(
+                    Modifier
+                        .width(140.dp)
+                        .height(210.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(shimmer)
+                )
+            }
         }
         Spacer(Modifier.height(24.dp))
 
@@ -1227,8 +1233,9 @@ private fun BrowseSkeleton() {
         Spacer(Modifier.height(24.dp))
 
         // Two genre-row sections (Latest Updates / Popular) — section label
-        // + a labeled row + a horizontal scroll of 130dp-wide novel cards,
-        // matching GenreRow exactly
+        // + a labeled row + a horizontal scroll of novel cards, matching
+        // GenreRow exactly (same width, 6:7 cover, 48dp title block)
+        val skeletonCardWidth = novelCardWidth()
         repeat(2) {
             SkeletonLabel(shimmer, width = 140.dp, height = 16.dp)
             Spacer(Modifier.height(16.dp))
@@ -1241,11 +1248,11 @@ private fun BrowseSkeleton() {
                 repeat(3) {
                     Column(
                         Modifier
-                            .width(130.dp)
+                            .width(skeletonCardWidth)
                             .clip(RoundedCornerShape(16.dp))
                             .background(shimmer)
                     ) {
-                        Spacer(Modifier.fillMaxWidth().height(130.dp))
+                        Spacer(Modifier.fillMaxWidth().height(skeletonCardWidth * (7f / 6f)))
                         Spacer(Modifier.height(48.dp))
                     }
                 }

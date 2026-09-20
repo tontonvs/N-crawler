@@ -100,20 +100,24 @@ fun Modifier.glassCard(shape: Shape = RoundedCornerShape(GlassCardRadius)): Modi
         .border(1.dp, rim, shape)
 }
 
+// Cover ratio (width / height) shared by every novel card — homepage rows and
+// Discover's genre grid — so a card is the same size on both screens.
+const val NovelCardCoverAspect = 6f / 7f
+
 // ── Novel card ────────────────────────────────────────────────────────────────
 // Deliberately simple: cover + the novel's name, nothing else (no rating pill,
 // no chapter label, no play button). The title uses the reader's font
 // (Montserrat) and always reserves two lines of height so cards in the same
 // row stay the same height whatever the title length.
-// Pass Modifier.width(130.dp) in a row, or Modifier.fillMaxWidth() in a grid
-// cell — the cover keeps [coverAspect] (width / height) so it scales with the
-// card instead of a fixed dp height.
+// Pass Modifier.width(..) in a row, or Modifier.fillMaxWidth() in a grid cell —
+// the cover keeps [coverAspect] (width / height) so it scales with the card
+// instead of a fixed dp height.
 @Composable
 fun NovelGlassCard(
     novel: NovelEntity,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    coverAspect: Float = 1f
+    coverAspect: Float = NovelCardCoverAspect
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()

@@ -136,16 +136,15 @@ fun GenreScreen(
                     verticalArrangement   = Arrangement.spacedBy(16.dp)
                 ) {
                     // CHANGE: shared NovelGlassCard (same card as the homepage
-                    // rows) replaces the private GenreNovelCard copy. In this
-                    // grid the card is ~half the screen wide, so the cover
-                    // uses a slightly taller 6:7 ratio than the homepage's
-                    // 130dp square.
+                    // rows) replaces the private GenreNovelCard copy. The
+                    // homepage rows now use this exact card size (same width
+                    // formula, same default 6:7 cover), so a novel looks the
+                    // same on both screens.
                     items(novels, key = { it.slug }) { novel ->
                         NovelGlassCard(
-                            novel       = novel,
-                            onClick     = { onNovelClick(novel.slug) },
-                            modifier    = Modifier.fillMaxWidth(),
-                            coverAspect = 6f / 7f
+                            novel    = novel,
+                            onClick  = { onNovelClick(novel.slug) },
+                            modifier = Modifier.fillMaxWidth()
                         )
                     }
                     if (state.isLoadingMore) {
