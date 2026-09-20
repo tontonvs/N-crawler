@@ -1,14 +1,14 @@
 package com.noven.ncrawler.ui.screens.detail
 
-import android.graphics.Bitmap
 import android.graphics.drawable.BitmapDrawable
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.spring
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -26,13 +26,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Star
@@ -41,6 +39,7 @@ import androidx.compose.material.icons.outlined.StarOutline
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
@@ -50,6 +49,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -57,13 +57,19 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -76,8 +82,23 @@ import com.noven.ncrawler.data.scraper.ChapterLink
 import com.noven.ncrawler.ui.theme.MontserratFamily
 import com.noven.ncrawler.viewmodel.DetailUiState
 import com.noven.ncrawler.viewmodel.DetailViewModel
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
+import kotlin.math.PI
+import kotlin.math.sin
+
+// CHANGE (this pass):
+//  • Every piece of text is Montserrat — the reader's font — including the
+//    rating, chips, chapter rows, buttons, error state and the snackbar.
+//  • Buttons (back, refresh, play, retry, "see all") use the reader's design:
+//    soft filled circles / pills, no border, no glass edge.
+//  • "Show More" is gone. Summary and chapters are simply part of the scroll and
+//    fade in as they scroll into view; a faint double-chevron hint drifts
+//    downward for 2s at the bottom, then fades away.
+//  • Label AND value text is larger throughout (Status/Completed, Genre,
+//    Latest, Summary, Chapters …).
+// The palette extraction (dominant → background, vibrant → accent) is untouched
+// — the reader's cover-colour theming mirrors it.
 
 // ── Colour helpers ────────────────────────────────────────────────────────────
 
@@ -108,68 +129,98 @@ private fun StarRating(
                 imageVector        = icon,
                 contentDescription = null,
                 tint               = if (stars >= i - 0.5f) starColor else emptyColor,
-                modifier           = Modifier.size(17.dp),
+                modifier           = Modifier.size(21.dp),
             )
         }
-        Spacer(Modifier.width(7.dp))
+        Spacer(Modifier.width(9.dp))
         Text(
             text       = rawRating.ifBlank { "—" },
             color      = Color.White,
-            fontSize   = 13.sp,
+            fontFamily = MontserratFamily,
+            fontSize   = 17.sp,
             fontWeight = FontWeight.SemiBold,
         )
     }
 }
 
-// ── Glass play button ─────────────────────────────────────────────────────────
+// ── Reader-style circle button (back / refresh / play) ────────────────────────
+// The reader's buttons are soft filled circles: the foreground colour at 13%,
+// no border, icon at 90%. Here the circle sits over cover art rather than the
+// reader's solid page, so a dark base tint sits under the 13% white to keep it
+// visible on bright covers.
 
 @Composable
-private fun GlassPlayButton(label: String, onClick: () -> Unit) {
+private fun ReaderCircleBtn(
+    onClick: () -> Unit,
+    size: Dp = 48.dp,
+    content: @Composable () -> Unit,
+) {
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier         = Modifier
+            .size(size)
+            .clip(CircleShape)
+            .background(Color.Black.copy(alpha = 0.40f))
+            .background(Color.White.copy(alpha = 0.13f))
+            .clickable(onClick = onClick),
+    ) { content() }
+}
+
+// ── Play button ───────────────────────────────────────────────────────────────
+
+@Composable
+private fun PlayButton(label: String, onClick: () -> Unit) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        modifier            = Modifier.clickable(onClick = onClick),
+        modifier            = Modifier
+            .clip(RoundedCornerShape(24.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 20.dp, vertical = 6.dp),
     ) {
-        Box(
-            contentAlignment = Alignment.Center,
-            modifier         = Modifier
-                .size(68.dp)
-                .clip(CircleShape)
-                .background(Color.White.copy(alpha = 0.18f))
-                .border(1.5.dp, Color.White.copy(alpha = 0.45f), CircleShape),
-        ) {
+        ReaderCircleBtn(onClick = onClick, size = 76.dp) {
             Icon(
                 imageVector        = Icons.Filled.PlayArrow,
                 contentDescription = label,
-                tint               = Color.White,
-                modifier           = Modifier.size(34.dp),
+                tint               = Color.White.copy(alpha = 0.9f),
+                modifier           = Modifier.size(40.dp),
             )
         }
-        Spacer(Modifier.height(6.dp))
-        Text(label, color = Color.White.copy(alpha = 0.80f), fontSize = 11.sp)
+        Spacer(Modifier.height(10.dp))
+        Text(
+            text       = label,
+            color      = Color.White.copy(alpha = 0.9f),
+            fontFamily = MontserratFamily,
+            fontSize   = 15.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
     }
 }
 
 // ── Meta chip (Status | Genre | Latest) ──────────────────────────────────────
+// value = the info ("Completed"), label = its title ("STATUS"). Both are larger
+// than before (16sp / 12sp, were 13sp / 9sp).
 
 @Composable
-private fun MetaChip(label: String, value: String, accent: Color) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+private fun MetaChip(label: String, value: String, accent: Color, modifier: Modifier = Modifier) {
+    Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
         Text(
             text       = value,
             color      = Color.White,
-            fontSize   = 13.sp,
+            fontFamily = MontserratFamily,
+            fontSize   = 16.sp,
             fontWeight = FontWeight.Bold,
             textAlign  = TextAlign.Center,
-            maxLines   = 1,
+            maxLines   = 2,
             overflow   = TextOverflow.Ellipsis,
         )
-        Spacer(Modifier.height(3.dp))
+        Spacer(Modifier.height(4.dp))
         Text(
             text          = label,
-            color         = accent.copy(alpha = 0.75f),
-            fontSize      = 9.sp,
+            color         = accent.copy(alpha = 0.85f),
+            fontFamily    = MontserratFamily,
+            fontSize      = 12.sp,
             fontWeight    = FontWeight.SemiBold,
-            letterSpacing = 1.2.sp,
+            letterSpacing = 1.sp,
             textAlign     = TextAlign.Center,
         )
     }
@@ -181,7 +232,7 @@ private fun MetaChip(label: String, value: String, accent: Color) {
 private fun MetaSeparator() {
     Box(
         modifier = Modifier
-            .height(28.dp)
+            .height(36.dp)
             .width(1.dp)
             .background(Color.White.copy(alpha = 0.18f)),
     )
@@ -195,28 +246,32 @@ private fun ChapterRow(chapter: ChapterLink, accent: Color, onClick: () -> Unit)
         modifier          = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(vertical = 12.dp, horizontal = 16.dp),
+            .padding(vertical = 14.dp, horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
             modifier = Modifier
-                .size(6.dp)
+                .size(7.dp)
                 .clip(CircleShape)
                 .background(accent.copy(alpha = 0.75f)),
         )
         Spacer(Modifier.width(12.dp))
         Text(
-            text     = chapter.title.ifBlank { "Chapter ${chapter.num}" },
-            color    = Color.White.copy(alpha = 0.88f),
-            fontSize = 13.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
+            text       = chapter.title.ifBlank { "Chapter ${chapter.num}" },
+            color      = Color.White.copy(alpha = 0.90f),
+            fontFamily = MontserratFamily,
+            fontSize   = 16.sp,
+            maxLines   = 1,
+            overflow   = TextOverflow.Ellipsis,
+            modifier   = Modifier.weight(1f),
         )
+        Spacer(Modifier.width(8.dp))
         Text(
-            text     = "Ch.${chapter.num}",
-            color    = accent.copy(alpha = 0.55f),
-            fontSize = 10.sp,
+            text       = "Ch.${chapter.num}",
+            color      = accent.copy(alpha = 0.85f),
+            fontFamily = MontserratFamily,
+            fontSize   = 13.sp,
+            fontWeight = FontWeight.SemiBold,
         )
     }
     HorizontalDivider(
@@ -225,19 +280,84 @@ private fun ChapterRow(chapter: ChapterLink, accent: Color, onClick: () -> Unit)
     )
 }
 
-// ── Floating glass icon button (back / refresh) ───────────────────────────────
+// ── Reveal on scroll ──────────────────────────────────────────────────────────
+// Fades + rises 24dp the first time the item composes (i.e. when scrolling
+// brings it into view — LazyColumn only composes what's near the viewport).
+// Alpha/translation only, so the item's layout height never changes and the
+// scroll position can't jump.
 
 @Composable
-private fun GlassCircleBtn(onClick: () -> Unit, content: @Composable () -> Unit) {
+private fun RevealOnScroll(content: @Composable () -> Unit) {
+    var shown by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { shown = true }
+    val progress by animateFloatAsState(
+        targetValue   = if (shown) 1f else 0f,
+        animationSpec = tween(500, easing = FastOutSlowInEasing),
+        label         = "revealProgress",
+    )
     Box(
-        contentAlignment = Alignment.Center,
-        modifier         = Modifier
-            .size(38.dp)
-            .clip(CircleShape)
-            .background(Color.Black.copy(alpha = 0.35f))
-            .border(1.dp, Color.White.copy(alpha = 0.20f), CircleShape)
-            .clickable(onClick = onClick),
+        modifier = Modifier.graphicsLayer {
+            alpha        = progress
+            translationY = (1f - progress) * 24.dp.toPx()
+        },
     ) { content() }
+}
+
+// ── Scroll hint: a chevron inside a chevron (like the road arrows painted on
+// walls), 3dp stroke, slightly transparent. The two chevrons light up one after
+// the other, top then bottom, so the motion reads as "downwards". Fades in, and
+// out again when [visible] goes false; once fully faded it stops drawing.
+
+private fun wave(p: Float): Float {
+    val x = ((p % 1f) + 1f) % 1f
+    return sin(PI.toFloat() * x)
+}
+
+@Composable
+private fun ScrollHint(visible: Boolean, modifier: Modifier = Modifier) {
+    val fade by animateFloatAsState(
+        targetValue   = if (visible) 1f else 0f,
+        animationSpec = tween(durationMillis = if (visible) 350 else 600),
+        label         = "scrollHintFade",
+    )
+    if (!visible && fade <= 0.01f) return   // fully faded away — nothing left to draw
+
+    val transition = rememberInfiniteTransition(label = "scrollHintWave")
+    val phase by transition.animateFloat(
+        initialValue  = 0f,
+        targetValue   = 1f,
+        animationSpec = infiniteRepeatable(tween(1000, easing = LinearEasing)),
+        label         = "scrollHintPhase",
+    )
+
+    Canvas(
+        modifier = modifier
+            .size(width = 36.dp, height = 44.dp)
+            .graphicsLayer { alpha = fade },
+    ) {
+        val stroke = 3.dp.toPx()
+        val w      = size.width
+        val chevH  = 12.dp.toPx()
+        val gap    = 11.dp.toPx()
+        val drift  = phase * 5.dp.toPx()
+        val maxA   = 0.7f                       // "slightly transparent"
+
+        fun chevron(top: Float, alpha: Float) {
+            val path = Path().apply {
+                moveTo(stroke, top)
+                lineTo(w / 2f, top + chevH)
+                lineTo(w - stroke, top)
+            }
+            drawPath(
+                path  = path,
+                color = Color.White.copy(alpha = maxA * alpha),
+                style = Stroke(width = stroke, cap = StrokeCap.Round, join = StrokeJoin.Round),
+            )
+        }
+
+        chevron(top = 3.dp.toPx() + drift,        alpha = wave(phase))
+        chevron(top = 3.dp.toPx() + gap + drift,  alpha = wave(phase - 0.28f))
+    }
 }
 
 // ── Main screen ───────────────────────────────────────────────────────────────
@@ -287,17 +407,30 @@ fun DetailScreen(
                     contentAlignment = Alignment.Center,
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(s.message, color = Color.White.copy(alpha = 0.7f), fontSize = 14.sp)
-                        Spacer(Modifier.height(16.dp))
+                        Text(
+                            s.message,
+                            color      = Color.White.copy(alpha = 0.7f),
+                            fontFamily = MontserratFamily,
+                            fontSize   = 16.sp,
+                            textAlign  = TextAlign.Center,
+                            modifier   = Modifier.padding(horizontal = 32.dp),
+                        )
+                        Spacer(Modifier.height(18.dp))
+                        // Reader-style pill: soft filled, no border
                         Box(
                             modifier         = Modifier
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(FallbackAccent.copy(alpha = 0.2f))
-                                .border(1.dp, FallbackAccent.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
+                                .clip(RoundedCornerShape(24.dp))
+                                .background(Color.White.copy(alpha = 0.13f))
                                 .clickable { vm.load(slug) }
-                                .padding(horizontal = 24.dp, vertical = 10.dp),
+                                .padding(horizontal = 28.dp, vertical = 12.dp),
                         ) {
-                            Text("Retry", color = Color.White, fontSize = 13.sp)
+                            Text(
+                                "Retry",
+                                color      = Color.White,
+                                fontFamily = MontserratFamily,
+                                fontSize   = 15.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
                         }
                     }
                 }
@@ -335,6 +468,7 @@ fun DetailScreen(
         }
 
         // ── Floating top row: back + refresh — always on top ─────────────
+        // Reader-style 48dp circles with 24dp icons (same as the reader header).
         Row(
             modifier              = Modifier
                 .fillMaxWidth()
@@ -343,29 +477,37 @@ fun DetailScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment     = Alignment.CenterVertically,
         ) {
-            GlassCircleBtn(onClick = onBack) {
+            ReaderCircleBtn(onClick = onBack) {
                 Icon(
                     Icons.AutoMirrored.Filled.ArrowBack,
                     contentDescription = "Back",
-                    tint               = Color.White,
-                    modifier           = Modifier.size(18.dp),
+                    tint               = Color.White.copy(alpha = 0.9f),
+                    modifier           = Modifier.size(24.dp),
                 )
             }
-            GlassCircleBtn(onClick = vm::checkForUpdates) {
+            ReaderCircleBtn(onClick = vm::checkForUpdates) {
                 Icon(
                     Icons.Filled.Refresh,
                     contentDescription = "Check updates",
-                    tint               = Color.White,
-                    modifier           = Modifier.size(18.dp),
+                    tint               = Color.White.copy(alpha = 0.9f),
+                    modifier           = Modifier.size(24.dp),
                 )
             }
         }
 
-        // Snackbar
+        // Snackbar — custom content so its text is Montserrat too
         SnackbarHost(
             hostState = snackbarHost,
             modifier  = Modifier.align(Alignment.BottomCenter).navigationBarsPadding(),
-        )
+        ) { data ->
+            Snackbar(modifier = Modifier.padding(12.dp)) {
+                Text(
+                    data.visuals.message,
+                    fontFamily = MontserratFamily,
+                    fontSize   = 14.sp,
+                )
+            }
+        }
     }
 }
 
@@ -381,9 +523,23 @@ private fun CinematicDetail(
     onReadChapter: (Int) -> Unit,
     onCoverLoaded: (android.graphics.drawable.Drawable) -> Unit,
 ) {
-    var showMore by remember { mutableStateOf(false) }
+    val listState = rememberLazyListState()
     var showAllChapters by remember { mutableStateOf(false) }
     val PREVIEW_COUNT = 10
+
+    // Scroll hint: visible for 2s, then it fades away — or sooner, the moment
+    // the user starts scrolling (they've found the content, no hint needed).
+    var showHint by remember { mutableStateOf(true) }
+    LaunchedEffect(Unit) {
+        delay(2000)
+        showHint = false
+    }
+    LaunchedEffect(listState) {
+        snapshotFlow {
+            listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 0
+        }.first { it }
+        showHint = false
+    }
 
     // Parse first genre only for the chip slot
     val primaryGenre = novel.genres.split(",").firstOrNull()?.trim().orEmpty()
@@ -431,6 +587,7 @@ private fun CinematicDetail(
 
         // Scrollable content
         LazyColumn(
+            state          = listState,
             modifier       = Modifier
                 .fillMaxSize()
                 .statusBarsPadding()
@@ -438,23 +595,19 @@ private fun CinematicDetail(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
 
-            // Space for back button row (38dp button + 8dp top + 8dp bottom padding)
-            item { Spacer(Modifier.height(54.dp)) }
+            // Space for the back/refresh row (48dp buttons + 8dp top + 8dp bottom padding)
+            item { Spacer(Modifier.height(64.dp)) }
 
             // Cover art breathing room — pushes text below the fold
-            item { Spacer(Modifier.height(220.dp)) }
+            item { Spacer(Modifier.height(210.dp)) }
 
-            // ── Author(s) ─────────────────────────────────────────────────
+            // ── Sub-brand label: first genre ──────────────────────────────
             item {
-                val authors = novel.genres   // field reuse note: genres field holds genres,
-                // author isn't a separate field in NovelEntity.
-                // We'll show genres as the sub-brand label (like "Disney · Pixar")
-                // and a formatted genre pill instead.
                 Text(
                     text          = primaryGenre.uppercase().ifBlank { "NOVEL" },
                     color         = accent,
                     fontFamily    = MontserratFamily,
-                    fontSize      = 11.sp,
+                    fontSize      = 14.sp,
                     fontWeight    = FontWeight.SemiBold,
                     letterSpacing = 2.sp,
                     textAlign     = TextAlign.Center,
@@ -489,38 +642,42 @@ private fun CinematicDetail(
                 )
             }
 
-            item { Spacer(Modifier.height(20.dp)) }
+            item { Spacer(Modifier.height(22.dp)) }
 
             // ── Meta row: Status | Genre | Latest ─────────────────────────
+            // Equal-weight columns so the larger text can wrap/ellipsize inside
+            // its own slot instead of pushing the row wider than the screen.
             item {
                 Row(
                     modifier              = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 32.dp),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
+                        .padding(horizontal = 16.dp),
                     verticalAlignment     = Alignment.CenterVertically,
                 ) {
                     MetaChip(
-                        label  = "STATUS",
-                        value  = novel.status.ifBlank { "—" },
-                        accent = accent,
+                        label    = "STATUS",
+                        value    = novel.status.ifBlank { "—" },
+                        accent   = accent,
+                        modifier = Modifier.weight(1f),
                     )
                     MetaSeparator()
                     MetaChip(
-                        label  = "GENRE",
-                        value  = primaryGenre.ifBlank { "—" },
-                        accent = accent,
+                        label    = "GENRE",
+                        value    = primaryGenre.ifBlank { "—" },
+                        accent   = accent,
+                        modifier = Modifier.weight(1f),
                     )
                     MetaSeparator()
                     MetaChip(
-                        label  = "LATEST",
-                        value  = latestLabel,
-                        accent = accent,
+                        label    = "LATEST",
+                        value    = latestLabel,
+                        accent   = accent,
+                        modifier = Modifier.weight(1f),
                     )
                 }
             }
 
-            item { Spacer(Modifier.height(20.dp)) }
+            item { Spacer(Modifier.height(22.dp)) }
 
             // ── Star rating ───────────────────────────────────────────────
             item {
@@ -532,7 +689,7 @@ private fun CinematicDetail(
 
             item { Spacer(Modifier.height(28.dp)) }
 
-            // ── Glass play button ─────────────────────────────────────────
+            // ── Play button ───────────────────────────────────────────────
             item {
                 val readLabel = if (lastReadChapter != null)
                     "Continue Ch.$lastReadChapter" else "Start Reading"
@@ -540,83 +697,47 @@ private fun CinematicDetail(
                     ?: chapters.lastOrNull()?.num
                     ?: 1
 
-                GlassPlayButton(
+                PlayButton(
                     label   = readLabel,
                     onClick = { onReadChapter(targetChapter) },
                 )
             }
 
-            item { Spacer(Modifier.height(32.dp)) }
+            item { Spacer(Modifier.height(36.dp)) }
 
-            // ── Show More toggle ──────────────────────────────────────────
+            // ── Synopsis — no "Show More": it's simply below, and fades in as
+            // you scroll to it ────────────────────────────────────────────
             item {
-                Row(
-                    modifier              = Modifier
-                        .fillMaxWidth()
-                        .clickable { showMore = !showMore }
-                        .padding(vertical = 8.dp),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment     = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text       = if (showMore) "Show Less" else "Show More",
-                        color      = Color.White.copy(alpha = 0.75f),
-                        fontSize   = 12.sp,
-                        fontWeight = FontWeight.Medium,
-                    )
-                    Spacer(Modifier.width(4.dp))
-                    Icon(
-                        imageVector        = if (showMore)
-                            Icons.Filled.KeyboardArrowUp
-                        else
-                            Icons.Filled.KeyboardArrowDown,
-                        contentDescription = null,
-                        tint               = Color.White.copy(alpha = 0.75f),
-                        modifier           = Modifier.size(16.dp),
-                    )
-                }
-            }
-
-            // ── Synopsis ──────────────────────────────────────────────────
-            item {
-                AnimatedVisibility(
-                    visible = showMore,
-                    enter   = fadeIn() + expandVertically(spring(stiffness = Spring.StiffnessMediumLow)),
-                    exit    = fadeOut() + shrinkVertically(spring(stiffness = Spring.StiffnessMediumLow)),
-                ) {
+                RevealOnScroll {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 24.dp),
                     ) {
-                        Spacer(Modifier.height(4.dp))
                         Text(
                             text          = "SUMMARY",
                             color         = accent,
                             fontFamily    = MontserratFamily,
-                            fontSize      = 10.sp,
+                            fontSize      = 14.sp,
                             fontWeight    = FontWeight.SemiBold,
                             letterSpacing = 1.5.sp,
                         )
-                        Spacer(Modifier.height(8.dp))
+                        Spacer(Modifier.height(10.dp))
                         Text(
                             text       = novel.synopsis.ifBlank { "No summary available." },
-                            color      = Color.White.copy(alpha = 0.80f),
-                            fontSize   = 13.sp,
-                            lineHeight = 21.sp,
+                            color      = Color.White.copy(alpha = 0.85f),
+                            fontFamily = MontserratFamily,
+                            fontSize   = 16.sp,
+                            lineHeight = 26.sp,
                         )
-                        Spacer(Modifier.height(24.dp))
+                        Spacer(Modifier.height(28.dp))
                     }
                 }
             }
 
             // ── Chapter list ──────────────────────────────────────────────
             item {
-                AnimatedVisibility(
-                    visible = showMore,
-                    enter   = fadeIn() + expandVertically(spring(stiffness = Spring.StiffnessMediumLow)),
-                    exit    = fadeOut() + shrinkVertically(spring(stiffness = Spring.StiffnessMediumLow)),
-                ) {
+                RevealOnScroll {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -632,7 +753,7 @@ private fun CinematicDetail(
                         Row(
                             modifier              = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 14.dp),
+                                .padding(horizontal = 16.dp, vertical = 16.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment     = Alignment.CenterVertically,
                         ) {
@@ -640,13 +761,15 @@ private fun CinematicDetail(
                                 text       = "Chapters",
                                 color      = Color.White,
                                 fontFamily = MontserratFamily,
-                                fontSize   = 14.sp,
+                                fontSize   = 18.sp,
                                 fontWeight = FontWeight.Bold,
                             )
                             Text(
-                                text     = "${chapters.size} total",
-                                color    = accent.copy(alpha = 0.70f),
-                                fontSize = 11.sp,
+                                text       = "${chapters.size} total",
+                                color      = accent.copy(alpha = 0.85f),
+                                fontFamily = MontserratFamily,
+                                fontSize   = 14.sp,
+                                fontWeight = FontWeight.Medium,
                             )
                         }
                         HorizontalDivider(
@@ -668,12 +791,12 @@ private fun CinematicDetail(
                             )
                         }
 
-                        // "See More" with fade gradient mask if >10 chapters
+                        // "See All" with fade gradient mask if >10 chapters
                         if (!showAllChapters && chapters.size > PREVIEW_COUNT) {
                             Box(
                                 modifier         = Modifier
                                     .fillMaxWidth()
-                                    .height(80.dp)
+                                    .height(90.dp)
                                     .drawWithContent {
                                         drawContent()
                                         drawRect(
@@ -685,15 +808,23 @@ private fun CinematicDetail(
                                     },
                                 contentAlignment = Alignment.BottomCenter,
                             ) {
-                                Text(
-                                    text       = "See All ${chapters.size} Chapters",
-                                    color      = accent,
-                                    fontSize   = 12.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    modifier   = Modifier
+                                // Reader-style pill
+                                Box(
+                                    modifier = Modifier
                                         .padding(bottom = 14.dp)
-                                        .clickable { showAllChapters = true },
-                                )
+                                        .clip(RoundedCornerShape(24.dp))
+                                        .background(Color.White.copy(alpha = 0.13f))
+                                        .clickable { showAllChapters = true }
+                                        .padding(horizontal = 22.dp, vertical = 10.dp),
+                                ) {
+                                    Text(
+                                        text       = "See All ${chapters.size} Chapters",
+                                        color      = Color.White,
+                                        fontFamily = MontserratFamily,
+                                        fontSize   = 15.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                }
                             }
                         }
 
@@ -704,5 +835,14 @@ private fun CinematicDetail(
 
             item { Spacer(Modifier.height(48.dp)) }
         }
+
+        // Scroll hint — bottom centre, over the content
+        ScrollHint(
+            visible  = showHint,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(bottom = 28.dp),
+        )
     }
 }
