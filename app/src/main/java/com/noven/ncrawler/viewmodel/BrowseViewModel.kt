@@ -8,6 +8,7 @@ import com.noven.ncrawler.NCrawlerApp
 import com.noven.ncrawler.data.db.NovelEntity
 import com.noven.ncrawler.data.db.ReadingProgress
 import com.noven.ncrawler.data.local.RecentSearchStore
+import com.noven.ncrawler.data.scraper.HomeSection
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 
@@ -39,6 +40,18 @@ class BrowseViewModel(app: Application) : AndroidViewModel(app) {
     // from the "latest release" one above, not just a slice of the same list.
     private val _popularState = MutableStateFlow<BrowseUiState>(BrowseUiState.Loading)
     val popularState: StateFlow<BrowseUiState> = _popularState.asStateFlow()
+
+    // CHANGE: extra homepage rows a source can optionally supply (e.g.
+    // NovelArrow's Completed/Ongoing/New) — empty for any source that
+    // doesn't override NovelSource.fetchExtraSections().
+    private val _extraSections = MutableStateFlow<List<HomeSection>>(emptyList())
+    val extraSections: StateFlow<List<HomeSection>> = _extraSections.asStateFlow()
+
+    // CHANGE: the active source's own published genre list, if it has one —
+    // read once per homepage load (cheap, in-memory, not a network call).
+    // Empty for a source that doesn't override NovelSource.knownGenres().
+    private val _knownGenres = MutableStateFlow<List<String>>(emptyList())
+    val knownGenres: StateFlow<List<String>> = _knownGenres.asStateFlow()
 
     private val _searchState = MutableStateFlow<BrowseUiState>(BrowseUiState.Empty)
     val searchState: StateFlow<BrowseUiState> = _searchState.asStateFlow()
@@ -95,6 +108,9 @@ class BrowseViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun loadHomepage() {
+        // Static, in-memory — no network call, safe to just read straight away.
+        _knownGenres.value = repo.knownGenres()
+
         viewModelScope.launch {
             Log.d(TAG, "loadHomepage() started")
             _browseState.value = BrowseUiState.Loading
@@ -126,6 +142,20 @@ class BrowseViewModel(app: Application) : AndroidViewModel(app) {
             } catch (e: Exception) {
                 Log.e(TAG, "fetchPopular() FAILED: ${e.message}", e)
                 _popularState.value = BrowseUiState.Error(e.message ?: "Failed to load")
+            }
+        }
+        // CHANGE: extra homepage sections (Completed/Ongoing/New for
+        // NovelArrow, empty for any other source) — own coroutine so a
+        // slow or failing fetch here can't hold up Latest/Popular above,
+        // and a plain empty list (not an error state) just renders nothing,
+        // same as before this feature existed.
+        viewModelScope.launch {
+            try {
+                _extraSections.value = repo.fetchExtraSections()
+                Log.d(TAG, "fetchExtraSections() returned ${_extraSections.value.size} sections")
+            } catch (e: Exception) {
+                Log.w(TAG, "fetchExtraSections() failed: ${e.message}")
+                _extraSections.value = emptyList()
             }
         }
     }

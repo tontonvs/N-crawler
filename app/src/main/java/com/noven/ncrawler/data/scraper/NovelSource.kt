@@ -41,4 +41,34 @@ interface NovelSource {
 
     /** Predictable chapter URL builder, used when a chapter isn't in the cached URL map. */
     fun buildChapterUrl(slug: String, chapterNum: Int): String
+
+    // CHANGE: two purely-additive, defaulted hooks — a source only needs to
+    // override these if it actually has extra homepage rows / a published
+    // genre list beyond what fetchHomepage()/fetchPopular() already cover.
+    // Every existing source (FreeWebNovel, NovelLive) inherits the empty
+    // defaults below and is completely unaffected.
+
+    /**
+     * Extra homepage rows beyond fetchHomepage()/fetchPopular() — e.g.
+     * NovelArrow's own "Completed Novels" / "Ongoing Novels" / "New Novels"
+     * sections. Empty by default; the UI renders whatever comes back
+     * generically, so a source can add or remove sections here without any
+     * other file needing to know or care.
+     */
+    suspend fun fetchExtraSections(): List<HomeSection> = emptyList()
+
+    /**
+     * The site's own genre taxonomy, when it publishes one independently of
+     * whatever genre tags happen to be scraped onto novel cards. Empty by
+     * default. Not suspend — this is meant to be static, in-memory data
+     * (a hardcoded list, not a network call); a source that needs to fetch
+     * it remotely should cache that itself rather than block on every call.
+     */
+    fun knownGenres(): List<String> = emptyList()
 }
+
+/** One extra homepage row a source can supply — see fetchExtraSections() above. */
+data class HomeSection(
+    val title: String,
+    val novels: List<NovelEntity>
+)

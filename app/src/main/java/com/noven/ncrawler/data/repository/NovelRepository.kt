@@ -6,6 +6,7 @@ import androidx.work.ExistingWorkPolicy
 import androidx.work.WorkManager
 import com.noven.ncrawler.data.db.*
 import com.noven.ncrawler.data.scraper.ChapterLink
+import com.noven.ncrawler.data.scraper.HomeSection
 import com.noven.ncrawler.data.scraper.NovelSource
 import com.noven.ncrawler.data.scraper.SourcePreferences
 import com.noven.ncrawler.data.scraper.SourceRegistry
@@ -95,6 +96,22 @@ class NovelRepository(
         if (novels.isNotEmpty()) novelDao.upsertAll(novels)
         return novels
     }
+
+    // CHANGE: same single-top-priority-source pattern as fetchHomepage/
+    // fetchPopular above, for the two new defaulted NovelSource hooks.
+    // A source that doesn't override them (FreeWebNovel, NovelLive) just
+    // returns the empty defaults, so this is a no-op for them.
+    suspend fun fetchExtraSections(): List<HomeSection> {
+        val source = enabledSources().first()
+        val sections = source.fetchExtraSections()
+            .map { section -> section.copy(novels = section.novels.map { rewrapSlug(it, source.id) }) }
+        sections.forEach { section ->
+            if (section.novels.isNotEmpty()) novelDao.upsertAll(section.novels)
+        }
+        return sections
+    }
+
+    fun knownGenres(): List<String> = enabledSources().first().knownGenres()
 
     // Search DOES span every enabled source — this is the actual point of
     // the multi-source feature (find a favorite that isn't on the default

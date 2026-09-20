@@ -124,7 +124,14 @@ class NovelArrowSource : NovelSource {
 
     override suspend fun fetchGenre(genre: String, page: Int): List<NovelEntity> {
         Log.d(TAG, "fetchGenre(genre=$genre, page=$page)")
-        val url = if (page <= 1) "$BASE/genre/$genre" else "$BASE/genre/$genre/$page"
+        // NOTE: URL-encoded defensively (multi-word names like "Anime &
+        // comics" or "Lgbt+" would otherwise break the URL), but the
+        // resulting /genre/<slug> path itself hasn't been confirmed live —
+        // unlike Detail/Chapters/Search/Hot above, this one was never
+        // curl-verified against the real site. Treat genre navigation on
+        // this source as untested until someone actually taps through one.
+        val encoded = java.net.URLEncoder.encode(genre, "UTF-8")
+        val url = if (page <= 1) "$BASE/genre/$encoded" else "$BASE/genre/$encoded/$page"
         return try {
             parseNovelCards(fetchDoc(url))
         } catch (e: Exception) {
@@ -132,6 +139,47 @@ class NovelArrowSource : NovelSource {
             throw e
         }
     }
+
+    // ── Extra homepage sections — same scraper as fetchPopular, different
+    // listing pages. All three "Show more" links confirmed present on the
+    // real homepage (novels/complete, novels/ongoing, novels/new); each
+    // fetched independently so one failing doesn't take the others down.
+    override suspend fun fetchExtraSections(): List<HomeSection> {
+        Log.d(TAG, "fetchExtraSections()")
+        val specs = listOf(
+            "Completed Novels" to "$BASE/novels/complete",
+            "Ongoing Novels"   to "$BASE/novels/ongoing",
+            "New Novels"       to "$BASE/novels/new"
+        )
+        return specs.mapNotNull { (title, url) ->
+            try {
+                val novels = parseNovelCards(fetchDoc(url))
+                Log.d(TAG, "fetchExtraSections: '$title' → ${novels.size} novels")
+                if (novels.isEmpty()) null else HomeSection(title, novels)
+            } catch (e: Exception) {
+                Log.w(TAG, "fetchExtraSections: '$title' ($url) failed: ${e.message}")
+                null
+            }
+        }
+    }
+
+    // Real genre list taken verbatim from the homepage's own genre filter —
+    // hardcoded rather than scraped, since it's the same kind of
+    // client-rendered dropdown that caused problems elsewhere on this site,
+    // and this list changes rarely if ever. Display names as shown on-site;
+    // fetchGenre() above handles URL-encoding whichever one gets tapped.
+    override fun knownGenres(): List<String> = listOf(
+        "Action", "Adult", "Adventure", "Anime & comics", "Comedy", "Drama",
+        "Eastern", "Ecchi", "Fan-fic", "Fan-fiction", "Fantasy", "Game",
+        "Gender bender", "Harem", "Historical", "Horror", "Isekai", "Josei",
+        "Lgbt+", "Litrpg", "Magic", "Magical realism", "Martial arts",
+        "Mature", "Mecha", "Military", "Modern life", "Mystery", "Other",
+        "Psychological", "Realistic", "Reincarnation", "Romance",
+        "School life", "Sci-fi", "Seinen", "Shoujo", "Shoujo ai", "Shounen",
+        "Shounen ai", "Slice of life", "Smut", "Sports", "Supernatural",
+        "System", "Thriller", "Tragedy", "Urban", "Video games", "War",
+        "Wuxia", "Xianxia", "Xuanhuan", "Yaoi", "Yuri"
+    )
 
     // ── Search — confirmed clean JSON API, no Cloudflare wall ─────────────────
     override suspend fun search(query: String): List<NovelEntity> {
