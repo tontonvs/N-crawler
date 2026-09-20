@@ -70,21 +70,31 @@ class NovelArrowSource : NovelSource {
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .addInterceptor { chain ->
-            val req = chain.request().newBuilder()
+            val original = chain.request()
+            val builder = original.newBuilder()
                 .header("User-Agent",
                     "Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 " +
                     "(KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36")
-                .header("Accept", "*/*")
                 .header("Accept-Language", "en-US,en;q=0.9")
                 .header("Referer", "$BASE/")
-                .build()
-            chain.proceed(req)
+            // Only default to */* when the call didn't already ask for
+            // something specific (the chapter-content API needs
+            // "application/json" — see CHAPTER_API_HEADERS below).
+            if (original.header("Accept") == null) {
+                builder.header("Accept", "*/*")
+            }
+            chain.proceed(builder.build())
         }
         .build()
 
-    private suspend fun fetchText(url: String): String = withContext(Dispatchers.IO) {
+    private suspend fun fetchText(
+        url: String,
+        extraHeaders: Map<String, String> = emptyMap()
+    ): String = withContext(Dispatchers.IO) {
         Log.d(TAG, "GET $url")
-        val resp = client.newCall(Request.Builder().url(url).build()).execute()
+        val builder = Request.Builder().url(url)
+        extraHeaders.forEach { (k, v) -> builder.header(k, v) }
+        val resp = client.newCall(builder.build()).execute()
         Log.d(TAG, "HTTP ${resp.code} ← $url")
         resp.use { it.body!!.string() }
     }
@@ -227,56 +237,58 @@ class NovelArrowSource : NovelSource {
         return all.sortedByDescending { it.num }
     }
 
-    // ── Chapter content ─────────────────────────────────────────────────────────
-    // CHANGE: different chapters nest their SSR payload at DIFFERENT
-    // backslash-escaping depths — confirmed live: the chapter used during
-    // initial investigation had its data at depth 0 (plain, unescaped JSON
-    // in the page), while a different novel's chapter-1 had the exact same
-    // keys nested one level deeper (single-backslash-escaped, e.g.
-    // \"chapter_content\" instead of "chapter_content"). Extraction no
-    // longer assumes a fixed depth — extractJsonStringValue/BooleanValue
-    // below detect it per-call by counting the backslashes actually
-    // present around each key, so this works regardless of which depth a
-    // given chapter's payload happens to use.
+    // ── Chapter content — confirmed clean JSON API ──────────────────────────────
+    // GET /api-web/novels/<slug>/chapters/<chapterId> returns the chapter's
+    // content directly as clean HTML inside JSON. This replaced an earlier
+    // approach that scraped chapter_content out of the page's raw Next.js
+    // streaming payload (self.__next_f.push(...) chunks) — that data is
+    // real but awkward to parse correctly (chunk references, variable
+    // byte-length framing split across separate <script> tags), and
+    // consistently failed in practice. This endpoint sidesteps all of it;
+    // confirmed via curl to return {"item":{"chapterInfo":{"chapter_content":
+    // "<h4>...</h4><p>...</p>...", ...}}} directly, with no scraping needed.
+    private val CHAPTER_API_HEADERS = mapOf(
+        "Accept" to "application/json",
+        "x-client-platform" to "web-desktop",
+        "x-device-type" to "desktop",
+        "x-site-host" to "novelarrow.com",
+        "x-version-app" to "web-desktop"
+    )
+
     override suspend fun fetchChapterByUrl(url: String): Pair<String, String> {
         Log.d(TAG, "fetchChapter: $url")
         return try {
-            val html = fetchText(url)
+            // Chapter URLs are always $BASE/chapter/<slug>/<chapterId> —
+            // see chapterUrlFor() below, which builds exactly this shape.
+            val parts = url.removePrefix(BASE).trim('/').split("/")
+            val chapterIdx = parts.indexOf("chapter")
+            if (chapterIdx == -1 || parts.size < chapterIdx + 3) {
+                throw IllegalArgumentException("Unrecognized chapter URL shape: $url")
+            }
+            val slug = parts[chapterIdx + 1]
+            val chapterId = parts[chapterIdx + 2]
 
-            val title = extractJsonStringValue(html, "chapter_name")
-                ?.let { unescapeNextJs(it) }?.ifBlank { null } ?: "Chapter"
+            val json = JSONObject(
+                fetchText("$API/novels/$slug/chapters/$chapterId", CHAPTER_API_HEADERS)
+            )
+            // Response shape has shown up both flat and nested in testing —
+            // fall back to the object itself at each level rather than
+            // assuming one specific wrapper is always present.
+            val item = json.optJSONObject("item") ?: json
+            val info = item.optJSONObject("chapterInfo") ?: item
 
-            val isPremium = extractJsonBooleanValue(html, "premium_content") == true ||
-                             extractJsonBooleanValue(html, "platinum_content") == true
+            val title = info.optString("chapter_name").ifBlank { "Chapter" }
+
+            val isPremium = info.optBoolean("premium_content", false) ||
+                             info.optBoolean("platinum_content", false)
             if (isPremium) {
                 Log.d(TAG, "Chapter is premium/platinum — skipping content fetch")
                 return Pair(title, "This chapter requires purchase on NovelArrow.")
             }
 
-            // chapter_content's value is one of THREE confirmed shapes:
-            //  A. the actual escaped HTML inline, directly as this value
-            //     — used for shorter content strings
-            //  B. a reference like "$25" pointing at a "25:T<hex>,<html>"
-            //     chunk elsewhere on the page, with the full content
-            //     present right after the comma, in that SAME push() call
-            //  C. the same "$25" reference, but the "25:T<hex>," marker
-            //     declares an upcoming byte length with ZERO bytes
-            //     actually inline — the server flushed the real payload
-            //     as a SEPARATE, immediately-following push() call that
-            //     has no id-prefix of its own, as a raw continuation of
-            //     that same logical value. Confirmed live: this happens
-            //     when the server's stream flushes mid-value.
-            val rawValue = extractJsonStringValue(html, "chapter_content")
-            val content = rawValue?.let { raw ->
-                if (Regex("^\\$[A-Za-z0-9]+$").matches(raw)) {
-                    htmlToPlainText(unescapeNextJs(extractStreamedChunk(html, raw.substring(1)) ?: ""))
-                } else {
-                    htmlToPlainText(unescapeNextJs(raw))
-                }
-            }
-
-            if (content.isNullOrBlank()) {
-                Log.w(TAG, "Could not extract chapter_content — url=$url")
+            val content = htmlToPlainText(info.optString("chapter_content"))
+            if (content.isBlank()) {
+                Log.w(TAG, "chapter_content was empty in API response — url=$url")
                 return Pair(title, "Could not load chapter content. Please try again.")
             }
             Log.d(TAG, "Chapter content: ${content.length} chars")
@@ -286,124 +298,6 @@ class NovelArrowSource : NovelSource {
             Pair("Error", "Failed to load chapter: ${e.message}")
         }
     }
-
-    // Finds a JSON key ANYWHERE in the raw page text and extracts its
-    // string value, at whatever backslash-escaping depth that key
-    // actually happens to be nested at on this particular page — detected
-    // by counting the backslashes immediately surrounding the key itself,
-    // rather than assuming a fixed depth (see fetchChapterByUrl comment
-    // above for why a fixed assumption broke on a different chapter).
-    private fun extractJsonStringValue(html: String, key: String): String? {
-        val keyIdx = html.indexOf(key)
-        if (keyIdx == -1) return null
-
-        var i = keyIdx - 1
-        var depth = 0
-        while (i >= 0 && html[i] == '\\') { depth++; i-- }
-        if (i < 0 || html[i] != '"') return null
-
-        val delim = "\\".repeat(depth) + "\""
-        val afterKey = keyIdx + key.length
-        val closeKeyIdx = html.indexOf(delim, afterKey)
-        if (closeKeyIdx == -1) return null
-        val colonIdx = html.indexOf(':', closeKeyIdx + delim.length)
-        if (colonIdx == -1) return null
-        val openValueIdx = html.indexOf(delim, colonIdx + 1)
-        if (openValueIdx == -1) return null
-        val valueStart = openValueIdx + delim.length
-
-        // Find the closing delimiter at the SAME depth — a candidate match
-        // at a deeper depth (more backslashes) means it's an escaped quote
-        // INSIDE the value's own content, not our real closing delimiter,
-        // so skip past it and keep looking.
-        var searchFrom = valueStart
-        while (true) {
-            val candidate = html.indexOf(delim, searchFrom)
-            if (candidate == -1) return null
-            var j = candidate - 1
-            var actualDepth = 0
-            while (j >= 0 && html[j] == '\\') { actualDepth++; j-- }
-            if (actualDepth == depth) return html.substring(valueStart, candidate - depth)
-            searchFrom = candidate + delim.length
-        }
-    }
-
-    // Same depth-detection approach as extractJsonStringValue, for a plain
-    // (unquoted) true/false literal instead of a string value.
-    private fun extractJsonBooleanValue(html: String, key: String): Boolean? {
-        val keyIdx = html.indexOf(key)
-        if (keyIdx == -1) return null
-
-        var i = keyIdx - 1
-        var depth = 0
-        while (i >= 0 && html[i] == '\\') { depth++; i-- }
-        if (i < 0 || html[i] != '"') return null
-
-        val delim = "\\".repeat(depth) + "\""
-        val afterKey = keyIdx + key.length
-        val closeKeyIdx = html.indexOf(delim, afterKey)
-        if (closeKeyIdx == -1) return null
-        val colonIdx = html.indexOf(':', closeKeyIdx + delim.length)
-        if (colonIdx == -1) return null
-
-        val tail = html.substring(colonIdx + 1, minOf(colonIdx + 10, html.length))
-        return when {
-            tail.startsWith("true")  -> true
-            tail.startsWith("false") -> false
-            else -> null
-        }
-    }
-
-    // Handles shapes B and C from the comment above. A "<refId>:T<hexlen>,"
-    // marker declares exactly how many (decoded) bytes belong to this
-    // chunk's value. Those bytes can be inline in the SAME push() call
-    // (shape B), or flushed as one or more SEPARATE, unlabelled push()
-    // calls immediately after it (shape C). The previous version assumed
-    // exactly one follow-up call was always enough — not guaranteed for a
-    // long chapter — so this now keeps consuming follow-up push() calls
-    // until the declared length is actually satisfied, logging targetLen
-    // vs. what's been assembled at each step so a future failure shows
-    // exactly where it falls short instead of just "could not extract."
-    private fun extractStreamedChunk(html: String, refId: String): String? {
-        // Lookbehind guards against "25:T" matching as a substring of a
-        // longer id elsewhere on the page (e.g. "125:T").
-        val markerPattern = Regex(
-            "(?<![0-9])" + Regex.escape("$refId:T") + "([0-9a-f]+),(.*?)\"\\]\\)\\s*</script>",
-            RegexOption.DOT_MATCHES_ALL
-        )
-        val markerMatch = markerPattern.find(html) ?: run {
-            Log.w(TAG, "extractStreamedChunk($refId): marker not found")
-            return null
-        }
-        val targetLen = markerMatch.groupValues[1].toInt(16)
-        val sb = StringBuilder(markerMatch.groupValues[2])
-        Log.d(TAG, "extractStreamedChunk($refId): targetLen=$targetLen bytes, inline=${sb.length} chars")
-
-        val nextPushPattern = Regex(
-            "self\\.__next_f\\.push\\(\\[1,\"(.*?)\"\\]\\)\\s*</script>",
-            RegexOption.DOT_MATCHES_ALL
-        )
-        var searchFrom = markerMatch.range.last + 1
-        var callsConsumed = 0
-        while (unescapeNextJs(sb.toString()).length < targetLen && callsConsumed < 10) {
-            val next = nextPushPattern.find(html, searchFrom) ?: break
-            sb.append(next.groupValues[1])
-            searchFrom = next.range.last + 1
-            callsConsumed++
-        }
-
-        val decodedLen = unescapeNextJs(sb.toString()).length
-        Log.d(TAG, "extractStreamedChunk($refId): assembled ${sb.length} raw chars " +
-                "across ${callsConsumed + 1} push call(s), decoded=$decodedLen, target=$targetLen")
-        return sb.toString().ifBlank { null }
-    }
-
-    private fun unescapeNextJs(s: String): String =
-        s.replace("\\u003c", "<")
-         .replace("\\u003e", ">")
-         .replace("\\u0026", "&")
-         .replace("\\\"", "\"")
-         .replace("\\\\", "\\")
 
     private fun htmlToPlainText(html: String): String {
         if (html.isBlank()) return ""
