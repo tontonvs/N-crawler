@@ -1,5 +1,6 @@
 package com.noven.ncrawler.ui.screens.browse
 
+import android.provider.Settings
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
@@ -24,12 +25,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
@@ -45,9 +48,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import com.noven.ncrawler.data.db.NovelEntity
-import com.noven.ncrawler.data.scraper.HomeSection
 import com.noven.ncrawler.ui.components.GenreGlassTile
 import com.noven.ncrawler.ui.components.NovelGlassCard
+import com.noven.ncrawler.ui.components.novelCardWidthFor
 import com.noven.ncrawler.ui.theme.*
 import com.noven.ncrawler.viewmodel.BrowseUiState
 import com.noven.ncrawler.viewmodel.BrowseViewModel
@@ -79,11 +82,6 @@ fun BrowseScreen(
     val popularState      by vm.popularState.collectAsStateWithLifecycle()
     val continueReading  by vm.continueReading.collectAsStateWithLifecycle()
     val recentlyReading  by vm.recentlyReading.collectAsStateWithLifecycle()
-    // CHANGE: extra homepage rows + the active source's own genre list, if
-    // any — both empty for sources that don't provide them, so this is a
-    // no-op everywhere except NovelArrow.
-    val extraSections    by vm.extraSections.collectAsStateWithLifecycle()
-    val knownGenres      by vm.knownGenres.collectAsStateWithLifecycle()
 
     // Light background fills the entire screen
     Box(
@@ -101,8 +99,6 @@ fun BrowseScreen(
             BrowseContent(
                 state             = browseState,
                 popularState      = popularState,
-                extraSections     = extraSections,
-                knownGenres       = knownGenres,
                 onNovelClick      = onNovelClick,
                 onRetry           = vm::loadHomepage,
                 onGenreClick      = onGenreClick ?: {},
@@ -209,8 +205,10 @@ private fun DownloadTrayIcon(modifier: Modifier = Modifier, tint: Color = Color.
 }
 
 // ── Search Overlay ────────────────────────────────────────────────────────────
-// Opened from the bottom nav's Search icon — full-screen, autofocused field,
-// recent searches (max 5) when empty, live results once typing, X to close.
+// Opened from the search FAB in the floating nav — full-screen, autofocused
+// field, recent searches (max 5, each a rounded rectangle with its own "x") when
+// empty, live results once typing, X to close. All text is Montserrat.
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SearchOverlay(
     vm: BrowseViewModel,
@@ -224,6 +222,10 @@ fun SearchOverlay(
     val focusManager    = LocalFocusManager.current
     val keyboard        = LocalSoftwareKeyboardController.current
     val focusRequester   = remember { FocusRequester() }
+
+    // The field's thick border + search glyph are black in light mode; black on
+    // the dark background would disappear, so dark mode uses the text colour.
+    val fieldInk = if (isSystemInDarkTheme()) MaterialTheme.colorScheme.onSurface else Color.Black
 
     // Autofocus + open the keyboard the moment the overlay appears
     LaunchedEffect(Unit) {
@@ -251,7 +253,7 @@ fun SearchOverlay(
                 Box(
                     modifier = Modifier
                         .weight(1f)
-                        .border(2.5.dp, Color.Black, RoundedCornerShape(16.dp))
+                        .border(2.5.dp, fieldInk, RoundedCornerShape(16.dp))
                 ) {
                     TextField(
                         value         = query,
@@ -271,7 +273,7 @@ fun SearchOverlay(
                             // Filled, solid glyph — TikTok-style, not the
                             // softer Rounded family used elsewhere.
                             Icon(Icons.Filled.Search, contentDescription = null,
-                                tint = Color.Black)
+                                tint = fieldInk)
                         },
                         textStyle = LocalTextStyle.current.copy(
                             fontFamily = MontserratFamily,
@@ -310,52 +312,62 @@ fun SearchOverlay(
 
             if (query.isBlank()) {
                 // ── Recent searches (max 5) ─────────────────────────────────
+                // CHANGE: small rounded rectangles laid out side by side and
+                // wrapping onto the next line (FlowRow) — not stacked full-width
+                // rows. Same look as the reader's controls: a soft fill of the text
+                // colour at 10% (the reader pill's alpha), no border, Montserrat,
+                // icon at 90%. Long terms are cut short with an ellipsis (chip is
+                // capped at 168dp). Tap = search again, "x" = remove.
                 if (recentSearches.isNotEmpty()) {
                     Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
                         Text(
                             "Recent Searches",
-                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            fontFamily = MontserratFamily,
+                            fontWeight = FontWeight.Bold,
+                            fontSize   = 14.sp,
+                            color      = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        Spacer(Modifier.height(8.dp))
-                        recentSearches.take(5).forEach { term ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .clickable { vm.onQueryChange(term) }
-                                    .padding(vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                // Filled clock icon — same solid-glyph language
-                                // as the search icon above.
-                                Icon(
-                                    Icons.Filled.History,
-                                    contentDescription = null,
-                                    tint     = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                                Spacer(Modifier.width(10.dp))
-                                Text(
-                                    term,
-                                    // Deliberately NOT Montserrat — a second,
-                                    // distinct font from the bold search-bar
-                                    // text, and bigger than the old bodyMedium.
-                                    fontFamily = FontFamily.Default,
-                                    fontSize   = 17.sp,
-                                    color      = MaterialTheme.colorScheme.onSurface,
-                                    modifier   = Modifier.weight(1f)
-                                )
-                                IconButton(
-                                    onClick  = { vm.removeRecentSearch(term) },
-                                    modifier = Modifier.size(32.dp)
+                        Spacer(Modifier.height(10.dp))
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement   = Arrangement.spacedBy(8.dp)
+                        ) {
+                            recentSearches.take(5).forEach { term ->
+                                Row(
+                                    modifier = Modifier
+                                        .widthIn(max = 168.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f))
+                                        .clickable { vm.onQueryChange(term) }
+                                        .padding(start = 12.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Icon(
-                                        Icons.Filled.Close,
-                                        contentDescription = "Remove \"$term\" from recent searches",
-                                        tint     = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.size(16.dp)
+                                    Text(
+                                        term,
+                                        fontFamily = MontserratFamily,
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize   = 14.sp,
+                                        color      = MaterialTheme.colorScheme.onSurface,
+                                        maxLines   = 1,
+                                        overflow   = TextOverflow.Ellipsis,
+                                        modifier   = Modifier.weight(1f, fill = false)
                                     )
+                                    // Plain box, not IconButton: IconButton's 48dp minimum
+                                    // touch size would balloon the small chip.
+                                    Box(
+                                        modifier = Modifier
+                                            .size(32.dp)
+                                            .clip(CircleShape)
+                                            .clickable { vm.removeRecentSearch(term) },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            Icons.Filled.Close,
+                                            contentDescription = "Remove \"$term\" from recent searches",
+                                            tint     = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.9f),
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -364,8 +376,9 @@ fun SearchOverlay(
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text(
                             "Search for a novel by title",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            fontFamily = MontserratFamily,
+                            fontSize   = 15.sp,
+                            color      = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
@@ -390,8 +403,6 @@ fun SearchOverlay(
 private fun BrowseContent(
     state: BrowseUiState,
     popularState: BrowseUiState,
-    extraSections: List<HomeSection>,
-    knownGenres: List<String>,
     onNovelClick: (String) -> Unit,
     onRetry: () -> Unit,
     onGenreClick: (String) -> Unit,
@@ -426,15 +437,13 @@ private fun BrowseContent(
             val popularGenreRows  = remember(popularNovels) { groupByTopGenres(popularNovels) }
             val showFlatPopular   = popularGenreRows.isEmpty() && popularNovels.isNotEmpty()
 
-            // CHANGE: showcase genres prefer the source's own published
-            // genre list (NovelArrow) when it has one — falling back to the
-            // derived-from-novels approach (top 8 by how many fetched
-            // novels carry them) for sources like FreeWebNovel that don't
-            // publish a taxonomy but DO carry genre tags on their cards.
-            val showcaseGenres = remember(novels, knownGenres) {
-                knownGenres.take(8).ifEmpty {
-                    groupByTopGenres(novels, maxGenres = 8, perGenre = 1).map { it.first }
-                }
+            // CHANGE: showcase genres now come from the real data (top 8 by
+            // how many novels carry them) instead of a hardcoded 3-item list.
+            // perGenre=1 because the showcase only needs genre NAMES, not
+            // the novel samples — cheap to compute independently of the
+            // other two groupings above.
+            val showcaseGenres = remember(novels) {
+                groupByTopGenres(novels, maxGenres = 8, perGenre = 1).map { it.first }
             }
 
             LazyColumn(
@@ -564,25 +573,6 @@ private fun BrowseContent(
                     }
                     item { Spacer(Modifier.height(20.dp)) }
                 }
-
-                // ── Extra sections — whatever the active source supplies
-                // beyond Latest/Popular (NovelArrow: Completed/Ongoing/New).
-                // Empty for any source that doesn't override
-                // fetchExtraSections(), so this renders nothing extra for
-                // FreeWebNovel/NovelLive. Same flat-row look as the
-                // Latest/Popular fallbacks above — these never carry genre
-                // tags either, so there's no grouped variant to attempt.
-                items(extraSections, key = { it.title }) { section ->
-                    Spacer(Modifier.height(28.dp))
-                    SectionHeader(section.title)
-                    Spacer(Modifier.height(16.dp))
-                    GenreRow(
-                        genre        = section.title,
-                        novels       = section.novels,
-                        onNovelClick = onNovelClick,
-                        onSeeMore    = { onDiscoverClick?.invoke() }
-                    )
-                }
             }
         }
     }
@@ -609,15 +599,14 @@ private fun groupByTopGenres(
         .map { it.key to it.value.take(perGenre) }
 }
 
-// Width of one card in Discover's GenreScreen grid: 2 columns, 16dp page padding
-// on each side, 20dp between them. Homepage rows use the same width so a novel
-// card is the same size on both screens (GenreScreen keeps the 6:7 cover
-// ratio that NovelGlassCard defaults to).
+// Width of one card in Discover's GenreScreen grid. Homepage rows use the same
+// width so a novel card is the same size on both screens. FIX: it used to be
+// "(screen − padding) / 2", which in landscape stretched each card to ~half of
+// an 800dp+ screen; the shared formula adds columns instead, so a card stays
+// about the same size in any orientation.
 @Composable
-private fun novelCardWidth(): androidx.compose.ui.unit.Dp {
-    val screenWidthDp = LocalConfiguration.current.screenWidthDp
-    return ((screenWidthDp - 16 - 16 - 20) / 2).dp
-}
+private fun novelCardWidth(): androidx.compose.ui.unit.Dp =
+    novelCardWidthFor(LocalConfiguration.current.screenWidthDp)
 
 // ── Genre Row — a labeled horizontal sample with a "See more" that opens
 // the full infinite-scroll list for that genre (Discover's GenreScreen).
@@ -679,11 +668,46 @@ private fun GenreRow(
 // height is the only dimension that can double) and no glass left on it: no
 // rim border, and the frosted "Start Reading / Resume" pill is now plain
 // icon + text with no rectangle behind it.
+// CHANGE: the cover slowly drifts (a Ken Burns pan + zoom) instead of sitting
+// still — see the heroDrift block below.
 // resumeChapter != null → this IS the continue-reading novel: CTA becomes
 // "Resume Chapter N" and taps the given onClick (which jumps straight to
 // that chapter), instead of "Start Reading" opening the detail page.
 @Composable
 private fun HeroBanner(novel: NovelEntity, resumeChapter: Int?, onClick: () -> Unit) {
+    // ── Slow cover drift ────────────────────────────────────────────────────
+    // Three unhurried, back-and-forth loops with different lengths (zoom 22s,
+    // pan-x 17s, pan-y 23s), so the motion never visibly repeats in lockstep.
+    // The image is always zoomed at least 12% and only pans inside the slack
+    // that zoom creates (80% of it), so no edge is ever exposed. Values are
+    // read inside graphicsLayer {} — the draw phase — so this never triggers
+    // recomposition. Honours the system "Remove animations" setting.
+    val context = LocalContext.current
+    val reducedMotion = remember(context) {
+        Settings.Global.getFloat(
+            context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f
+        ) == 0f
+    }
+    val drift = rememberInfiniteTransition(label = "heroDrift")
+    val zoom by drift.animateFloat(
+        initialValue  = 0f,
+        targetValue   = 1f,
+        animationSpec = infiniteRepeatable(tween(22000, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+        label         = "heroZoom"
+    )
+    val panX by drift.animateFloat(
+        initialValue  = -1f,
+        targetValue   = 1f,
+        animationSpec = infiniteRepeatable(tween(17000, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+        label         = "heroPanX"
+    )
+    val panY by drift.animateFloat(
+        initialValue  = -1f,
+        targetValue   = 1f,
+        animationSpec = infiniteRepeatable(tween(23000, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+        label         = "heroPanY"
+    )
+
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -693,12 +717,22 @@ private fun HeroBanner(novel: NovelEntity, resumeChapter: Int?, onClick: () -> U
             .background(MaterialTheme.colorScheme.surfaceVariant)
             .clickable(onClick = onClick)
     ) {
-        // Cover image
+        // Cover image — drifting (the card's clip() trims the overscan)
         AsyncImage(
             model              = novel.coverUrl,
             contentDescription = novel.title,
             contentScale       = ContentScale.Crop,
-            modifier           = Modifier.fillMaxSize()
+            modifier           = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    if (!reducedMotion) {
+                        val scale = 1.12f + 0.08f * zoom          // 1.12 → 1.20
+                        scaleX = scale
+                        scaleY = scale
+                        translationX = panX * (scale - 1f) * size.width  * 0.4f
+                        translationY = panY * (scale - 1f) * size.height * 0.4f
+                    }
+                }
         )
 
         // Scrim — transparent top, dark bottom, so the text reads over any cover
@@ -1118,7 +1152,11 @@ private fun SearchContent(
         is BrowseUiState.Loading -> SearchSkeleton()
         is BrowseUiState.Empty   -> SearchEmpty(query)
         is BrowseUiState.Error   -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-            Text(state.message, color = MaterialTheme.colorScheme.error)
+            Text(
+                state.message,
+                fontFamily = MontserratFamily,
+                color      = MaterialTheme.colorScheme.error
+            )
         }
         is BrowseUiState.Success -> LazyColumn(
             contentPadding      = PaddingValues(16.dp),
@@ -1160,17 +1198,21 @@ private fun SearchRow(novel: NovelEntity, onClick: () -> Unit) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 novel.title,
-                style    = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                color    = MaterialTheme.colorScheme.onBackground
+                fontFamily = MontserratFamily,
+                fontWeight = FontWeight.SemiBold,
+                fontSize   = 15.sp,
+                lineHeight = 20.sp,
+                maxLines   = 2,
+                overflow   = TextOverflow.Ellipsis,
+                color      = MaterialTheme.colorScheme.onBackground
             )
             if (novel.genres.isNotBlank()) {
                 Spacer(Modifier.height(3.dp))
                 Text(
                     novel.genres.split(",").take(2).joinToString(" · "),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    fontFamily = MontserratFamily,
+                    fontSize   = 12.sp,
+                    color      = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }
@@ -1253,14 +1295,25 @@ private fun BrowseSkeleton() {
                 horizontalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 repeat(3) {
-                    Column(
-                        Modifier
-                            .width(skeletonCardWidth)
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(shimmer)
-                    ) {
-                        Spacer(Modifier.fillMaxWidth().height(skeletonCardWidth * (7f / 6f)))
-                        Spacer(Modifier.height(48.dp))
+                    // Rounded cover + a title bar underneath (no card behind the
+                    // title any more, matching NovelGlassCard)
+                    Column(Modifier.width(skeletonCardWidth)) {
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .height(skeletonCardWidth * (7f / 6f))
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(shimmer)
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        Box(
+                            Modifier
+                                .fillMaxWidth(0.8f)
+                                .height(12.dp)
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(shimmer)
+                        )
+                        Spacer(Modifier.height(20.dp))
                     }
                 }
             }
@@ -1329,8 +1382,9 @@ private fun SearchEmpty(query: String) {
             Spacer(Modifier.height(12.dp))
             Text(
                 "No results for \"$query\"",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.bodyMedium
+                fontFamily = MontserratFamily,
+                fontSize   = 15.sp,
+                color      = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }

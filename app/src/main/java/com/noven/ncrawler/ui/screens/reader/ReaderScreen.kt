@@ -186,6 +186,11 @@ fun ReaderScreen(
         currentNum < (chapterList.maxOfOrNull { it.num } ?: Int.MAX_VALUE)
     // Neon-blue / red highlights pick different shades on dark vs light pages.
     val darkBg = bg.luminance() < 0.5f
+    // FIX: chapter text was glaringly bright on dark pages (near-white on near-black).
+    // Body text on a dark page is now blended 80% of the way from the page colour to
+    // the theme's text colour — soft off-white instead of full-strength. The chapter
+    // title, and light pages, keep the full-strength colour.
+    val bodyFg = if (darkBg) lerp(bg, fg, DARK_BODY_TEXT_STRENGTH) else fg
 
     val noRipple = remember { MutableInteractionSource() }
 
@@ -224,6 +229,7 @@ fun ReaderScreen(
                     title       = chapterTitle ?: "Chapter $currentNum",
                     settings    = settings,
                     fg          = fg,
+                    bodyFg      = bodyFg,
                     accent      = accent,
                     darkBg      = darkBg,
                     scrollState = scrollState,
@@ -350,12 +356,17 @@ fun ReaderScreen(
 }
 
 // ── Reading content ──────────────────────────────────────────────────────────
+// How much of the theme's text colour dark pages use for BODY text (1.0 = full
+// strength). Lower = dimmer. The chapter title always uses full strength.
+private const val DARK_BODY_TEXT_STRENGTH = 0.80f
+
 @Composable
 private fun ReaderContent(
     chapter: ChapterEntity,
     title: String,
     settings: ReaderSettings,
     fg: Color,
+    bodyFg: Color,
     accent: Color,
     darkBg: Boolean,
     scrollState: androidx.compose.foundation.ScrollState,
@@ -488,7 +499,7 @@ private fun ReaderContent(
                         fx       = fxPhases,
                         darkBg   = darkBg,
                         settings = settings,
-                        fg       = fg,
+                        fg       = bodyFg,
                         accent   = accent,
                         align    = align,
                         modifier = paraModifier
@@ -508,7 +519,7 @@ private fun ReaderContent(
                     Text(
                         text       = annotated,
                         fontSize   = settings.fontSize.sp,
-                        color      = fg,
+                        color      = bodyFg,
                         textAlign  = align,
                         lineHeight = (settings.fontSize * settings.lineHeight).sp,
                         modifier   = paraModifier
@@ -518,7 +529,7 @@ private fun ReaderContent(
                         text       = para,
                         fontFamily = MontserratFamily,
                         fontSize   = settings.fontSize.sp,
-                        color      = fg,
+                        color      = bodyFg,
                         textAlign  = align,
                         lineHeight = (settings.fontSize * settings.lineHeight).sp,
                         modifier   = paraModifier

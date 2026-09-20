@@ -39,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.noven.ncrawler.ui.components.NovelGlassCard
+import com.noven.ncrawler.ui.components.NovelGridMinCard
 import com.noven.ncrawler.ui.theme.AccentBlue
 import com.noven.ncrawler.viewmodel.GenreViewModel
 
@@ -129,7 +130,9 @@ fun GenreScreen(
             }
             else -> {
                 LazyVerticalGrid(
-                    columns         = GridCells.Fixed(2),
+                    // FIX: Adaptive, not Fixed(2) — in landscape two columns stretched
+                    // every card across half the screen; now it just adds columns.
+                    columns         = GridCells.Adaptive(minSize = NovelGridMinCard),
                     state           = gridState,
                     contentPadding  = PaddingValues(16.dp, 12.dp, 16.dp, 100.dp),
                     horizontalArrangement = Arrangement.spacedBy(20.dp),

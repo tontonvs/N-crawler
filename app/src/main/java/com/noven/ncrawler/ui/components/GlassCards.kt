@@ -59,6 +59,9 @@ import com.noven.ncrawler.ui.theme.glassSurface
 //    cards in the homepage rows stay (that was a deliberate "narrower cards" ask).
 //  - Later ask: keep cards simple — cover + name only, title in the reader's
 //    font (Montserrat). The rating pill / chapter label / play button are gone.
+//  - Then: no card behind the title (it sits on the page background), and the
+//    cover is rounded on all four corners. NovelGlassCard keeps its name for its
+//    callers, but the glass container now only lives on GenreGlassTile.
 //  - GenreDecorativeCard: 72dp tall (was 90dp, per feedback), 6 alternating
 //    decorative styles reusing the 3 bundled fonts (Pacifico / Cinzel / Anton)
 //    so 8 genres in a row don't read as repetitive. Style order is unchanged.
@@ -104,11 +107,28 @@ fun Modifier.glassCard(shape: Shape = RoundedCornerShape(GlassCardRadius)): Modi
 // Discover's genre grid — so a card is the same size on both screens.
 const val NovelCardCoverAspect = 6f / 7f
 
+// Grid geometry shared by GenreScreen's grid (GridCells.Adaptive(NovelGridMinCard),
+// 16dp page padding, 20dp gaps) and the homepage rows, so a novel card is the
+// same size on both screens in ANY orientation. In landscape the grid gets more
+// columns instead of stretching two cards across the whole width — this mirrors
+// how GridCells.Adaptive splits the width.
+val NovelGridMinCard = 150.dp
+private const val GRID_PAGE_PADDING_DP = 16
+private const val GRID_GAP_DP = 20
+private const val GRID_MIN_CARD_DP = 150
+
+fun novelCardWidthFor(screenWidthDp: Int): Dp {
+    val available = screenWidthDp - 2 * GRID_PAGE_PADDING_DP
+    val columns   = maxOf(1, (available + GRID_GAP_DP) / (GRID_MIN_CARD_DP + GRID_GAP_DP))
+    return ((available - GRID_GAP_DP * (columns - 1)) / columns).dp
+}
+
 // ── Novel card ────────────────────────────────────────────────────────────────
-// Deliberately simple: cover + the novel's name, nothing else (no rating pill,
-// no chapter label, no play button). The title uses the reader's font
-// (Montserrat) and always reserves two lines of height so cards in the same
-// row stay the same height whatever the title length.
+// Deliberately simple: a cover with all four corners rounded, and the novel's
+// name printed straight on the page background — no card behind it, so there is
+// no "chin" under the image (the title block used to sit in the glass card).
+// The title uses the reader's font (Montserrat) and always reserves two lines of
+// height so cards in the same row stay the same height whatever the title length.
 // Pass Modifier.width(..) in a row, or Modifier.fillMaxWidth() in a grid cell —
 // the cover keeps [coverAspect] (width / height) so it scales with the card
 // instead of a fixed dp height.
@@ -126,11 +146,11 @@ fun NovelGlassCard(
         animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessHigh),
         label         = "novelCardPress"
     )
+    val coverShape = RoundedCornerShape(GlassCardRadius)
 
     Column(
         modifier = modifier
             .graphicsLayer(scaleX = scale, scaleY = scale)
-            .glassCard()
             .clickable(
                 interactionSource = interactionSource,
                 indication        = null,
@@ -138,11 +158,19 @@ fun NovelGlassCard(
                 onClick           = onClick
             )
     ) {
-        // Cover — surfaceVariant shows while loading / if the URL is blank
+        // Cover — rounded on ALL corners, with a soft shadow for depth.
+        // surfaceVariant shows while loading / if the URL is blank.
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(coverAspect)
+                .shadow(
+                    elevation    = 6.dp,
+                    shape        = coverShape,
+                    ambientColor = Color(0x1A0D1117),
+                    spotColor    = Color(0x330D1117)
+                )
+                .clip(coverShape)
                 .background(MaterialTheme.colorScheme.surfaceVariant)
         ) {
             AsyncImage(
@@ -159,11 +187,11 @@ fun NovelGlassCard(
             fontWeight = FontWeight.Bold,
             fontSize   = 12.sp,
             lineHeight = 16.sp,
-            color      = MaterialTheme.colorScheme.onSurface,
+            color      = MaterialTheme.colorScheme.onBackground,
             maxLines   = 2,
             overflow   = TextOverflow.Ellipsis,
             modifier   = Modifier
-                .padding(horizontal = 10.dp, vertical = 8.dp)
+                .padding(start = 2.dp, end = 2.dp, top = 10.dp)
                 .heightIn(min = 32.dp)
         )
     }
