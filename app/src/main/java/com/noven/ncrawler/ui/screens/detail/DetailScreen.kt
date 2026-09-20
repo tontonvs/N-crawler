@@ -25,7 +25,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -65,6 +67,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -92,9 +95,11 @@ import kotlin.math.sin
 //    rating, chips, chapter rows, buttons, error state and the snackbar.
 //  • Buttons (back, refresh, play, retry, "see all") use the reader's design:
 //    soft filled circles / pills, no border, no glass edge.
-//  • "Show More" is gone. Summary and chapters are simply part of the scroll and
-//    fade in as they scroll into view; a faint double-chevron hint drifts
-//    downward for 2s at the bottom, then fades away.
+//  • "Show More" is gone. The first screen is exactly one viewport tall (cover
+//    art, title, meta, rating, play) and NOTHING else shows on it — the summary
+//    and chapter list start below the fold and only fade in once you scroll
+//    them into view. A faint double-chevron hint drifts downward for 2s at the
+//    bottom, then fades away.
 //  • Label AND value text is larger throughout (Status/Completed, Genre,
 //    Latest, Summary, Chapters …).
 // The palette extraction (dominant → background, vibrant → accent) is untouched
@@ -104,6 +109,11 @@ import kotlin.math.sin
 
 private val FallbackTop    = Color(0xFF050A1A)
 private val FallbackAccent = Color(0xFF4FC3F7)
+
+// LazyColumn item positions in CinematicDetail (hero = 0). RevealOnScroll needs
+// them to know when ITS item has been scrolled into view.
+private const val SUMMARY_INDEX  = 1
+private const val CHAPTERS_INDEX = 2
 
 // ── Star rating ───────────────────────────────────────────────────────────────
 
@@ -281,18 +291,33 @@ private fun ChapterRow(chapter: ChapterLink, accent: Color, onClick: () -> Unit)
 }
 
 // ── Reveal on scroll ──────────────────────────────────────────────────────────
-// Fades + rises 24dp the first time the item composes (i.e. when scrolling
-// brings it into view — LazyColumn only composes what's near the viewport).
-// Alpha/translation only, so the item's layout height never changes and the
-// scroll position can't jump.
+// The item stays invisible until the user has actually scrolled it at least
+// 72dp into the viewport — merely being composed (LazyColumn can compose an
+// item just outside the viewport) doesn't reveal it. Then it fades + rises
+// 24dp. Alpha/translation only, so the item's layout height never changes and
+// the scroll position can't jump.
 
 @Composable
-private fun RevealOnScroll(content: @Composable () -> Unit) {
+private fun RevealOnScroll(
+    listState: LazyListState,
+    itemIndex: Int,
+    content: @Composable () -> Unit,
+) {
     var shown by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { shown = true }
+    val thresholdPx = with(LocalDensity.current) { 72.dp.toPx() }
+
+    LaunchedEffect(listState, itemIndex) {
+        snapshotFlow {
+            val info = listState.layoutInfo
+            val item = info.visibleItemsInfo.firstOrNull { it.index == itemIndex }
+            item != null && item.offset + thresholdPx < info.viewportEndOffset
+        }.first { it }
+        shown = true
+    }
+
     val progress by animateFloatAsState(
         targetValue   = if (shown) 1f else 0f,
-        animationSpec = tween(500, easing = FastOutSlowInEasing),
+        animationSpec = tween(550, easing = FastOutSlowInEasing),
         label         = "revealProgress",
     )
     Box(
@@ -595,125 +620,134 @@ private fun CinematicDetail(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
 
-            // Space for the back/refresh row (48dp buttons + 8dp top + 8dp bottom padding)
-            item { Spacer(Modifier.height(64.dp)) }
-
-            // Cover art breathing room — pushes text below the fold
-            item { Spacer(Modifier.height(210.dp)) }
-
-            // ── Sub-brand label: first genre ──────────────────────────────
+            // ── First screen: exactly ONE viewport tall ───────────────────
+            // Cover art fills the top (the back/refresh row floats over it); the
+            // text block is bottom-anchored above the hint zone. Because this item
+            // is a full viewport high, the summary and chapters below it start
+            // off-screen — nothing of them shows until the user scrolls.
+            // wrapContentHeight(unbounded) so that on a very short screen any
+            // overflow goes off the TOP (under the button row), never pushing the
+            // play button below the fold.
             item {
-                Text(
-                    text          = primaryGenre.uppercase().ifBlank { "NOVEL" },
-                    color         = accent,
-                    fontFamily    = MontserratFamily,
-                    fontSize      = 14.sp,
-                    fontWeight    = FontWeight.SemiBold,
-                    letterSpacing = 2.sp,
-                    textAlign     = TextAlign.Center,
-                    modifier      = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 32.dp),
-                )
-            }
-
-            item { Spacer(Modifier.height(8.dp)) }
-
-            // ── Title ─────────────────────────────────────────────────────
-            item {
-                Text(
-                    text       = novel.title,
-                    color      = Color.White,
-                    fontFamily = MontserratFamily,
-                    fontSize   = 32.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    lineHeight = 36.sp,
-                    textAlign  = TextAlign.Center,
-                    style      = TextStyle(
-                        shadow = Shadow(
-                            color      = Color.Black.copy(alpha = 0.6f),
-                            offset     = Offset(0f, 4f),
-                            blurRadius = 14f,
-                        )
-                    ),
+                Box(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 24.dp),
-                )
-            }
-
-            item { Spacer(Modifier.height(22.dp)) }
-
-            // ── Meta row: Status | Genre | Latest ─────────────────────────
-            // Equal-weight columns so the larger text can wrap/ellipsize inside
-            // its own slot instead of pushing the row wider than the screen.
-            item {
-                Row(
-                    modifier              = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp),
-                    verticalAlignment     = Alignment.CenterVertically,
+                        .fillParentMaxHeight()
+                        .fillMaxWidth(),
                 ) {
-                    MetaChip(
-                        label    = "STATUS",
-                        value    = novel.status.ifBlank { "—" },
-                        accent   = accent,
-                        modifier = Modifier.weight(1f),
-                    )
-                    MetaSeparator()
-                    MetaChip(
-                        label    = "GENRE",
-                        value    = primaryGenre.ifBlank { "—" },
-                        accent   = accent,
-                        modifier = Modifier.weight(1f),
-                    )
-                    MetaSeparator()
-                    MetaChip(
-                        label    = "LATEST",
-                        value    = latestLabel,
-                        accent   = accent,
-                        modifier = Modifier.weight(1f),
-                    )
+                    Column(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .fillMaxWidth()
+                            .wrapContentHeight(align = Alignment.Bottom, unbounded = true)
+                            // 84dp keeps the play button clear of the scroll hint
+                            .padding(bottom = 84.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        // Sub-brand label: first genre
+                        Text(
+                            text          = primaryGenre.uppercase().ifBlank { "NOVEL" },
+                            color         = accent,
+                            fontFamily    = MontserratFamily,
+                            fontSize      = 14.sp,
+                            fontWeight    = FontWeight.SemiBold,
+                            letterSpacing = 2.sp,
+                            textAlign     = TextAlign.Center,
+                            modifier      = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 32.dp),
+                        )
+
+                        Spacer(Modifier.height(8.dp))
+
+                        // Title
+                        Text(
+                            text       = novel.title,
+                            color      = Color.White,
+                            fontFamily = MontserratFamily,
+                            fontSize   = 32.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            lineHeight = 36.sp,
+                            textAlign  = TextAlign.Center,
+                            style      = TextStyle(
+                                shadow = Shadow(
+                                    color      = Color.Black.copy(alpha = 0.6f),
+                                    offset     = Offset(0f, 4f),
+                                    blurRadius = 14f,
+                                )
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 24.dp),
+                        )
+
+                        Spacer(Modifier.height(22.dp))
+
+                        // Meta row: Status | Genre | Latest — equal-weight
+                        // columns so the larger text wraps/ellipsizes inside its
+                        // own slot instead of pushing the row wider than the screen.
+                        Row(
+                            modifier          = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            MetaChip(
+                                label    = "STATUS",
+                                value    = novel.status.ifBlank { "—" },
+                                accent   = accent,
+                                modifier = Modifier.weight(1f),
+                            )
+                            MetaSeparator()
+                            MetaChip(
+                                label    = "GENRE",
+                                value    = primaryGenre.ifBlank { "—" },
+                                accent   = accent,
+                                modifier = Modifier.weight(1f),
+                            )
+                            MetaSeparator()
+                            MetaChip(
+                                label    = "LATEST",
+                                value    = latestLabel,
+                                accent   = accent,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+
+                        Spacer(Modifier.height(22.dp))
+
+                        // Star rating
+                        StarRating(
+                            rawRating = novel.rating,
+                            modifier  = Modifier.padding(horizontal = 24.dp),
+                        )
+
+                        Spacer(Modifier.height(26.dp))
+
+                        // Play button
+                        val readLabel = if (lastReadChapter != null)
+                            "Continue Ch.$lastReadChapter" else "Start Reading"
+                        val targetChapter = lastReadChapter
+                            ?: chapters.lastOrNull()?.num
+                            ?: 1
+
+                        PlayButton(
+                            label   = readLabel,
+                            onClick = { onReadChapter(targetChapter) },
+                        )
+                    }
                 }
             }
 
-            item { Spacer(Modifier.height(22.dp)) }
-
-            // ── Star rating ───────────────────────────────────────────────
+            // ── Synopsis (item 1) — no "Show More": it starts below the fold
+            // and fades in once you scroll it into view ────────────────────
             item {
-                StarRating(
-                    rawRating = novel.rating,
-                    modifier  = Modifier.padding(horizontal = 24.dp),
-                )
-            }
-
-            item { Spacer(Modifier.height(28.dp)) }
-
-            // ── Play button ───────────────────────────────────────────────
-            item {
-                val readLabel = if (lastReadChapter != null)
-                    "Continue Ch.$lastReadChapter" else "Start Reading"
-                val targetChapter = lastReadChapter
-                    ?: chapters.lastOrNull()?.num
-                    ?: 1
-
-                PlayButton(
-                    label   = readLabel,
-                    onClick = { onReadChapter(targetChapter) },
-                )
-            }
-
-            item { Spacer(Modifier.height(36.dp)) }
-
-            // ── Synopsis — no "Show More": it's simply below, and fades in as
-            // you scroll to it ────────────────────────────────────────────
-            item {
-                RevealOnScroll {
+                RevealOnScroll(listState, itemIndex = SUMMARY_INDEX) {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 24.dp),
                     ) {
+                        Spacer(Modifier.height(24.dp))
                         Text(
                             text          = "SUMMARY",
                             color         = accent,
@@ -735,9 +769,9 @@ private fun CinematicDetail(
                 }
             }
 
-            // ── Chapter list ──────────────────────────────────────────────
+            // ── Chapter list (item 2) — same: hidden until scrolled to ────
             item {
-                RevealOnScroll {
+                RevealOnScroll(listState, itemIndex = CHAPTERS_INDEX) {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
