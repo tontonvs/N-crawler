@@ -207,6 +207,7 @@ private fun DownloadTrayIcon(modifier: Modifier = Modifier, tint: Color = Color.
 // Opened from the search FAB in the floating nav — full-screen, autofocused
 // field, recent searches (max 5, each a rounded rectangle with its own "x") when
 // empty, live results once typing, X to close. All text is Montserrat.
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SearchOverlay(
     vm: BrowseViewModel,
@@ -310,12 +311,12 @@ fun SearchOverlay(
 
             if (query.isBlank()) {
                 // ── Recent searches (max 5) ─────────────────────────────────
-                // CHANGE: each recent search is now its own rounded rectangle —
-                // the term, and an "x" to remove it — instead of a plain list row
-                // with a clock icon. Tapping the rectangle runs the search again.
-                // Solid surface + outline so it reads in both light and dark mode.
-                // Montserrat (the reader/detail font) throughout; the old
-                // "deliberately not Montserrat" row font is gone.
+                // CHANGE: small rounded rectangles laid out side by side and
+                // wrapping onto the next line (FlowRow) — not stacked full-width
+                // rows. Same look as the reader's controls: a soft fill of the text
+                // colour at 10% (the reader pill's alpha), no border, Montserrat,
+                // icon at 90%. Long terms are cut short with an ellipsis (chip is
+                // capped at 168dp). Tap = search again, "x" = remove.
                 if (recentSearches.isNotEmpty()) {
                     Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
                         Text(
@@ -326,41 +327,44 @@ fun SearchOverlay(
                             color      = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Spacer(Modifier.height(10.dp))
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement   = Arrangement.spacedBy(8.dp)
+                        ) {
                             recentSearches.take(5).forEach { term ->
                                 Row(
                                     modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(16.dp))
-                                        .background(MaterialTheme.colorScheme.surface)
-                                        .border(
-                                            1.5.dp,
-                                            MaterialTheme.colorScheme.outline,
-                                            RoundedCornerShape(16.dp)
-                                        )
+                                        .widthIn(max = 168.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f))
                                         .clickable { vm.onQueryChange(term) }
-                                        .padding(start = 16.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
+                                        .padding(start = 12.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Text(
                                         term,
                                         fontFamily = MontserratFamily,
                                         fontWeight = FontWeight.SemiBold,
-                                        fontSize   = 16.sp,
+                                        fontSize   = 14.sp,
                                         color      = MaterialTheme.colorScheme.onSurface,
                                         maxLines   = 1,
                                         overflow   = TextOverflow.Ellipsis,
-                                        modifier   = Modifier.weight(1f)
+                                        modifier   = Modifier.weight(1f, fill = false)
                                     )
-                                    IconButton(
-                                        onClick  = { vm.removeRecentSearch(term) },
-                                        modifier = Modifier.size(40.dp)
+                                    // Plain box, not IconButton: IconButton's 48dp minimum
+                                    // touch size would balloon the small chip.
+                                    Box(
+                                        modifier = Modifier
+                                            .size(32.dp)
+                                            .clip(CircleShape)
+                                            .clickable { vm.removeRecentSearch(term) },
+                                        contentAlignment = Alignment.Center
                                     ) {
                                         Icon(
                                             Icons.Filled.Close,
                                             contentDescription = "Remove \"$term\" from recent searches",
-                                            tint     = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            modifier = Modifier.size(18.dp)
+                                            tint     = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.9f),
+                                            modifier = Modifier.size(14.dp)
                                         )
                                     }
                                 }
