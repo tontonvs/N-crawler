@@ -29,7 +29,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
@@ -147,43 +146,30 @@ fun ReaderScreen(
             )
         }
 
-        // ── Header + chapter nav / progress ──────────────────────────────
+        // ── Header (top) ──────────────────────────────────────────────────
         AnimatedVisibility(
             visible  = showControls,
             enter    = fadeIn() + slideInVertically(),
             exit     = fadeOut() + slideOutVertically(),
             modifier = Modifier.align(Alignment.TopCenter)
         ) {
-            Column {
-                ReaderHeader(
-                    fg              = fg,
-                    accent          = accent,
-                    bg              = bg,
-                    audioSelected   = audioSelected,
-                    onBack          = onBack,
-                    onAudioClick    = { audioSelected = true; showAudioOverlay = true },
-                    onTextClick     = { audioSelected = false },
-                    onSettingsClick = { showToc = false; showSettings = !showSettings }
-                )
-                ChapterNavBar(
-                    fg           = fg,
-                    accent       = accent,
-                    title        = (state as? ReaderUiState.Success)?.chapter?.title ?: "Chapter $chapterNum",
-                    progress     = progress,
-                    canGoPrev    = vm.currentChapterNum > 1,
-                    onPrev       = vm::loadPrev,
-                    onNext       = vm::loadNext,
-                    onOpenToc    = { showSettings = false; showToc = !showToc }
-                )
-            }
+            ReaderHeader(
+                fg              = fg,
+                accent          = accent,
+                bg              = bg,
+                audioSelected   = audioSelected,
+                onBack          = onBack,
+                onAudioClick    = { audioSelected = true; showAudioOverlay = true },
+                onTextClick     = { audioSelected = false },
+                onSettingsClick = { showToc = false; showSettings = !showSettings }
+            )
         }
 
-        // ── Bottom gradient scrim behind nav bar (change 3) ──────────────
-        // Always present so the chapter nav bar reads clearly over content.
+        // ── Bottom gradient scrim — always visible, sits behind nav bar ───
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(160.dp)
+                .height(180.dp)
                 .align(Alignment.BottomCenter)
                 .background(
                     Brush.verticalGradient(
@@ -195,6 +181,26 @@ fun ReaderScreen(
                     )
                 )
         )
+
+        // ── Chapter nav bar (bottom) ───────────────────────────────────────
+        AnimatedVisibility(
+            visible  = showControls,
+            enter    = fadeIn() + slideInVertically(initialOffsetY = { it }),
+            exit     = fadeOut() + slideOutVertically(targetOffsetY = { it }),
+            modifier = Modifier.align(Alignment.BottomCenter)
+        ) {
+            ChapterNavBar(
+                fg        = fg,
+                accent    = accent,
+                bg        = bg,
+                title     = (state as? ReaderUiState.Success)?.chapter?.title ?: "Chapter $chapterNum",
+                progress  = progress,
+                canGoPrev = vm.currentChapterNum > 1,
+                onPrev    = vm::loadPrev,
+                onNext    = vm::loadNext,
+                onOpenToc = { showSettings = false; showToc = !showToc }
+            )
+        }
 
         // ── Settings bottom sheet (change 4: tap-outside scrim + no X) ───
         // Full-screen invisible scrim catches taps outside the sheet and
@@ -296,15 +302,14 @@ private fun ReaderContent(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(scrollState)
-            // Change 2: top padding increased from 128dp → 184dp to clear the
-            // taller split header (pill row + back/settings row + nav bar).
-            .padding(top = 184.dp, bottom = 140.dp, start = 24.dp, end = 24.dp)
+            // Top: clears split header (pill row + back/settings row) ~140dp.
+            // Bottom: clears chapter nav bar + progress bar + gesture nav ~160dp.
+            .padding(top = 140.dp, bottom = 160.dp, start = 24.dp, end = 24.dp)
     ) {
-        // Change 1: chapter title now uses FontFamily.Default (system font)
-        // matching the UI body/label font convention in Theme.kt.
+        // Change 2: chapter title uses MontserratFamily — same as home screen.
         Text(
             text       = chapter.title,
-            fontFamily = FontFamily.Default,
+            fontFamily = MontserratFamily,
             fontWeight = FontWeight.ExtraBold,
             fontSize   = 26.sp,
             color      = fg,
@@ -321,14 +326,13 @@ private fun ReaderContent(
 
         paragraphs.forEachIndexed { index, para ->
             if (index == 0 && para.isNotEmpty()) {
-                // Drop-cap: accent letter keeps MontserratFamily for decorative
-                // intent; body text after it uses FontFamily.Default (change 1).
+                // Drop-cap: accent letter + body text both MontserratFamily.
                 val annotated = buildAnnotatedString {
                     withStyle(SpanStyle(fontSize = (settings.fontSize * 2.4f).sp, fontWeight = FontWeight.Black,
                         fontFamily = MontserratFamily, color = accent)) {
                         append(para.first().toString())
                     }
-                    withStyle(SpanStyle(fontFamily = FontFamily.Default)) {
+                    withStyle(SpanStyle(fontFamily = MontserratFamily)) {
                         append(para.substring(1))
                     }
                 }
@@ -343,10 +347,10 @@ private fun ReaderContent(
                         .padding(bottom = (settings.fontSize * 0.8f).dp)
                 )
             } else {
-                // Change 1: body paragraphs use FontFamily.Default
+                // Change 2: body paragraphs use MontserratFamily.
                 Text(
                     text       = para,
-                    fontFamily = FontFamily.Default,
+                    fontFamily = MontserratFamily,
                     fontSize   = settings.fontSize.sp,
                     color      = fg,
                     textAlign  = align,
@@ -488,6 +492,7 @@ private fun SegmentPill(
 private fun ChapterNavBar(
     fg: Color,
     accent: Color,
+    bg: Color,
     title: String,
     progress: Float,
     canGoPrev: Boolean,
@@ -495,7 +500,12 @@ private fun ChapterNavBar(
     onNext: () -> Unit,
     onOpenToc: () -> Unit
 ) {
-    Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .navigationBarsPadding()
+            .padding(horizontal = 20.dp, vertical = 8.dp)
+    ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -719,7 +729,7 @@ private fun FontSizeButton(label: String, onClick: () -> Unit) {
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
-        Text(label, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1A1714))
+        Text(label, fontFamily = MontserratFamily, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1A1714))
     }
 }
 
@@ -799,7 +809,7 @@ private fun ChapterTocDrawer(
                                         .background(Color.White.copy(alpha = 0.2f))
                                         .padding(horizontal = 10.dp, vertical = 4.dp)
                                 ) {
-                                    Text("Reading", fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
+                                    Text("Reading", fontFamily = MontserratFamily, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
                                 }
                             }
                         }
@@ -914,8 +924,9 @@ private fun AudioComingSoonOverlay(readerBg: Color, onDismiss: () -> Unit) {
             Spacer(Modifier.height(6.dp))
             Text(
                 "Tap anywhere to go back to reading",
-                fontSize = 12.sp,
-                color    = content.copy(alpha = 0.6f)
+                fontFamily = MontserratFamily,
+                fontSize   = 12.sp,
+                color      = content.copy(alpha = 0.6f)
             )
         }
     }
