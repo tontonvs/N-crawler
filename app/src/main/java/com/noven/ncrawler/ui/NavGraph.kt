@@ -62,11 +62,6 @@ object Routes {
 // Routes where bottom nav is hidden (immersive screens)
 private val fullScreenRoutes = listOf("detail/", "reader/")
 
-// The root screen of each pill tab. Being ON one of these (as opposed to a
-// screen opened from a tab — Genre, Downloads, …) decides how a tab tap
-// navigates; see openTab below.
-private val tabRoutes = listOf(Routes.BROWSE, Routes.LIBRARY, Routes.DISCOVER, Routes.SETTINGS)
-
 @Composable
 fun NCrawlerNavGraph() {
     val nav          = rememberNavController()
@@ -86,26 +81,34 @@ fun NCrawlerNavGraph() {
     // Back closes the search overlay before it leaves the screen behind it
     BackHandler(enabled = showSearchOverlay) { showSearchOverlay = false }
 
-    // FIX: tapping a pill icon now ALWAYS opens that tab's own screen, from
-    // wherever you are. What was wrong before:
-    //  - the tap was ignored when route == currentRoute, so with the search
-    //    overlay open over Home, tapping Home did nothing (overlay stayed);
-    //  - popUpTo(saveState) + restoreState restored the tab's whole saved back
-    //    stack, so e.g. Discover → Genre → tap Discover reopened the Genre page
-    //    (and from Genre/Downloads/Settings a tap could land on a stale
-    //    nested screen instead of the tab).
-    // Now: the overlay always closes; a nested screen (Genre, Downloads, …) is
-    // simply popped and the tab root opens fresh; state is only saved/restored
-    // when leaving from a tab ROOT, so a tab you were merely switching away
-    // from keeps its scroll position, but a nested screen can never be revived.
+    // FIX: tapping a pill icon ALWAYS opens that tab's own screen, from wherever
+    // you are. Two earlier bugs:
+    //  1. the tap was ignored when route == currentRoute, so with the search
+    //     overlay open over Home, tapping Home did nothing;
+    //  2. popUpTo(saveState = true) + restoreState = true made a tab tap
+    //     RESTORE the saved back stack. Tapping Home (the graph's start
+    //     destination) after leaving it for Settings restored the Settings
+    //     screen you had just popped — so Downloads → Settings → Home
+    //     appeared to do nothing — and a tab could likewise revive a stale
+    //     nested screen (Discover → Genre → tap Discover).
+    // Now nothing is saved or restored on tab taps:
+    //  - Home is never popped (it's the start destination), so it just drops
+    //    everything above it — and keeps its own scroll position;
+    //  - Library / Discover / Settings pop back to Home and open fresh, so the
+    //    tab's root screen is always what you get.
     fun openTab(route: String) {
         showSearchOverlay = false
         if (route == currentRoute) return
-        val fromTabRoot = currentRoute in tabRoutes
-        nav.navigate(route) {
-            popUpTo(Routes.BROWSE) { saveState = fromTabRoot }
-            launchSingleTop = true
-            restoreState    = fromTabRoot
+        if (route == Routes.BROWSE) {
+            if (!nav.popBackStack(Routes.BROWSE, inclusive = false)) {
+                nav.navigate(Routes.BROWSE) { launchSingleTop = true }
+            }
+        } else {
+            nav.navigate(route) {
+                popUpTo(Routes.BROWSE) { saveState = false }
+                launchSingleTop = true
+                restoreState    = false
+            }
         }
     }
 
