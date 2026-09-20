@@ -25,8 +25,8 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.noven.ncrawler.ui.theme.AccentBlue
-import com.noven.ncrawler.ui.theme.GlassBorderLight
-import com.noven.ncrawler.ui.theme.GlassSurfaceLight
+import com.noven.ncrawler.ui.theme.glassBorder
+import com.noven.ncrawler.ui.theme.glassSurface
 import com.noven.ncrawler.viewmodel.SourceSettingsViewModel
 import com.noven.ncrawler.viewmodel.SourceUiItem
 import kotlinx.coroutines.delay
@@ -81,7 +81,10 @@ fun SourceSettingsScreen(
     ) { padding ->
         LazyColumn(
             modifier            = Modifier.padding(padding),
-            contentPadding      = PaddingValues(horizontal = 16.dp, vertical = 16.dp),
+            // CHANGE: this screen is a tab of the floating nav now (the gear),
+            // so the nav floats over its bottom edge — 120dp of bottom padding
+            // keeps the last source row scrollable clear of it.
+            contentPadding      = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 120.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             item {
@@ -116,8 +119,11 @@ private fun SourceRow(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
-            .background(GlassSurfaceLight)
-            .border(1.dp, GlassBorderLight, RoundedCornerShape(16.dp))
+            // FIX: was GlassSurfaceLight / GlassBorderLight directly, so in dark
+            // mode the card was a near-white fill under near-white text.
+            // glassSurface()/glassBorder() follow the system theme.
+            .background(glassSurface())
+            .border(1.dp, glassBorder(), RoundedCornerShape(16.dp))
             .padding(horizontal = 14.dp, vertical = 10.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {

@@ -72,7 +72,6 @@ fun BrowseScreen(
     // card and the "See all" header link, both of which now route to the
     // existing DiscoverScreen (which already lists every genre as a card).
     onDiscoverClick: (() -> Unit)? = null,
-    onSettingsClick: (() -> Unit)? = null,
     vm: BrowseViewModel = viewModel()
 ) {
     val browseState      by vm.browseState.collectAsStateWithLifecycle()
@@ -88,11 +87,11 @@ fun BrowseScreen(
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
 
-            // ── Top bar — always avatar/logo/download, never swaps modes ───
-            TopNavBar(onDownloadsClick = onDownloadsClick, onSettingsClick = onSettingsClick)
+            // ── Top bar — always logo/download, never swaps modes ──────────
+            TopNavBar(onDownloadsClick = onDownloadsClick)
 
             // Search lives exclusively in the SearchOverlay (opened from the
-            // bottom nav) — the homepage itself is browse-only, no inline bar.
+            // search FAB in the floating nav) — the homepage itself is browse-only, no inline bar.
             BrowseContent(
                 state             = browseState,
                 popularState      = popularState,
@@ -110,9 +109,12 @@ fun BrowseScreen(
 
 // ── Top Nav Bar ───────────────────────────────────────────────────────────────
 // Solid white bar (Material You style) — never transparent, never swaps modes.
-// avatar (left) · logo (true center, via Box alignment) · download (right).
+// logo (left) · download (right).
+// CHANGE: the profile avatar that used to sit on the left is gone — Settings is
+// now the gear icon in the floating nav (NavGraph) — so the "nCrawler" logo
+// moved from the centre to the left, where the avatar was.
 @Composable
-private fun TopNavBar(onDownloadsClick: (() -> Unit)?, onSettingsClick: (() -> Unit)?) {
+private fun TopNavBar(onDownloadsClick: (() -> Unit)?) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -125,38 +127,12 @@ private fun TopNavBar(onDownloadsClick: (() -> Unit)?, onSettingsClick: (() -> U
                 .height(56.dp)
                 .padding(horizontal = 16.dp)
         ) {
-            // Avatar — left, shifted in a bit further, bigger, a full
-            // circle — border/bg both theme colors, so it adapts
-            // automatically between light/dark mode. Tap opens Settings —
-            // the natural, standard place for it now that NavGraph wires
-            // onSettingsClick through.
-            Box(
-                modifier = Modifier
-                    .align(Alignment.CenterStart)
-                    .padding(start = 8.dp)
-                    .size(38.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primaryContainer)
-                    .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f), CircleShape)
-                    .clickable(enabled = onSettingsClick != null) {
-                        onSettingsClick?.invoke()
-                    },
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    "T",
-                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                    style = MaterialTheme.typography.labelLarge.copy(
-                        fontWeight = FontWeight.ExtraBold,
-                        fontSize   = 20.sp
-                    )
-                )
-            }
-
-            // Logo — true center, bigger, full name
+            // Logo — left, bigger, full name
             Text(
                 "nCrawler",
-                modifier = Modifier.align(Alignment.Center),
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .padding(start = 8.dp),
                 style = MaterialTheme.typography.titleLarge.copy(
                     fontWeight    = FontWeight.ExtraBold,
                     fontSize      = 24.sp,

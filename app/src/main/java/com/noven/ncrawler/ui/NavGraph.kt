@@ -1,34 +1,38 @@
 package com.noven.ncrawler.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
-import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.*
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material.icons.outlined.*
-import androidx.compose.material.icons.rounded.*
-import androidx.compose.material3.*
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.*
 import androidx.navigation.navArgument
+import com.noven.ncrawler.ui.components.NavIcons
 import com.noven.ncrawler.ui.screens.browse.BrowseScreen
 import com.noven.ncrawler.ui.screens.browse.SearchOverlay
 import com.noven.ncrawler.ui.screens.detail.DetailScreen
@@ -38,12 +42,6 @@ import com.noven.ncrawler.ui.screens.downloads.DownloadsScreen
 import com.noven.ncrawler.ui.screens.library.LibraryScreen
 import com.noven.ncrawler.ui.screens.reader.ReaderScreen
 import com.noven.ncrawler.ui.screens.settings.SourceSettingsScreen
-import com.noven.ncrawler.ui.theme.AccentBlue
-import com.noven.ncrawler.ui.theme.NavBlue
-import com.noven.ncrawler.ui.theme.GlassSurfaceLight
-import com.noven.ncrawler.ui.theme.GlassSurfaceDark
-import com.noven.ncrawler.ui.theme.GlassBorderLight
-import com.noven.ncrawler.ui.theme.GlassBorderDark
 import com.noven.ncrawler.viewmodel.BrowseViewModel
 
 object Routes {
@@ -64,6 +62,11 @@ object Routes {
 // Routes where bottom nav is hidden (immersive screens)
 private val fullScreenRoutes = listOf("detail/", "reader/")
 
+// The root screen of each pill tab. Being ON one of these (as opposed to a
+// screen opened from a tab — Genre, Downloads, …) decides how a tab tap
+// navigates; see openTab below.
+private val tabRoutes = listOf(Routes.BROWSE, Routes.LIBRARY, Routes.DISCOVER, Routes.SETTINGS)
+
 @Composable
 fun NCrawlerNavGraph() {
     val nav          = rememberNavController()
@@ -75,12 +78,47 @@ fun NCrawlerNavGraph() {
     }
 
     // Hoisted here (not inside BrowseScreen) so the Search overlay — opened
-    // from the bottom nav, reachable from any tab — shares the same query/
-    // results/recent-searches state as the Browse screen itself. Also lets
-    // the play FAB resume the same "last read" novel the hero card shows.
+    // from the search FAB, reachable from any tab — shares the same query/
+    // results/recent-searches state as the Browse screen itself.
     val browseVm: BrowseViewModel = viewModel()
-    val continueReading by browseVm.continueReading.collectAsStateWithLifecycle()
     var showSearchOverlay by remember { mutableStateOf(false) }
+
+    // Back closes the search overlay before it leaves the screen behind it
+    BackHandler(enabled = showSearchOverlay) { showSearchOverlay = false }
+
+    // FIX: tapping a pill icon now ALWAYS opens that tab's own screen, from
+    // wherever you are. What was wrong before:
+    //  - the tap was ignored when route == currentRoute, so with the search
+    //    overlay open over Home, tapping Home did nothing (overlay stayed);
+    //  - popUpTo(saveState) + restoreState restored the tab's whole saved back
+    //    stack, so e.g. Discover → Genre → tap Discover reopened the Genre page
+    //    (and from Genre/Downloads/Settings a tap could land on a stale
+    //    nested screen instead of the tab).
+    // Now: the overlay always closes; a nested screen (Genre, Downloads, …) is
+    // simply popped and the tab root opens fresh; state is only saved/restored
+    // when leaving from a tab ROOT, so a tab you were merely switching away
+    // from keeps its scroll position, but a nested screen can never be revived.
+    fun openTab(route: String) {
+        showSearchOverlay = false
+        if (route == currentRoute) return
+        val fromTabRoot = currentRoute in tabRoutes
+        nav.navigate(route) {
+            popUpTo(Routes.BROWSE) { saveState = fromTabRoot }
+            launchSingleTop = true
+            restoreState    = fromTabRoot
+        }
+    }
+
+    // Which pill tab is highlighted (-1 = none: overlay open, or a screen with
+    // no tab of its own such as Downloads)
+    val selectedIndex = when {
+        showSearchOverlay                                      -> -1
+        currentRoute == Routes.BROWSE                          -> 0
+        currentRoute == Routes.LIBRARY                         -> 1
+        currentRoute == Routes.DISCOVER || currentRoute.startsWith("genre/") -> 2
+        currentRoute == Routes.SETTINGS                        -> 3
+        else                                                   -> -1
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         // Main nav host — no bottom padding, nav floats over content
@@ -99,8 +137,9 @@ fun NCrawlerNavGraph() {
                     // "Genre" section's "See all" link to the existing
                     // Discover screen, which already lists every genre.
                     onDiscoverClick   = { nav.navigate(Routes.DISCOVER) },
-                    // CHANGE: profile circle now opens the source picker
-                    onSettingsClick   = { nav.navigate(Routes.SETTINGS) },
+                    // CHANGE: no onSettingsClick any more — the profile
+                    // avatar is gone from the top bar; Settings is the gear
+                    // in the floating nav.
                     vm                = browseVm
                 )
             }
@@ -172,7 +211,7 @@ fun NCrawlerNavGraph() {
             }
         }
 
-        // ── Search overlay — reachable from any tab via the bottom nav ──────
+        // ── Search overlay — reachable from any tab via the search FAB ──────
         // Rendered BEFORE the floating nav below so the nav paints on top of
         // it (Box z-order = composition order) — otherwise the overlay's
         // opaque background fully covers the nav, making it untappable.
@@ -202,187 +241,257 @@ fun NCrawlerNavGraph() {
                 .padding(bottom = 16.dp)
         ) {
             FloatingNavBar(
-                currentRoute        = currentRoute,
-                isSearchOverlayOpen = showSearchOverlay,
-                onNavigate          = { route ->
-                    if (route != currentRoute) {
-                        showSearchOverlay = false
-                        nav.navigate(route) {
-                            popUpTo(Routes.BROWSE) { saveState = true }
-                            launchSingleTop = true
-                            restoreState    = true
-                        }
-                    }
-                },
-                onOpenSearch = { showSearchOverlay = true },
-                onFabClick   = {
-                    // Resume the same last-read novel the hero card shows,
-                    // at its exact chapter — falls back to Library when
-                    // nothing has been read yet.
-                    val cr = continueReading
-                    if (cr != null) {
-                        showSearchOverlay = false
-                        nav.navigate(Routes.reader(cr.novel.slug, cr.progress.lastChapterNum))
-                    } else if (currentRoute != Routes.LIBRARY) {
-                        showSearchOverlay = false
-                        nav.navigate(Routes.LIBRARY) {
-                            popUpTo(Routes.BROWSE) { saveState = true }
-                            launchSingleTop = true
-                            restoreState    = true
-                        }
-                    }
-                }
+                selectedIndex = selectedIndex,
+                searchOpen    = showSearchOverlay,
+                onTab         = ::openTab,
+                onSearchClick = { showSearchOverlay = !showSearchOverlay }
             )
         }
     }
 }
 
-// ── Floating Nav Bar ──────────────────────────────────────────────────────────
-// Frosted glass pill with 3 icons + separate blue FAB (continue reading)
+// ── Floating nav: pill (Home · Library · Discover · Settings) + search FAB ───
+// CHANGE: rebuilt after floating_pill_navigation_bar.html — a solid pill with a
+// circular selector that slides (with a slight overshoot) behind the active
+// icon; the active icon crossfades from outline to solid. The old glass
+// capsule, the Search tab inside it and the blue "continue reading" play FAB
+// are gone: search is the FAB now, in the reader's circle-button style, and the
+// profile avatar became the Settings gear.
 @Composable
 private fun FloatingNavBar(
-    currentRoute: String,
-    isSearchOverlayOpen: Boolean,
-    onNavigate: (String) -> Unit,
-    onOpenSearch: () -> Unit,
-    onFabClick: () -> Unit
+    selectedIndex: Int,
+    searchOpen: Boolean,
+    onTab: (String) -> Unit,
+    onSearchClick: () -> Unit
 ) {
-    val isDark      = isSystemInDarkTheme()
-    val glassFill   = if (isDark) GlassSurfaceDark else GlassSurfaceLight
-    val glassBorder = if (isDark) GlassBorderDark else GlassBorderLight
-
     Row(
         verticalAlignment     = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // ── Pill capsule — Home / Search / Library ─────────────────────────
-        Surface(
-            shape          = RoundedCornerShape(50.dp),
-            color          = glassFill,
-            border         = BorderStroke(1.dp, glassBorder),
-            tonalElevation = 8.dp,
-            modifier       = Modifier
-                .shadow(
-                    elevation    = 16.dp,
-                    shape        = RoundedCornerShape(50.dp),
-                    ambientColor = Color.Black.copy(alpha = 0.15f),
-                    spotColor    = Color.Black.copy(alpha = 0.25f)
-                )
-        ) {
-            Row(
-                modifier              = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment     = Alignment.CenterVertically
-            ) {
-                NavPillItem(
-                    icon        = Icons.Outlined.Home,
-                    iconActive  = Icons.Rounded.Home,
-                    label       = "Home",
-                    isSelected  = currentRoute == Routes.BROWSE && !isSearchOverlayOpen,
-                    onClick     = { onNavigate(Routes.BROWSE) }
-                )
-                NavPillItem(
-                    icon        = Icons.Outlined.Search,
-                    iconActive  = Icons.Rounded.Search,
-                    label       = "Search",
-                    isSelected  = isSearchOverlayOpen,
-                    // Opens the full-screen search overlay (see NavGraph) —
-                    // reachable from any tab, not just Browse.
-                    onClick     = onOpenSearch
-                )
-                NavPillItem(
-                    icon        = Icons.Outlined.FolderOpen,
-                    iconActive  = Icons.Rounded.FolderOpen,
-                    label       = "Library",
-                    isSelected  = currentRoute == Routes.LIBRARY && !isSearchOverlayOpen,
-                    onClick     = { onNavigate(Routes.LIBRARY) }
-                )
-                NavPillItem(
-                    icon        = Icons.Outlined.Explore,
-                    iconActive  = Icons.Rounded.Explore,
-                    label       = "Discover",
-                    isSelected  = (currentRoute == Routes.DISCOVER || currentRoute.startsWith("genre/"))
-                        && !isSearchOverlayOpen,
-                    onClick     = { onNavigate(Routes.DISCOVER) }
-                )
-            }
-        }
+        PillNav(selectedIndex = selectedIndex, onTab = onTab)
+        SearchFab(active = searchOpen, onClick = onSearchClick)
+    }
+}
 
-        // ── Blue FAB — Continue Reading ────────────────────────────────────
-        // WhatsApp-style: outside the capsule, blue circle, white play icon.
-        // Occasional-frequency tap, so a small press-in spring (Jhey-style
-        // delighter) is fine — it stays under 150ms and never fires on load.
-        val interactionSource = remember { MutableInteractionSource() }
-        val isPressed by interactionSource.collectIsPressedAsState()
-        val scale by animateFloatAsState(
-            targetValue   = if (isPressed) 0.90f else 1f,
-            animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
-            label         = "fabPress"
+private data class NavTab(
+    val route: String,
+    val label: String,
+    val outline: ImageVector,
+    val filled: ImageVector
+)
+
+private val navTabs = listOf(
+    NavTab(Routes.BROWSE,   "Home",     NavIcons.HomeOutline,     NavIcons.HomeFilled),
+    NavTab(Routes.LIBRARY,  "Library",  NavIcons.FolderOutline,   NavIcons.FolderFilled),
+    NavTab(Routes.DISCOVER, "Discover", NavIcons.DiscoverOutline, NavIcons.DiscoverFilled),
+    NavTab(Routes.SETTINGS, "Settings", NavIcons.SettingsOutline, NavIcons.SettingsFilled)
+)
+
+// Same geometry as the HTML: 48dp buttons, 8dp apart, 12/10dp pill padding.
+private val NavItemSize = 48.dp
+private val NavItemGap  = 8.dp
+private val NavIconSize = 22.dp
+
+// Light vs dark. The HTML pill is dark ink on a light page. On a dark app
+// background a dark pill would nearly vanish, so dark mode inverts it: light
+// pill, dark selector, dark outline icons, white solid icon.
+private class NavPalette(
+    val pill: Color,
+    val selector: Color,
+    val inactiveIcon: Color,
+    val activeIcon: Color,
+    val edge: Color
+)
+
+private val NavInk = Color(0xFF1E232D)
+
+@Composable
+private fun navPalette(): NavPalette =
+    if (isSystemInDarkTheme()) NavPalette(
+        pill         = Color(0xFFE6EAF2),
+        selector     = NavInk,
+        inactiveIcon = NavInk,
+        activeIcon   = Color.White,
+        edge         = Color.Black.copy(alpha = 0.08f)
+    ) else NavPalette(
+        pill         = NavInk,
+        selector     = Color.White,
+        inactiveIcon = Color.White,
+        activeIcon   = NavInk,
+        edge         = Color.White.copy(alpha = 0.12f)   // the HTML's inset highlight
+    )
+
+@Composable
+private fun PillNav(selectedIndex: Int, onTab: (String) -> Unit) {
+    val palette = navPalette()
+    val shape   = RoundedCornerShape(50)
+
+    // The HTML's cubic-bezier(0.34, 1.56, 0.64, 1), 0.4s — overshoots slightly
+    // and settles. Clamped to 0 while nothing is selected so it doesn't slide
+    // off to the left; it just fades out instead.
+    val selectorX by animateDpAsState(
+        targetValue   = (NavItemSize + NavItemGap) * selectedIndex.coerceAtLeast(0),
+        animationSpec = tween(400, easing = CubicBezierEasing(0.34f, 1.56f, 0.64f, 1f)),
+        label         = "navSelectorX"
+    )
+    val selectorAlpha by animateFloatAsState(
+        targetValue   = if (selectedIndex >= 0) 1f else 0f,
+        animationSpec = tween(200),
+        label         = "navSelectorAlpha"
+    )
+
+    Box(
+        modifier = Modifier
+            .shadow(
+                elevation    = 18.dp,
+                shape        = shape,
+                ambientColor = Color(0x330F172A),
+                spotColor    = Color(0x660F172A)
+            )
+            .clip(shape)
+            .background(palette.pill)
+            .border(1.dp, palette.edge, shape)
+            .padding(horizontal = 12.dp, vertical = 10.dp)
+    ) {
+        // Sliding selector circle
+        Box(
+            modifier = Modifier
+                .offset { IntOffset(selectorX.roundToPx(), 0) }
+                .size(NavItemSize)
+                .graphicsLayer { alpha = selectorAlpha }
+                .shadow(6.dp, CircleShape)
+                .background(palette.selector, CircleShape)
         )
 
-        Surface(
-            shape    = CircleShape,
-            color    = AccentBlue,
-            modifier = Modifier
-                .size(52.dp)
-                .graphicsLayer(scaleX = scale, scaleY = scale)
-                .shadow(
-                    elevation    = 12.dp,
-                    shape        = CircleShape,
-                    spotColor    = AccentBlue.copy(alpha = 0.4f),
-                    ambientColor = AccentBlue.copy(alpha = 0.2f)
-                )
-                .clickable(
-                    interactionSource = interactionSource,
-                    indication        = null,
-                    onClick            = onFabClick
-                )
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Icon(
-                    Icons.Rounded.PlayArrow,
-                    contentDescription = "Continue Reading",
-                    tint     = Color.White,
-                    modifier = Modifier.size(26.dp)
+        Row(horizontalArrangement = Arrangement.spacedBy(NavItemGap)) {
+            navTabs.forEachIndexed { index, tab ->
+                PillNavItem(
+                    tab      = tab,
+                    selected = index == selectedIndex,
+                    palette  = palette,
+                    onClick  = { onTab(tab.route) }
                 )
             }
         }
     }
 }
 
-// ── Nav pill item ─────────────────────────────────────────────────────────────
+// One button: outline icon (inactive colour) and solid icon (active colour)
+// stacked, crossfading over 250ms; a small press-in scale like the HTML's
+// :active state.
 @Composable
-private fun NavPillItem(
-    icon: ImageVector,
-    iconActive: ImageVector,
-    label: String,
-    isSelected: Boolean,
+private fun PillNavItem(
+    tab: NavTab,
+    selected: Boolean,
+    palette: NavPalette,
     onClick: () -> Unit
 ) {
-    val bgColor by animateColorAsState(
-        targetValue   = if (isSelected) AccentBlue.copy(alpha = 0.12f) else Color.Transparent,
-        animationSpec = tween(200),
-        label         = "navBg"
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val pressScale by animateFloatAsState(
+        targetValue   = if (isPressed) 0.95f else 1f,
+        animationSpec = tween(120),
+        label         = "navItemPress"
     )
-    val iconColor by animateColorAsState(
-        targetValue   = if (isSelected) AccentBlue else MaterialTheme.colorScheme.onSurfaceVariant,
-        animationSpec = tween(200),
-        label         = "navIcon"
+    val fill by animateFloatAsState(
+        targetValue   = if (selected) 1f else 0f,
+        animationSpec = tween(250),
+        label         = "navItemFill"
     )
 
     Box(
         modifier = Modifier
-            .clip(RoundedCornerShape(50.dp))
-            .background(bgColor)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 10.dp),
+            .size(NavItemSize)
+            .clip(CircleShape)
+            .semantics { contentDescription = tab.label }
+            .clickable(
+                interactionSource = interactionSource,
+                indication        = null,
+                role              = Role.Tab,
+                onClick           = onClick
+            ),
         contentAlignment = Alignment.Center
     ) {
         Icon(
-            if (isSelected) iconActive else icon,
-            contentDescription = label,
-            tint     = iconColor,
-            modifier = Modifier.size(22.dp)
+            imageVector        = tab.outline,
+            contentDescription = null,
+            tint               = palette.inactiveIcon,
+            modifier           = Modifier
+                .size(NavIconSize)
+                .graphicsLayer { alpha = 1f - fill; scaleX = pressScale; scaleY = pressScale }
+        )
+        Icon(
+            imageVector        = tab.filled,
+            contentDescription = null,
+            tint               = palette.activeIcon,
+            modifier           = Modifier
+                .size(NavIconSize)
+                .graphicsLayer { alpha = fill; scaleX = pressScale; scaleY = pressScale }
+        )
+    }
+}
+
+// ── Search FAB ───────────────────────────────────────────────────────────────
+// Copies the reader's circle buttons (back / prev / next): 48dp circle filled
+// with the foreground colour at 13%, icon in the foreground colour. `fg` here
+// is onSurface — ink in light mode, near-white in dark mode — and the 13% is
+// composited onto the surface colour so the circle is solid (the reader's
+// buttons sit on a solid page; this one floats over scrolling covers).
+// While the search overlay is open the FAB inverts (solid fg, surface-coloured
+// icon) to show it's active — the same inversion as the pill's selector.
+@Composable
+private fun SearchFab(active: Boolean, onClick: () -> Unit) {
+    val scheme = MaterialTheme.colorScheme
+    val fg     = scheme.onSurface
+    val idleBg = fg.copy(alpha = 0.13f).compositeOver(scheme.surface)
+
+    val bg by animateColorAsState(
+        targetValue   = if (active) fg else idleBg,
+        animationSpec = tween(200),
+        label         = "searchFabBg"
+    )
+    val iconTint by animateColorAsState(
+        targetValue   = if (active) scheme.surface else fg,
+        animationSpec = tween(200),
+        label         = "searchFabIcon"
+    )
+
+    // Occasional-frequency tap, so a small press-in spring is fine — it stays
+    // under 150ms and never fires on load.
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue   = if (isPressed) 0.90f else 1f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
+        label         = "searchFabPress"
+    )
+
+    Box(
+        modifier = Modifier
+            .size(48.dp)
+            .graphicsLayer(scaleX = scale, scaleY = scale)
+            .shadow(
+                elevation    = 12.dp,
+                shape        = CircleShape,
+                ambientColor = Color(0x260F172A),
+                spotColor    = Color(0x480F172A)
+            )
+            .clip(CircleShape)
+            .background(bg)
+            .clickable(
+                interactionSource = interactionSource,
+                indication        = null,
+                role              = Role.Button,
+                onClickLabel      = "Search",
+                onClick           = onClick
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector        = NavIcons.Search,
+            contentDescription = "Search",
+            tint               = iconTint,
+            modifier           = Modifier.size(NavIconSize)
         )
     }
 }
