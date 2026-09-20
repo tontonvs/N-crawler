@@ -225,27 +225,39 @@ class ReaderViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
 
-    // FIX: pick the most COLOURFUL meaningful swatch, not just the biggest one.
-    // Greys / near-black / near-white swatches carry no hue, and the hue that
-    // falls out of them is arbitrary — it tinted every dark or white-bordered
-    // cover the same way. Population still counts; saturation weights it.
-    // Falls back to the plain dominant colour (→ near-neutral swatches).
+    // FIX (reader stuck on red): the previous version scored swatches by
+    // population × saturation, which favoured small, very saturated accents
+    // (blood-red titles, fire, glows) over the cover's real dominant colour, so
+    // a lot of covers ended up with a red tint. Back to "dominant" meaning
+    // dominant: Palette's own dominant swatch first (its default filter already
+    // drops near-black, near-white and the skin-tone hue line), then the next
+    // most populous ones — but only among the top four, so a tiny accent can
+    // never win. A candidate must carry a real hue (saturation ≥ 0.15) and not
+    // be near-black/near-white; if none does, the cover is effectively neutral
+    // and deriveSwatches keeps the family near-neutral instead of inventing a tint.
     private fun extractDominant(bitmap: Bitmap): Color {
-        val palette = Palette.from(bitmap).maximumColorCount(24).generate()
+        val palette = Palette.from(bitmap).generate()
         val hsl = FloatArray(3)
-        var best: Palette.Swatch? = null
-        var bestScore = 0f
-        for (swatch in palette.swatches) {
-            ColorUtils.colorToHSL(swatch.rgb, hsl)
-            if (hsl[1] < 0.18f || hsl[2] < 0.12f || hsl[2] > 0.90f) continue
-            val score = swatch.population * (0.4f + hsl[1])
-            if (score > bestScore) {
-                bestScore = score
-                best = swatch
-            }
+
+        fun usable(rgb: Int): Boolean {
+            ColorUtils.colorToHSL(rgb, hsl)
+            return hsl[1] >= 0.15f && hsl[2] in 0.10f..0.92f
         }
-        val argb = best?.rgb ?: palette.getDominantColor(NeutralDominant.toArgb())
-        return Color(argb)
+
+        val candidates = (listOfNotNull(palette.dominantSwatch) +
+                palette.swatches.sortedByDescending { it.population })
+            .distinct()
+            .take(4)
+        val pick = candidates.firstOrNull { usable(it.rgb) }
+
+        Log.d(
+            TAG,
+            "dominant candidates: " + candidates.joinToString {
+                "#%06X x%d".format(it.rgb and 0xFFFFFF, it.population)
+            } + " -> picked " + (pick?.let { "#%06X".format(it.rgb and 0xFFFFFF) } ?: "none (neutral)")
+        )
+
+        return Color(pick?.rgb ?: palette.getDominantColor(NeutralDominant.toArgb()))
     }
 
     fun saveScrollPosition(scrollPos: Int) {
