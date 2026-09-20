@@ -15,6 +15,7 @@ import coil.request.ImageRequest
 import com.noven.ncrawler.NCrawlerApp
 import com.noven.ncrawler.data.db.ChapterEntity
 import com.noven.ncrawler.data.local.ReadChaptersStore
+import com.noven.ncrawler.data.local.ReadingPositionStore
 import com.noven.ncrawler.data.local.ReaderPrefsStore
 import com.noven.ncrawler.data.scraper.ChapterLink
 import kotlinx.coroutines.CancellationException
@@ -68,6 +69,7 @@ class ReaderViewModel(app: Application) : AndroidViewModel(app) {
     private val repo  = (app as NCrawlerApp).repository
     private val prefs = ReaderPrefsStore(app)
     private val readStore = ReadChaptersStore(app)
+    private val positionStore = ReadingPositionStore(app)
     private val TAG   = "NCrawler_Reader"
 
     private val _state = MutableStateFlow<ReaderUiState>(ReaderUiState.Loading)
@@ -258,6 +260,19 @@ class ReaderViewModel(app: Application) : AndroidViewModel(app) {
         )
 
         return Color(pick?.rgb ?: palette.getDominantColor(NeutralDominant.toArgb()))
+    }
+
+    // Where in [chapterNum] the reader stopped (0..1), or null if there's nothing
+    // saved for that chapter. Read BEFORE the screen scrolls to the top on load —
+    // a fresh chapter's position 0 must never overwrite it.
+    fun savedFraction(chapterNum: Int): Float? = positionStore.get(currentSlug, chapterNum)
+
+    // Remember the reading spot (fraction of the chapter) for the chapter that is
+    // currently open.
+    fun saveReadingFraction(fraction: Float) {
+        if (currentSlug.isNotEmpty() && currentChapter > 0) {
+            positionStore.save(currentSlug, currentChapter, fraction)
+        }
     }
 
     fun saveScrollPosition(scrollPos: Int) {

@@ -9,6 +9,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
@@ -31,15 +33,29 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.LinearGradientShader
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.Shader
+import androidx.compose.ui.graphics.ShaderBrush
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -65,7 +81,9 @@ import com.noven.ncrawler.viewmodel.ReaderSwatch
 import com.noven.ncrawler.viewmodel.ReaderTextAlign
 import com.noven.ncrawler.viewmodel.ReaderUiState
 import com.noven.ncrawler.viewmodel.ReaderViewModel
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.cos
 import kotlin.math.roundToInt
 import kotlin.math.sin
@@ -114,16 +132,60 @@ fun ReaderScreen(
     var audioSelected    by remember { mutableStateOf(false) }
 
     val scrollState = rememberScrollState()
-    LaunchedEffect(state) { if (state is ReaderUiState.Success) scrollState.scrollTo(0) }
 
-    LaunchedEffect(scrollState.value) {
+    // CHANGE: the reading spot is remembered. A chapter that loads scrolls to
+    // where you stopped (saved as a fraction of the chapter, so font-size /
+    // line-height changes don't move it) instead of always jumping to the top.
+    // Saving is paused (canSave = false) while a chapter loads and is being
+    // scrolled to its spot, so the transient position 0 can't overwrite it.
+    var canSave by remember { mutableStateOf(false) }
+
+    LaunchedEffect(state) {
+        if (state is ReaderUiState.Success) {
+            canSave = false
+            val saved = vm.savedFraction(currentNum)   // read BEFORE anything can overwrite it
+            scrollState.scrollTo(0)
+            // A finished chapter (≥97%) reopens at the top; a barely-started one too.
+            if (saved != null && saved in 0.02f..0.97f) {
+                // maxValue is 0 until the text has been measured
+                withTimeoutOrNull(1500) { snapshotFlow { scrollState.maxValue }.first { it > 0 } }
+                scrollState.scrollTo((saved * scrollState.maxValue).roundToInt())
+            }
+            canSave = true
+        } else {
+            canSave = false
+        }
+    }
+
+    LaunchedEffect(scrollState.value, canSave) {
+        if (!canSave) return@LaunchedEffect
         kotlinx.coroutines.delay(600)
         vm.saveScrollPosition(scrollState.value)
+        if (scrollState.maxValue > 0) {
+            vm.saveReadingFraction(scrollState.value.toFloat() / scrollState.maxValue)
+        }
+    }
+
+    // Leaving the reader within the 600ms debounce would lose the last bit of
+    // scrolling — save once more on the way out.
+    DisposableEffect(Unit) {
+        onDispose {
+            if (canSave && scrollState.maxValue > 0) {
+                vm.saveReadingFraction(scrollState.value.toFloat() / scrollState.maxValue)
+            }
+        }
     }
 
     val progress = if (scrollState.maxValue > 0)
         (scrollState.value.toFloat() / scrollState.maxValue).coerceIn(0f, 1f)
     else 0f
+
+    // Pull-up-for-next-chapter is only offered when there IS a next chapter (or we
+    // don't know yet — chapter list not loaded).
+    val hasNext = chapterList.isEmpty() ||
+        currentNum < (chapterList.maxOfOrNull { it.num } ?: Int.MAX_VALUE)
+    // Neon-blue / red highlights pick different shades on dark vs light pages.
+    val darkBg = bg.luminance() < 0.5f
 
     val noRipple = remember { MutableInteractionSource() }
 
@@ -163,7 +225,10 @@ fun ReaderScreen(
                     settings    = settings,
                     fg          = fg,
                     accent      = accent,
-                    scrollState = scrollState
+                    darkBg      = darkBg,
+                    scrollState = scrollState,
+                    hasNext     = hasNext,
+                    onPullNext  = vm::loadNext
                 )
             }
         }
@@ -193,14 +258,20 @@ fun ReaderScreen(
         }
 
         // ── Bottom scrim (always present, behind nav bar) ─────────────────
+        // CHANGE: shorter — 110dp (was 180dp), with the fade compressed into its
+        // top half so the nav bar still sits on a solid-enough backdrop.
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(180.dp)
+                .height(110.dp)
                 .align(Alignment.BottomCenter)
                 .background(
                     Brush.verticalGradient(
-                        colors = listOf(bg.copy(alpha = 0f), bg.copy(alpha = 0.82f), bg.copy(alpha = 0.97f))
+                        colorStops = arrayOf(
+                            0f    to bg.copy(alpha = 0f),
+                            0.45f to bg.copy(alpha = 0.82f),
+                            1f    to bg.copy(alpha = 0.97f)
+                        )
                     )
                 )
         )
@@ -286,7 +357,10 @@ private fun ReaderContent(
     settings: ReaderSettings,
     fg: Color,
     accent: Color,
-    scrollState: androidx.compose.foundation.ScrollState
+    darkBg: Boolean,
+    scrollState: androidx.compose.foundation.ScrollState,
+    hasNext: Boolean,
+    onPullNext: () -> Unit
 ) {
     val align = when (settings.textAlign) {
         ReaderTextAlign.LEFT    -> TextAlign.Left
@@ -295,63 +369,374 @@ private fun ReaderContent(
         ReaderTextAlign.JUSTIFY -> TextAlign.Justify
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(scrollState)
-            .padding(top = 150.dp, bottom = 170.dp, start = 24.dp, end = 24.dp)
-    ) {
-        // CHANGE: heading is the chapter's title ("Chapter N" if it has none) —
-        // it used to print chapter.title as scraped, which could be the novel's name.
-        Text(
-            text       = title,
-            fontFamily = MontserratFamily,
-            fontWeight = FontWeight.ExtraBold,
-            fontSize   = 26.sp,
-            color      = fg,
-            textAlign  = TextAlign.Center,
-            modifier   = Modifier.fillMaxWidth().padding(bottom = 24.dp)
-        )
-
-        val paragraphs = chapter.content
+    val paragraphs = remember(chapter.content) {
+        chapter.content
             .split("\n")
             .map { it.trim() }
             .filter { it.isNotBlank() }
+    }
+    // [ … ] and * … * passages, split out once per chapter
+    val parsed = remember(paragraphs) { paragraphs.map { parseFx(it) } }
+    val anyFx  = remember(parsed) { parsed.any { segs -> segs.any { it.fx != Fx.PLAIN } } }
+    // The animation clock only exists when this chapter has something to animate
+    val fxPhases = if (anyFx) rememberFxPhases() else null
 
-        paragraphs.forEachIndexed { index, para ->
-            if (index == 0 && para.isNotEmpty()) {
-                val annotated = buildAnnotatedString {
-                    withStyle(SpanStyle(
-                        fontSize   = (settings.fontSize * 2.4f).sp,
-                        fontWeight = FontWeight.Black,
-                        fontFamily = MontserratFamily,
-                        color      = accent
-                    )) { append(para.first().toString()) }
-                    withStyle(SpanStyle(fontFamily = MontserratFamily)) {
-                        append(para.substring(1))
-                    }
+    // ── Elastic pull up for the next chapter ─────────────────────────────
+    // At the very end of the text, dragging further up stretches the page
+    // upward with growing resistance (a rubber band) and shows a hint; letting go
+    // past the threshold opens the next chapter, otherwise it springs back.
+    // Only a finger DRAG counts — a fling arriving at the end never triggers it.
+    val density     = LocalDensity.current
+    val maxPullPx   = with(density) { 200.dp.toPx() }
+    val thresholdPx = with(density) { 90.dp.toPx() }
+    var pull by remember { mutableStateOf(0f) }            // px the page is pulled up
+    var fingerDown by remember { mutableStateOf(false) }
+    val currentHasNext by rememberUpdatedState(hasNext)
+    val currentOnPullNext by rememberUpdatedState(onPullNext)
+    val scope = rememberCoroutineScope()
+
+    val connection = remember(scrollState) {
+        object : NestedScrollConnection {
+            // Finger moving back DOWN while pulled: unwind the pull first, then scroll.
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (pull > 0f && available.y > 0f) {
+                    val unwind = minOf(pull, available.y)
+                    pull -= unwind
+                    return Offset(0f, unwind)
                 }
-                Text(
-                    text       = annotated,
-                    fontSize   = settings.fontSize.sp,
-                    color      = fg,
-                    textAlign  = align,
-                    lineHeight = (settings.fontSize * settings.lineHeight).sp,
-                    modifier   = Modifier.fillMaxWidth().padding(bottom = (settings.fontSize * 0.8f).dp)
-                )
-            } else {
-                Text(
-                    text       = para,
-                    fontFamily = MontserratFamily,
-                    fontSize   = settings.fontSize.sp,
-                    color      = fg,
-                    textAlign  = align,
-                    lineHeight = (settings.fontSize * settings.lineHeight).sp,
-                    modifier   = Modifier.fillMaxWidth().padding(bottom = (settings.fontSize * 0.8f).dp)
-                )
+                return Offset.Zero
+            }
+
+            // Whatever upward drag the text couldn't use (we're at the end) becomes pull.
+            override fun onPostScroll(
+                consumed: Offset,
+                available: Offset,
+                source: NestedScrollSource
+            ): Offset {
+                if (currentHasNext && fingerDown && available.y < 0f &&
+                    scrollState.value >= scrollState.maxValue
+                ) {
+                    val resistance = (0.55f * (1f - pull / maxPullPx)).coerceAtLeast(0.08f)
+                    pull = (pull - available.y * resistance).coerceAtMost(maxPullPx)
+                    return Offset(0f, available.y)
+                }
+                return Offset.Zero
             }
         }
     }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .nestedScroll(connection)
+            // Watches the pointer WITHOUT consuming (Initial pass) to know when the
+            // finger is down and when it lifts.
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                    fingerDown = true
+                    do {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                    } while (event.changes.any { it.pressed })
+                    fingerDown = false
+                    if (pull > 0f) {
+                        val go = pull >= thresholdPx
+                        scope.launch {
+                            if (go) currentOnPullNext()
+                            animate(
+                                initialValue  = pull,
+                                targetValue   = 0f,
+                                animationSpec = spring(dampingRatio = 0.55f, stiffness = 220f)
+                            ) { value, _ -> pull = value }
+                        }
+                    }
+                }
+            }
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer { translationY = -pull }          // the elastic stretch
+                .verticalScroll(scrollState)
+                // bottom 120dp (was 170dp): matches the shorter bottom scrim
+                .padding(top = 150.dp, bottom = 120.dp, start = 24.dp, end = 24.dp)
+        ) {
+            // CHANGE: heading is the chapter's title ("Chapter N" if it has none) —
+            // it used to print chapter.title as scraped, which could be the novel's name.
+            Text(
+                text       = title,
+                fontFamily = MontserratFamily,
+                fontWeight = FontWeight.ExtraBold,
+                fontSize   = 26.sp,
+                color      = fg,
+                textAlign  = TextAlign.Center,
+                modifier   = Modifier.fillMaxWidth().padding(bottom = 24.dp)
+            )
+
+            paragraphs.forEachIndexed { index, para ->
+                val segs      = parsed[index]
+                val hasFx     = segs.any { it.fx != Fx.PLAIN }
+                val paraModifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = (settings.fontSize * 0.8f).dp)
+
+                if (hasFx && fxPhases != null) {
+                    // [ … ] neon-blue gradient / * … * pulsing red
+                    FxParagraph(
+                        segments = segs,
+                        dropCap  = index == 0,
+                        fx       = fxPhases,
+                        darkBg   = darkBg,
+                        settings = settings,
+                        fg       = fg,
+                        accent   = accent,
+                        align    = align,
+                        modifier = paraModifier
+                    )
+                } else if (index == 0 && para.isNotEmpty()) {
+                    val annotated = buildAnnotatedString {
+                        withStyle(SpanStyle(
+                            fontSize   = (settings.fontSize * 2.4f).sp,
+                            fontWeight = FontWeight.Black,
+                            fontFamily = MontserratFamily,
+                            color      = accent
+                        )) { append(para.first().toString()) }
+                        withStyle(SpanStyle(fontFamily = MontserratFamily)) {
+                            append(para.substring(1))
+                        }
+                    }
+                    Text(
+                        text       = annotated,
+                        fontSize   = settings.fontSize.sp,
+                        color      = fg,
+                        textAlign  = align,
+                        lineHeight = (settings.fontSize * settings.lineHeight).sp,
+                        modifier   = paraModifier
+                    )
+                } else {
+                    Text(
+                        text       = para,
+                        fontFamily = MontserratFamily,
+                        fontSize   = settings.fontSize.sp,
+                        color      = fg,
+                        textAlign  = align,
+                        lineHeight = (settings.fontSize * settings.lineHeight).sp,
+                        modifier   = paraModifier
+                    )
+                }
+            }
+        }
+
+        // Pull hint — sits in the gap the stretch opens up above the nav bar
+        if (hasNext) {
+            PullNextIndicator(
+                pull      = { pull },
+                threshold = thresholdPx,
+                fg        = fg,
+                accent    = accent,
+                modifier  = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 120.dp)
+            )
+        }
+    }
+}
+
+// The "pull up for next chapter" pill: the reader's soft-filled style. It fades
+// in as the pull grows; the arrow flips and turns accent-coloured once releasing
+// will actually open the next chapter.
+@Composable
+private fun PullNextIndicator(
+    pull: () -> Float,
+    threshold: Float,
+    fg: Color,
+    accent: Color,
+    modifier: Modifier = Modifier
+) {
+    val ready = pull() >= threshold
+    val arrowRotation by animateFloatAsState(
+        targetValue   = if (ready) 180f else 0f,
+        animationSpec = tween(200),
+        label         = "pullArrow"
+    )
+    Row(
+        modifier = modifier
+            .graphicsLayer { alpha = (pull() / threshold).coerceIn(0f, 1f) }
+            .clip(RoundedCornerShape(24.dp))
+            .background(fg.copy(alpha = 0.10f))
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            Icons.Default.KeyboardArrowUp,
+            contentDescription = null,
+            tint     = if (ready) accent else fg.copy(alpha = 0.9f),
+            modifier = Modifier
+                .size(20.dp)
+                .graphicsLayer { rotationZ = arrowRotation }
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            if (ready) "Release for next chapter" else "Pull up for next chapter",
+            fontFamily = MontserratFamily,
+            fontWeight = FontWeight.SemiBold,
+            fontSize   = 13.sp,
+            color      = fg.copy(alpha = 0.9f)
+        )
+    }
+}
+
+// ── Highlighted passages ─────────────────────────────────────────────────────
+//   [ … ]   → neon blue with a gradient that slowly moves through the letters
+//             (game-style system messages: [Level Up!], [Skill: …])
+//   * … *   → red that pulses (the asterisks themselves are dropped)
+// Only paragraphs that actually contain such a passage take part, and a
+// paragraph only animates while it is on screen (see FxParagraph).
+
+private enum class Fx { PLAIN, NEON, RED }
+private data class FxSeg(val text: String, val fx: Fx)
+
+// [ … ] on one line, or *word* — the opening * must be followed by a non-space and
+// the closing * preceded by one, so "***" / "* * *" scene breaks and "5 * 3 * 2"
+// are left alone.
+private val FX_REGEX = Regex("""\[[^\]\n]{1,400}\]|\*(?![\s*])[^*\n]{1,400}?(?<![\s*])\*""")
+
+private fun parseFx(text: String): List<FxSeg> {
+    val out = ArrayList<FxSeg>()
+    var last = 0
+    for (m in FX_REGEX.findAll(text)) {
+        if (m.range.first > last) out += FxSeg(text.substring(last, m.range.first), Fx.PLAIN)
+        val raw = m.value
+        out += if (raw.startsWith("[")) FxSeg(raw, Fx.NEON)                        // brackets stay
+               else FxSeg(raw.substring(1, raw.length - 1), Fx.RED)                // asterisks go
+        last = m.range.last + 1
+    }
+    if (last < text.length) out += FxSeg(text.substring(last), Fx.PLAIN)
+    return out
+}
+
+// The two animation clocks, handed down as State objects and NOT read here: only
+// a visible FxParagraph reads .value, so nothing else recomposes per frame.
+private class FxPhases(val neon: State<Float>, val pulse: State<Float>)
+
+@Composable
+private fun rememberFxPhases(): FxPhases {
+    val context = LocalContext.current
+    val reducedMotion = remember(context) {
+        Settings.Global.getFloat(
+            context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f
+        ) == 0f
+    }
+    // "Remove animations": keep the colours, freeze the motion
+    if (reducedMotion) return remember { FxPhases(mutableStateOf(0f), mutableStateOf(0.6f)) }
+
+    val transition = rememberInfiniteTransition(label = "readerFx")
+    val neon = transition.animateFloat(
+        initialValue  = 0f,
+        targetValue   = 1f,
+        animationSpec = infiniteRepeatable(tween(2600, easing = LinearEasing)),
+        label         = "neonPhase"
+    )
+    val pulse = transition.animateFloat(
+        initialValue  = 0f,
+        targetValue   = 1f,
+        animationSpec = infiniteRepeatable(tween(950, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+        label         = "redPulse"
+    )
+    return remember(neon, pulse) { FxPhases(neon, pulse) }
+}
+
+// A gradient that slides sideways: seamless because the first and last colours
+// match and the tile repeats every [periodPx].
+private class MovingGradientBrush(
+    private val colors: List<Color>,
+    private val shiftPx: Float,
+    private val periodPx: Float
+) : ShaderBrush() {
+    override fun createShader(size: Size): Shader =
+        LinearGradientShader(
+            from     = Offset(shiftPx, 0f),
+            to       = Offset(shiftPx + periodPx, 0f),
+            colors   = colors,
+            tileMode = TileMode.Repeated
+        )
+}
+
+@Composable
+private fun FxParagraph(
+    segments: List<FxSeg>,
+    dropCap: Boolean,
+    fx: FxPhases,
+    darkBg: Boolean,
+    settings: ReaderSettings,
+    fg: Color,
+    accent: Color,
+    align: TextAlign,
+    modifier: Modifier = Modifier
+) {
+    val density = LocalDensity.current
+    val screenHeightPx = with(density) { LocalConfiguration.current.screenHeightDp.dp.toPx() }
+    val periodPx = with(density) { 160.dp.toPx() }
+    var visible by remember { mutableStateOf(true) }
+
+    // Read the clocks only while on screen — off-screen, this paragraph subscribes
+    // to nothing and is not recomposed every frame.
+    val neonPhase = if (visible) fx.neon.value else 0f
+    val pulse     = if (visible) fx.pulse.value else 0.5f
+
+    // Shades per page brightness: cyan→electric blue on dark pages, deeper blues on
+    // light pages (cyan would vanish on cream); glows only on dark pages.
+    val neonColors = remember(darkBg) {
+        if (darkBg) listOf(Color(0xFF00E5FF), Color(0xFF2979FF), Color(0xFF00B0FF), Color(0xFF00E5FF))
+        else        listOf(Color(0xFF0033CC), Color(0xFF0088FF), Color(0xFF0055FF), Color(0xFF0033CC))
+    }
+    val redColor = if (darkBg) lerp(Color(0xFFC62828), Color(0xFFFF5252), pulse)
+                   else        lerp(Color(0xFF8E0000), Color(0xFFE53935), pulse)
+    val neonGlow = if (darkBg) Shadow(Color(0xFF00B0FF).copy(alpha = 0.55f), Offset.Zero, 14f) else null
+    val redGlow  = if (darkBg) Shadow(redColor.copy(alpha = 0.25f + 0.4f * pulse), Offset.Zero, 8f + 10f * pulse) else null
+
+    val annotated = buildAnnotatedString {
+        var capPending = dropCap
+        for (seg in segments) {
+            var text = seg.text
+            if (capPending && text.isNotEmpty()) {
+                withStyle(SpanStyle(
+                    fontSize   = (settings.fontSize * 2.4f).sp,
+                    fontWeight = FontWeight.Black,
+                    color      = accent
+                )) { append(text.first().toString()) }
+                text = text.substring(1)
+                capPending = false
+            }
+            if (text.isEmpty()) continue
+            when (seg.fx) {
+                Fx.PLAIN -> append(text)
+                Fx.NEON  -> withStyle(SpanStyle(
+                    brush      = MovingGradientBrush(neonColors, neonPhase * periodPx, periodPx),
+                    fontWeight = FontWeight.SemiBold,
+                    shadow     = neonGlow
+                )) { append(text) }
+                Fx.RED   -> withStyle(SpanStyle(
+                    color      = redColor,
+                    fontWeight = FontWeight.SemiBold,
+                    shadow     = redGlow
+                )) { append(text) }
+            }
+        }
+    }
+
+    Text(
+        text       = annotated,
+        fontFamily = MontserratFamily,
+        fontSize   = settings.fontSize.sp,
+        color      = fg,
+        textAlign  = align,
+        lineHeight = (settings.fontSize * settings.lineHeight).sp,
+        modifier   = modifier.onGloballyPositioned { coords ->
+            val b = coords.boundsInWindow()
+            visible = b.bottom > -300f && b.top < screenHeightPx + 300f
+        }
+    )
 }
 
 // ── Header: back | settings. Pill moved to audio overlay. ───────────────────
