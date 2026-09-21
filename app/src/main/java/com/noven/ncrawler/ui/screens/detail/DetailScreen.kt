@@ -61,6 +61,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -81,6 +82,7 @@ import androidx.palette.graphics.Palette
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.noven.ncrawler.data.db.NovelEntity
+import com.noven.ncrawler.data.local.DominantColorStore
 import com.noven.ncrawler.data.scraper.ChapterLink
 import com.noven.ncrawler.ui.theme.MontserratFamily
 import com.noven.ncrawler.viewmodel.DetailUiState
@@ -400,6 +402,7 @@ fun DetailScreen(
     val downloadProgress by vm.downloadProgress.collectAsStateWithLifecycle()
     val updateMessage   by vm.updateMessage.collectAsStateWithLifecycle()
 
+    val context = LocalContext.current
     val snackbarHost = remember { SnackbarHostState() }
     LaunchedEffect(updateMessage) {
         updateMessage?.let { vm.clearUpdateMessage(); snackbarHost.showSnackbar(it) }
@@ -476,6 +479,12 @@ fun DetailScreen(
                         try {
                             val palette = Palette.from(bmp).generate()
                             dominantColor = Color(palette.getDominantColor(0xFF050A1A.toInt()))
+                            // Remember it: Browse colours the cut-out behind its
+                            // downloads button with the last novel's dominant colour.
+                            // (Only a real swatch — not the fallback navy.)
+                            palette.dominantSwatch?.let {
+                                DominantColorStore(context).saveLast(slug, it.rgb)
+                            }
                             vibrantColor  = Color(
                                 palette.getVibrantColor(
                                     palette.getLightVibrantColor(

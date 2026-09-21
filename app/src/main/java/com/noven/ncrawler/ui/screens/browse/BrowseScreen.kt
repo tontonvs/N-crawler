@@ -22,17 +22,22 @@ import androidx.compose.ui.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
@@ -48,6 +53,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import com.noven.ncrawler.data.db.NovelEntity
+import androidx.core.graphics.ColorUtils
+import com.noven.ncrawler.data.local.DominantColorStore
 import com.noven.ncrawler.ui.components.GenreGlassTile
 import com.noven.ncrawler.ui.components.NovelGlassCard
 import com.noven.ncrawler.ui.components.novelCardWidthFor
@@ -92,7 +99,15 @@ fun BrowseScreen(
         Column(modifier = Modifier.fillMaxSize()) {
 
             // ── Top bar — always logo/download, never swaps modes ──────────
-            TopNavBar(onDownloadsClick = onDownloadsClick)
+            // Cut-out colour = dominant colour of the novel last opened on the
+            // Detail screen (saved there); brand blue if there isn't one yet.
+            // Re-read whenever Browse is (re)composed, i.e. on every return from Detail.
+            val context = LocalContext.current
+            val darkTheme = isSystemInDarkTheme()
+            val cutoutColor = remember(darkTheme) {
+                cutoutColorFor(DominantColorStore(context).getLast(), darkTheme)
+            }
+            TopNavBar(onDownloadsClick = onDownloadsClick, cutoutColor = cutoutColor)
 
             // Search lives exclusively in the SearchOverlay (opened from the
             // search FAB in the floating nav) — the homepage itself is browse-only, no inline bar.
@@ -112,77 +127,148 @@ fun BrowseScreen(
 }
 
 // ── Top Nav Bar ───────────────────────────────────────────────────────────────
-// Solid white bar (Material You style) — never transparent, never swaps modes.
-// logo (left) · download (right).
-// CHANGE: the profile avatar that used to sit on the left is gone — Settings is
-// now the gear icon in the floating nav (NavGraph) — so the "nCrawler" logo
-// moved from the centre to the left, where the avatar was.
+// CHANGE: rebuilt around a smooth inverted cut-out (from cutout.html): the bar
+// is a surface-coloured shape with a rounded "bay" bitten out of its top-right
+// corner, filled with a colour, and the downloads button floats in the bay with
+// a ring of that colour around it. The bay's outline is exactly the HTML's:
+//   • a concave arc concentric with the button (radius = button/2 + gap),
+//   • convex fillets where the bay opens onto the bar's top and right edges.
+// The bar is taller (56dp → 104dp below the status bar) to make room for it, its
+// bottom corners are rounded, and the logo is bigger and nudged right.
+// The bay runs up to the top of the screen, behind the status-bar icons. The bay
+// colour is clamped to a mid lightness (see cutoutColorFor) so the system's
+// dark-in-light / light-in-dark status icons stay readable over it AND over the bar.
+private val BAR_CONTENT_HEIGHT = 104.dp     // below the status bar (was 56dp)
+private val BTN_SIZE           = 40.dp      // downloads button (unchanged)
+private val BTN_MARGIN_END     = 14.dp      // button ↔ screen's right edge
+private val BTN_MARGIN_TOP     = 12.dp      // button ↔ bottom of the status bar
+private val CUTOUT_GAP         = 10.dp      // ring of bay colour around the button
+private val CONVEX_RADIUS      = 16.dp      // fillets where the bay opens onto the edges
+private val BAR_BOTTOM_RADIUS  = 24.dp
+
 @Composable
-private fun TopNavBar(onDownloadsClick: (() -> Unit)?) {
+private fun TopNavBar(onDownloadsClick: (() -> Unit)?, cutoutColor: Color) {
+    val density = LocalDensity.current
+    val statusBarDp = with(density) { WindowInsets.statusBars.getTop(density).toDp() }
+    val surface = MaterialTheme.colorScheme.surface
+
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .statusBarsPadding()
-            .background(MaterialTheme.colorScheme.surface)
+            .height(statusBarDp + BAR_CONTENT_HEIGHT)
     ) {
+        // Bar + bay, drawn as one shape
+        Canvas(modifier = Modifier.matchParentSize()) {
+            val w = size.width
+            val h = size.height
+            val statusPx  = statusBarDp.toPx()
+            val convexR   = CONVEX_RADIUS.toPx()
+            val bottomR   = BAR_BOTTOM_RADIUS.toPx()
+            val concaveR  = (BTN_SIZE / 2 + CUTOUT_GAP).toPx()
+            // Button centre; the concave arc is concentric with it
+            val cx = w - (BTN_MARGIN_END + BTN_SIZE / 2).toPx()
+            val cy = statusPx + (BTN_MARGIN_TOP + BTN_SIZE / 2).toPx()
+            val bayLeft   = cx - concaveR              // left wall of the bay
+            val bayBottom = cy + concaveR              // floor of the bay
+
+            // 1. the bay colour, only where the bay is (so no colour can fringe
+            //    along the bar's own rounded corners)
+            val bayX = bayLeft - convexR - 1f
+            drawRect(
+                color   = cutoutColor,
+                topLeft = Offset(bayX, 0f),
+                size    = Size(w - bayX, bayBottom + convexR + 1f)
+            )
+
+            // 2. the bar, clockwise from the top-left, leaving the bay open
+            val bar = Path().apply {
+                moveTo(0f, 0f)
+                lineTo(bayLeft - convexR, 0f)
+                // convex fillet at the top of the bay's left wall
+                arcTo(Rect(Offset(bayLeft - convexR, convexR), convexR), 270f, 90f, false)
+                lineTo(bayLeft, cy)
+                // concave arc around the button: left → bottom
+                arcTo(Rect(Offset(cx, cy), concaveR), 180f, -90f, false)
+                lineTo(w - convexR, bayBottom)
+                // convex fillet where the bay's floor meets the right edge
+                arcTo(Rect(Offset(w - convexR, bayBottom + convexR), convexR), 270f, 90f, false)
+                lineTo(w, h - bottomR)
+                arcTo(Rect(Offset(w - bottomR, h - bottomR), bottomR), 0f, 90f, false)
+                lineTo(bottomR, h)
+                arcTo(Rect(Offset(bottomR, h - bottomR), bottomR), 90f, 90f, false)
+                close()
+            }
+            drawPath(bar, color = surface)
+        }
+
+        // Logo — larger (24 → 28sp) and nudged right (24dp → 36dp from the edge),
+        // vertically centred in the bar body under the status bar
         Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .height(56.dp)
-                .padding(horizontal = 16.dp)
+                .matchParentSize()
+                .padding(top = statusBarDp)
         ) {
-            // Logo — left, bigger, full name
             Text(
                 "nCrawler",
                 modifier = Modifier
                     .align(Alignment.CenterStart)
-                    .padding(start = 8.dp),
+                    .padding(start = 36.dp),
                 style = MaterialTheme.typography.titleLarge.copy(
                     fontWeight    = FontWeight.ExtraBold,
-                    fontSize      = 24.sp,
+                    fontSize      = 28.sp,
                     letterSpacing = (-0.5).sp
                 ),
                 color = MaterialTheme.colorScheme.onSurface
             )
+        }
 
-            // Download button — matches the mockup shape (full circle, 2px
-            // border, transparent background, hand-drawn "tray" arrow), but
-            // the border/icon color is now theme-adaptive (onSurface)
-            // instead of hardcoded black — the mockup was light-mode only,
-            // and a pure-black circle disappears against a dark top bar.
-            val downloadInteraction = remember { MutableInteractionSource() }
-            val downloadPressed by downloadInteraction.collectIsPressedAsState()
-            val downloadAlpha = if (downloadPressed) 0.7f else 1f
-            val downloadTint = MaterialTheme.colorScheme.onSurface
-            Box(
-                modifier = Modifier
-                    .align(Alignment.CenterEnd)
-                    .padding(end = 8.dp)
-                    .size(40.dp)
-                    .clip(CircleShape)
-                    .border(2.dp, downloadTint.copy(alpha = downloadAlpha), CircleShape)
-                    .clickable(
-                        enabled           = onDownloadsClick != null,
-                        interactionSource = downloadInteraction,
-                        indication        = null
-                    ) {
-                        onDownloadsClick?.invoke()
-                    },
-                contentAlignment = Alignment.Center
-            ) {
-                DownloadTrayIcon(
-                    modifier = Modifier.size(26.dp),
-                    tint     = downloadTint.copy(alpha = downloadAlpha)
-                )
-            }
+        // Download button — same tray icon and 2dp theme-adaptive ring as before,
+        // now on a translucent surface-coloured disc (like the HTML's frosted
+        // button) so it reads on any bay colour.
+        val downloadInteraction = remember { MutableInteractionSource() }
+        val downloadPressed by downloadInteraction.collectIsPressedAsState()
+        val downloadAlpha = if (downloadPressed) 0.7f else 1f
+        val downloadTint = MaterialTheme.colorScheme.onSurface
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(top = statusBarDp + BTN_MARGIN_TOP, end = BTN_MARGIN_END)
+                .size(BTN_SIZE)
+                .clip(CircleShape)
+                .background(surface.copy(alpha = 0.88f))
+                .border(2.dp, downloadTint.copy(alpha = downloadAlpha), CircleShape)
+                .clickable(
+                    enabled           = onDownloadsClick != null,
+                    interactionSource = downloadInteraction,
+                    indication        = null
+                ) {
+                    onDownloadsClick?.invoke()
+                },
+            contentAlignment = Alignment.Center
+        ) {
+            DownloadTrayIcon(
+                modifier = Modifier.size(26.dp),
+                tint     = downloadTint.copy(alpha = downloadAlpha)
+            )
         }
     }
 }
 
-// ── Download tray icon ─────────────────────────────────────────────────────────
-// Hand-drawn to match the mockup's SVG exactly (viewBox 0 0 24 24): a shaft
-// from (12,4) to (12,14), a chevron arrowhead (8,10)-(12,14)-(16,10), and a
-// base line (7,18)-(17,18) — 2px round-capped strokes, no fill.
+// The bay colour. Base = the last Detail novel's dominant colour; if there is none
+// (or it is a grey with no hue) improvise from the brand blue. Either way the
+// colour is clamped to a mid lightness for the current theme: light mode 0.55–0.72
+// (visible against the white bar, and the dark status icons stay readable on it),
+// dark mode 0.22–0.38 (visible against the dark bar, light icons stay readable),
+// with at least some saturation so it never reads as grey.
+private fun cutoutColorFor(argb: Int?, dark: Boolean): Color {
+    val hsl = FloatArray(3)
+    val usable = argb?.let { ColorUtils.colorToHSL(it, hsl); hsl[1] >= 0.12f } ?: false
+    if (!usable) ColorUtils.colorToHSL((if (dark) AccentBlueDark else AccentBlue).toArgb(), hsl)
+    val s = hsl[1].coerceIn(0.35f, 0.85f)
+    val l = if (dark) hsl[2].coerceIn(0.22f, 0.38f) else hsl[2].coerceIn(0.55f, 0.72f)
+    return Color(ColorUtils.HSLToColor(floatArrayOf(hsl[0], s, l)))
+}
+
 @Composable
 private fun DownloadTrayIcon(modifier: Modifier = Modifier, tint: Color = Color.Black) {
     Canvas(modifier = modifier) {

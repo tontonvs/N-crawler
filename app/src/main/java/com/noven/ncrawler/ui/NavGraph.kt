@@ -296,7 +296,9 @@ private val navTabs = listOf(
 // FAB size) derives from these, so resizing again is a few numbers.
 private val NavItemSize = 44.dp
 private val NavItemGap  = 4.dp
-private val NavIconSize = 20.dp
+private val NavIconSize = 22.dp     // a tiny bit bigger (was 20dp)
+// 13% transparent: the pill and the search FAB are 87% opaque
+private const val NavOpacity = 0.87f
 private val NavPadH     = 6.dp
 private val NavPadV     = 5.dp
 
@@ -357,7 +359,7 @@ private fun PillNav(selectedIndex: Int, onTab: (String) -> Unit) {
                 spotColor    = Color(0x660F172A)
             )
             .clip(shape)
-            .background(palette.pill)
+            .background(palette.pill.copy(alpha = NavOpacity))
             .border(1.dp, palette.edge, shape)
             .padding(horizontal = NavPadH, vertical = NavPadV)
     ) {
@@ -486,7 +488,7 @@ private fun SearchFab(active: Boolean, onClick: () -> Unit) {
                 spotColor    = Color(0x480F172A)
             )
             .clip(CircleShape)
-            .background(bg)
+            .background(bg.copy(alpha = NavOpacity))
             .clickable(
                 interactionSource = interactionSource,
                 indication        = null,
