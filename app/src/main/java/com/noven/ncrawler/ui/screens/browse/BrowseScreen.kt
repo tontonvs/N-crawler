@@ -133,18 +133,20 @@ fun BrowseScreen(
 // a ring of that colour around it. The bay's outline is exactly the HTML's:
 //   • a concave arc concentric with the button (radius = button/2 + gap),
 //   • convex fillets where the bay opens onto the bar's top and right edges.
-// The bar is taller (56dp → 104dp below the status bar) to make room for it, its
-// bottom corners are rounded, and the logo is bigger and nudged right.
+// The bar is taller than the old 56dp (96dp below the status bar) to make room for
+// it, its bottom corners are rounded, and the logo is bigger and nudged right.
+// CHANGE (tweak): bar 8dp shorter (was 104dp); bay bigger — 72dp wide × 68dp deep
+// (was 64 × 62); no ring around the downloads button any more.
 // The bay runs up to the top of the screen, behind the status-bar icons. The bay
 // colour is clamped to a mid lightness (see cutoutColorFor) so the system's
 // dark-in-light / light-in-dark status icons stay readable over it AND over the bar.
-private val BAR_CONTENT_HEIGHT = 104.dp     // below the status bar (was 56dp)
+private val BAR_CONTENT_HEIGHT = 96.dp      // below the status bar (was 104dp, originally 56dp)
 private val BTN_SIZE           = 40.dp      // downloads button (unchanged)
 private val BTN_MARGIN_END     = 14.dp      // button ↔ screen's right edge
-private val BTN_MARGIN_TOP     = 12.dp      // button ↔ bottom of the status bar
-private val CUTOUT_GAP         = 10.dp      // ring of bay colour around the button
-private val CONVEX_RADIUS      = 16.dp      // fillets where the bay opens onto the edges
-private val BAR_BOTTOM_RADIUS  = 24.dp
+private val BTN_MARGIN_TOP     = 10.dp      // button ↔ bottom of the status bar
+private val CUTOUT_GAP         = 18.dp      // ring of bay colour around the button (was 10dp)
+private val CONVEX_RADIUS      = 12.dp      // fillets where the bay opens onto the edges
+private val BAR_BOTTOM_RADIUS  = 16.dp      // bay floor + fillet + this must fit in the bar height
 
 @Composable
 private fun TopNavBar(onDownloadsClick: (() -> Unit)?, cutoutColor: Color) {
@@ -222,9 +224,9 @@ private fun TopNavBar(onDownloadsClick: (() -> Unit)?, cutoutColor: Color) {
             )
         }
 
-        // Download button — same tray icon and 2dp theme-adaptive ring as before,
-        // now on a translucent surface-coloured disc (like the HTML's frosted
-        // button) so it reads on any bay colour.
+        // Download button — the tray icon on a translucent surface-coloured disc
+        // (like the HTML's frosted button) so it reads on any bay colour. The 2dp
+        // dark ring that used to circle it is gone.
         val downloadInteraction = remember { MutableInteractionSource() }
         val downloadPressed by downloadInteraction.collectIsPressedAsState()
         val downloadAlpha = if (downloadPressed) 0.7f else 1f
@@ -236,7 +238,6 @@ private fun TopNavBar(onDownloadsClick: (() -> Unit)?, cutoutColor: Color) {
                 .size(BTN_SIZE)
                 .clip(CircleShape)
                 .background(surface.copy(alpha = 0.88f))
-                .border(2.dp, downloadTint.copy(alpha = downloadAlpha), CircleShape)
                 .clickable(
                     enabled           = onDownloadsClick != null,
                     interactionSource = downloadInteraction,
