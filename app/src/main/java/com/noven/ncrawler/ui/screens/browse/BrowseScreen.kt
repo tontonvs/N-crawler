@@ -135,18 +135,21 @@ fun BrowseScreen(
 //   • convex fillets where the bay opens onto the bar's top and right edges.
 // The bar is taller than the old 56dp (96dp below the status bar) to make room for
 // it, its bottom corners are rounded, and the logo is bigger and nudged right.
-// CHANGE (tweak): bar 8dp shorter (was 104dp); bay bigger — 72dp wide × 68dp deep
-// (was 64 × 62); no ring around the downloads button any more.
+// CHANGE (tweaks): no ring around the downloads button; the bay is now 78dp wide ×
+// 78dp deep (was 64 × 62 originally) and the button sits closer to the right edge
+// (8dp, was 14dp); bar height 100dp (originally 104dp).
 // The bay runs up to the top of the screen, behind the status-bar icons. The bay
 // colour is clamped to a mid lightness (see cutoutColorFor) so the system's
 // dark-in-light / light-in-dark status icons stay readable over it AND over the bar.
-private val BAR_CONTENT_HEIGHT = 96.dp      // below the status bar (was 104dp, originally 56dp)
+private val BAR_CONTENT_HEIGHT = 100.dp     // below the status bar (originally 56dp)
 private val BTN_SIZE           = 40.dp      // downloads button (unchanged)
-private val BTN_MARGIN_END     = 14.dp      // button ↔ screen's right edge
-private val BTN_MARGIN_TOP     = 10.dp      // button ↔ bottom of the status bar
-private val CUTOUT_GAP         = 18.dp      // ring of bay colour around the button (was 10dp)
-private val CONVEX_RADIUS      = 12.dp      // fillets where the bay opens onto the edges
-private val BAR_BOTTOM_RADIUS  = 16.dp      // bay floor + fillet + this must fit in the bar height
+private val BTN_MARGIN_END     = 8.dp       // button ↔ screen's right edge (was 14dp)
+private val BTN_MARGIN_TOP     = 8.dp       // button ↔ bottom of the status bar
+private val CUTOUT_GAP         = 30.dp      // ring of bay colour around the button (was 10dp)
+private val CONVEX_RADIUS      = 10.dp      // fillets where the bay opens onto the edges
+// The bay's floor + the fillet + this radius must fit under it in the bar:
+// (BTN_MARGIN_TOP + BTN_SIZE/2 + BTN_SIZE/2 + CUTOUT_GAP) + CONVEX + this ≤ BAR_CONTENT_HEIGHT
+private val BAR_BOTTOM_RADIUS  = 12.dp
 
 @Composable
 private fun TopNavBar(onDownloadsClick: (() -> Unit)?, cutoutColor: Color) {
@@ -172,6 +175,10 @@ private fun TopNavBar(onDownloadsClick: (() -> Unit)?, cutoutColor: Color) {
             val cy = statusPx + (BTN_MARGIN_TOP + BTN_SIZE / 2).toPx()
             val bayLeft   = cx - concaveR              // left wall of the bay
             val bayBottom = cy + concaveR              // floor of the bay
+            // Safety: if the constants above are ever made bigger than the bar can
+            // hold, shrink the right-hand bottom corner instead of drawing a
+            // self-overlapping shape.
+            val bottomRightR = minOf(bottomR, h - bayBottom - convexR).coerceAtLeast(0f)
 
             // 1. the bay colour, only where the bay is (so no colour can fringe
             //    along the bar's own rounded corners)
@@ -194,8 +201,8 @@ private fun TopNavBar(onDownloadsClick: (() -> Unit)?, cutoutColor: Color) {
                 lineTo(w - convexR, bayBottom)
                 // convex fillet where the bay's floor meets the right edge
                 arcTo(Rect(Offset(w - convexR, bayBottom + convexR), convexR), 270f, 90f, false)
-                lineTo(w, h - bottomR)
-                arcTo(Rect(Offset(w - bottomR, h - bottomR), bottomR), 0f, 90f, false)
+                lineTo(w, h - bottomRightR)
+                arcTo(Rect(Offset(w - bottomRightR, h - bottomRightR), bottomRightR), 0f, 90f, false)
                 lineTo(bottomR, h)
                 arcTo(Rect(Offset(bottomR, h - bottomR), bottomR), 90f, 90f, false)
                 close()
