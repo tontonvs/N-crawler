@@ -338,8 +338,18 @@ class NovelFullSource : NovelSource {
     // widget (which doesn't), so this naturally excludes sidebar
     // duplicates without needing to know its container's class either.
     private fun parseNovelCards(doc: Document): List<NovelEntity> {
-        val titleLinks = doc.select("a[href~=^/[a-z0-9-]+\\.html$]")
-            .filter { it.text().isNotBlank() }
+        // Matching the href in plain Kotlin rather than through Jsoup's
+        // [href~=regex] CSS syntax — that regex's own [a-z0-9-] character
+        // class nests inside the CSS selector's own [...] delimiters,
+        // which Jsoup's selector parser isn't guaranteed to handle
+        // correctly. This also sidesteps a genuine overload ambiguity:
+        // .filter{} chained directly off Elements (Jsoup's List<Element>)
+        // resolved against Node's own filter(NodeFilter) method instead
+        // of the Kotlin stdlib one — .toList() below forces it back to an
+        // unambiguous kotlin.collections.List first.
+        val novelHrefPattern = Regex("^/[a-z0-9-]+\\.html$")
+        val titleLinks = doc.select("a[href]").toList()
+            .filter { novelHrefPattern.matches(it.attr("href")) && it.text().isNotBlank() }
         val covers = doc.select("img[src*=uploads/webp/novel]")
         Log.d(TAG, "parseNovelCards: found ${titleLinks.size} title links, ${covers.size} cover images")
 
@@ -352,7 +362,8 @@ class NovelFullSource : NovelSource {
                 ?: continue
             if (result.any { it.slug == slug }) continue
 
-            val title = a.text().trim().ifBlank { continue }
+            val title = a.text().trim()
+            if (title.isBlank()) continue
             val cover = covers.getOrNull(i)?.attr("abs:src").orEmpty()
 
             result.add(NovelEntity(
