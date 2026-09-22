@@ -21,26 +21,38 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
+import com.noven.ncrawler.data.db.DownloadProgress
 import com.noven.ncrawler.data.db.DownloadStatus
-import com.noven.ncrawler.viewmodel.LibraryItem
-import com.noven.ncrawler.viewmodel.LibraryViewModel
+import com.noven.ncrawler.viewmodel.DownloadItem
+import com.noven.ncrawler.viewmodel.DownloadsViewModel
+import kotlin.math.roundToInt
 
+// CHANGE (Downloads overhaul): now on its own DownloadsViewModel instead of
+// the shared LibraryViewModel — see DownloadsViewModel.kt for why.
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DownloadsScreen(
     onNovelClick: (slug: String) -> Unit,
-    vm: LibraryViewModel = viewModel()
+    vm: DownloadsViewModel = viewModel()
 ) {
-    val allItems by vm.libraryItems.collectAsStateWithLifecycle()
+    val allItems by vm.downloadItems.collectAsStateWithLifecycle()
 
-    // Split into active downloads and completed
+    // CHANGE: three sections instead of two. ERROR/PAUSED items need a user
+    // action to continue, so they're grouped apart from a healthy
+    // in-progress download instead of being invisible among "Downloading".
     val activeDownloads = allItems.filter {
-        it.downloadProgress?.status == DownloadStatus.DOWNLOADING ||
-        it.downloadProgress?.status == DownloadStatus.QUEUED
+        it.progress.status == DownloadStatus.DOWNLOADING ||
+        it.progress.status == DownloadStatus.QUEUED
+    }
+    val needsAttention = allItems.filter {
+        it.progress.status == DownloadStatus.ERROR ||
+        it.progress.status == DownloadStatus.PAUSED
     }
     val completedDownloads = allItems.filter {
-        it.downloadProgress?.status == DownloadStatus.COMPLETE
+        it.progress.status == DownloadStatus.COMPLETE
     }
+
+    var pendingDelete by remember { mutableStateOf<DownloadItem?>(null) }
 
     Scaffold(
         topBar = {
@@ -59,7 +71,7 @@ fun DownloadsScreen(
             )
         }
     ) { padding ->
-        if (activeDownloads.isEmpty() && completedDownloads.isEmpty()) {
+        if (allItems.isEmpty()) {
             Box(
                 modifier         = Modifier.fillMaxSize().padding(padding),
                 contentAlignment = Alignment.Center
@@ -92,54 +104,113 @@ fun DownloadsScreen(
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                // Active downloads section
                 if (activeDownloads.isNotEmpty()) {
-                    item {
-                        Text(
-                            "Downloading",
-                            style = MaterialTheme.typography.titleSmall.copy(
-                                fontWeight = FontWeight.SemiBold
-                            ),
-                            modifier = Modifier.padding(bottom = 4.dp)
+                    item { SectionHeader("Downloading") }
+                    items(activeDownloads, key = { it.novel.slug + "_active" }) { entry ->
+                        DownloadCard(
+                            item      = entry,
+                            vm        = vm,
+                            onClick   = { onNovelClick(entry.novel.slug) },
+                            onPrimary = { vm.pause(entry.novel.slug) },
+                            onDelete  = { pendingDelete = entry }
                         )
-                    }
-                    items(activeDownloads, key = { it.novel.slug + "_active" }) { item ->
-                        DownloadCard(item = item, onClick = { onNovelClick(item.novel.slug) })
                     }
                     item { Spacer(Modifier.height(8.dp)) }
                 }
 
-                // Completed downloads section
-                if (completedDownloads.isNotEmpty()) {
-                    item {
-                        Text(
-                            "Downloaded",
-                            style = MaterialTheme.typography.titleSmall.copy(
-                                fontWeight = FontWeight.SemiBold
-                            ),
-                            modifier = Modifier.padding(bottom = 4.dp)
+                if (needsAttention.isNotEmpty()) {
+                    item { SectionHeader("Needs attention") }
+                    items(needsAttention, key = { it.novel.slug + "_attention" }) { entry ->
+                        DownloadCard(
+                            item      = entry,
+                            vm        = vm,
+                            onClick   = { onNovelClick(entry.novel.slug) },
+                            onPrimary = { vm.resume(entry.novel.slug) },
+                            onDelete  = { pendingDelete = entry }
                         )
                     }
-                    items(completedDownloads, key = { it.novel.slug + "_done" }) { item ->
-                        DownloadCard(item = item, onClick = { onNovelClick(item.novel.slug) })
+                    item { Spacer(Modifier.height(8.dp)) }
+                }
+
+                if (completedDownloads.isNotEmpty()) {
+                    item { SectionHeader("Downloaded") }
+                    items(completedDownloads, key = { it.novel.slug + "_done" }) { entry ->
+                        DownloadCard(
+                            item      = entry,
+                            vm        = vm,
+                            onClick   = { onNovelClick(entry.novel.slug) },
+                            onPrimary = null,
+                            onDelete  = { pendingDelete = entry }
+                        )
                     }
                 }
             }
         }
     }
+
+    // CHANGE: confirm before freeing a novel's downloaded chapters — makes
+    // explicit that Library membership survives the delete.
+    pendingDelete?.let { entry ->
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title            = { Text("Delete download?") },
+            text = {
+                Text(
+                    "This removes the downloaded chapters for \"${entry.novel.title}\" to free up space. " +
+                    "It stays in your Library and you can download it again anytime."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.delete(entry.novel.slug)
+                    pendingDelete = null
+                }) { Text("Delete") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDelete = null }) { Text("Cancel") }
+            }
+        )
+    }
 }
 
 @Composable
-private fun DownloadCard(item: LibraryItem, onClick: () -> Unit) {
-    val download = item.downloadProgress ?: return
-    val progress = if (download.totalChapters > 0)
-        download.downloadedChapters.toFloat() / download.totalChapters else 0f
+private fun SectionHeader(title: String) {
+    Text(
+        title,
+        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+        modifier = Modifier.padding(bottom = 4.dp)
+    )
+}
+
+@Composable
+private fun DownloadCard(
+    item: DownloadItem,
+    vm: DownloadsViewModel,
+    onClick: () -> Unit,
+    onPrimary: (() -> Unit)?,
+    onDelete: () -> Unit
+) {
+    val progress = item.progress
+    val downloadFraction = if (progress.totalChapters > 0)
+        progress.downloadedChapters.toFloat() / progress.totalChapters else 0f
 
     val animatedProgress by animateFloatAsState(
-        targetValue   = progress,
+        targetValue   = downloadFraction,
         animationSpec = tween(400),
         label         = "dlProgress"
     )
+
+    // CHANGE: size recomputed only when the slug changes or a new chapter
+    // actually lands (downloadedChapters ticks up) — a single indexed SUM
+    // query, cheap, but no reason to repeat it on every recomposition on a
+    // low-end device.
+    val sizeBytes by produceState<Long?>(
+        initialValue = null,
+        key1 = item.novel.slug,
+        key2 = progress.downloadedChapters
+    ) {
+        value = vm.sizeBytesFor(item.novel.slug)
+    }
 
     Card(
         modifier  = Modifier.fillMaxWidth().clickable(onClick = onClick),
@@ -149,92 +220,156 @@ private fun DownloadCard(item: LibraryItem, onClick: () -> Unit) {
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
         )
     ) {
-        Row(
-            modifier              = Modifier.padding(12.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment     = Alignment.CenterVertically
-        ) {
-            // Cover
-            Box(
-                modifier = Modifier
-                    .size(56.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment     = Alignment.CenterVertically
             ) {
-                AsyncImage(
-                    model              = item.novel.coverUrl,
-                    contentDescription = item.novel.title,
-                    contentScale       = ContentScale.Crop,
-                    modifier           = Modifier.fillMaxSize()
-                )
-            }
-
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    item.novel.title,
-                    style    = MaterialTheme.typography.bodyMedium.copy(
-                        fontWeight = FontWeight.SemiBold
-                    ),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Spacer(Modifier.height(6.dp))
-
-                LinearProgressIndicator(
-                    progress          = { animatedProgress },
-                    modifier          = Modifier
-                        .fillMaxWidth()
-                        .height(4.dp)
-                        .clip(RoundedCornerShape(2.dp)),
-                    color             = when (download.status) {
-                        DownloadStatus.COMPLETE    -> MaterialTheme.colorScheme.primary
-                        DownloadStatus.DOWNLOADING -> MaterialTheme.colorScheme.primary
-                        else                       -> MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                    trackColor = MaterialTheme.colorScheme.surfaceVariant
-                )
-                Spacer(Modifier.height(4.dp))
-
-                Text(
-                    when (download.status) {
-                        DownloadStatus.COMPLETE    -> "Complete — ${download.totalChapters} chapters"
-                        DownloadStatus.DOWNLOADING -> "${download.downloadedChapters} / ${download.totalChapters} chapters"
-                        DownloadStatus.QUEUED      -> "Queued..."
-                        DownloadStatus.PAUSED      -> "Paused — ${download.downloadedChapters}/${download.totalChapters}"
-                        DownloadStatus.ERROR       -> "Error — tap to retry"
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
-            // Status icon
-            when (download.status) {
-                DownloadStatus.DOWNLOADING -> {
-                    CircularProgressIndicator(
-                        modifier    = Modifier.size(20.dp),
-                        strokeWidth = 2.dp,
-                        color       = MaterialTheme.colorScheme.primary
+                // Cover
+                Box(
+                    modifier = Modifier
+                        .size(56.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                ) {
+                    AsyncImage(
+                        model              = item.novel.coverUrl,
+                        contentDescription = item.novel.title,
+                        contentScale       = ContentScale.Crop,
+                        modifier           = Modifier.fillMaxSize()
                     )
                 }
-                DownloadStatus.COMPLETE -> {
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        item.novel.title,
+                        style    = MaterialTheme.typography.bodyMedium.copy(
+                            fontWeight = FontWeight.SemiBold
+                        ),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(Modifier.height(6.dp))
+
+                    LinearProgressIndicator(
+                        progress          = { animatedProgress },
+                        modifier          = Modifier
+                            .fillMaxWidth()
+                            .height(4.dp)
+                            .clip(RoundedCornerShape(2.dp)),
+                        color             = when (progress.status) {
+                            DownloadStatus.ERROR -> MaterialTheme.colorScheme.error
+                            else                 -> MaterialTheme.colorScheme.primary
+                        },
+                        trackColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
+                    Spacer(Modifier.height(4.dp))
+
+                    Text(
+                        statusLine(progress, sizeBytes),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (progress.status == DownloadStatus.ERROR)
+                            MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                // Status icon
+                StatusIcon(progress.status)
+            }
+
+            // CHANGE: explicit per-item actions — previously the whole
+            // card just navigated to the novel with no way to manage the
+            // download itself.
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (onPrimary != null) {
+                    TextButton(onClick = onPrimary) {
+                        Text(primaryLabel(progress.status))
+                    }
+                }
+                IconButton(onClick = onDelete) {
                     Icon(
-                        Icons.Default.CheckCircle,
-                        contentDescription = "Complete",
-                        tint     = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(20.dp)
+                        Icons.Default.DeleteOutline,
+                        contentDescription = "Delete download",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                DownloadStatus.QUEUED -> {
-                    Icon(
-                        Icons.Default.Schedule,
-                        contentDescription = "Queued",
-                        tint     = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-                else -> {}
             }
+        }
+    }
+}
+
+private fun primaryLabel(status: DownloadStatus): String = when (status) {
+    DownloadStatus.DOWNLOADING -> "Pause"
+    DownloadStatus.QUEUED      -> "Cancel"
+    DownloadStatus.PAUSED      -> "Resume"
+    DownloadStatus.ERROR       -> "Retry"
+    DownloadStatus.COMPLETE    -> ""
+}
+
+private fun statusLine(progress: DownloadProgress, sizeBytes: Long?): String {
+    val sizeSuffix = sizeBytes?.takeIf { it > 0 }?.let { " · ${formatBytes(it)}" } ?: ""
+    return when (progress.status) {
+        DownloadStatus.COMPLETE    -> "Complete — ${progress.totalChapters} chapters$sizeSuffix"
+        DownloadStatus.DOWNLOADING -> "${progress.downloadedChapters} / ${progress.totalChapters} chapters$sizeSuffix"
+        DownloadStatus.QUEUED      -> "Queued..."
+        DownloadStatus.PAUSED      -> "Paused — ${progress.downloadedChapters}/${progress.totalChapters}$sizeSuffix"
+        DownloadStatus.ERROR       ->
+            "${(progress.totalChapters - progress.downloadedChapters).coerceAtLeast(0)} chapter(s) failed — tap Retry"
+    }
+}
+
+private fun formatBytes(bytes: Long): String {
+    val kb = bytes / 1024.0
+    if (kb < 1024) return "${kb.roundToInt()} KB"
+    return "%.1f MB".format(kb / 1024.0)
+}
+
+@Composable
+private fun StatusIcon(status: DownloadStatus) {
+    when (status) {
+        DownloadStatus.DOWNLOADING -> {
+            CircularProgressIndicator(
+                modifier    = Modifier.size(20.dp),
+                strokeWidth = 2.dp,
+                color       = MaterialTheme.colorScheme.primary
+            )
+        }
+        DownloadStatus.COMPLETE -> {
+            Icon(
+                Icons.Default.CheckCircle,
+                contentDescription = "Complete",
+                tint     = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp)
+            )
+        }
+        DownloadStatus.QUEUED -> {
+            Icon(
+                Icons.Default.Schedule,
+                contentDescription = "Queued",
+                tint     = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp)
+            )
+        }
+        DownloadStatus.PAUSED -> {
+            Icon(
+                Icons.Default.PauseCircle,
+                contentDescription = "Paused",
+                tint     = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp)
+            )
+        }
+        DownloadStatus.ERROR -> {
+            Icon(
+                Icons.Default.ErrorOutline,
+                contentDescription = "Error",
+                tint     = MaterialTheme.colorScheme.error,
+                modifier = Modifier.size(20.dp)
+            )
         }
     }
 }

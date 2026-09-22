@@ -23,6 +23,12 @@ interface DownloadProgressDao {
 
     @Query("DELETE FROM download_progress WHERE novelSlug = :slug")
     suspend fun delete(slug: String)
+
+    // CHANGE (Downloads overhaul): powers the concurrent-download guard —
+    // counts how many novels are actively DOWNLOADING right now so a new
+    // download request knows whether to start immediately or stay QUEUED.
+    @Query("SELECT COUNT(*) FROM download_progress WHERE status = :status")
+    suspend fun countByStatus(status: DownloadStatus): Int
 }
 
 @Dao

@@ -37,21 +37,28 @@ class ChapterDownloadWorker(
         const val PROGRESS_DONE = "progress_done"
         const val PROGRESS_TOTAL= "progress_total"
 
+        // CHANGE (Downloads overhaul): wifiOnly now decides the network
+        // constraint instead of always allowing any connection.
+        // NovelRepository reads DownloadPreferences and passes the result
+        // in here — the worker itself stays free of any Context/
+        // SharedPreferences access, same separation of concerns as before.
         fun buildRequest(
             slug: String,
             startChapter: Int,
-            endChapter: Int
+            endChapter: Int,
+            wifiOnly: Boolean
         ): OneTimeWorkRequest {
             val data = workDataOf(
                 SLUG          to slug,
                 START_CHAPTER to startChapter,
                 END_CHAPTER   to endChapter
             )
+            val networkType = if (wifiOnly) NetworkType.UNMETERED else NetworkType.CONNECTED
             return OneTimeWorkRequestBuilder<ChapterDownloadWorker>()
                 .setInputData(data)
                 .setConstraints(
                     Constraints.Builder()
-                        .setRequiredNetworkType(NetworkType.CONNECTED)
+                        .setRequiredNetworkType(networkType)
                         .build()
                 )
                 .addTag(slug)          // tag by slug so we can cancel per-novel
@@ -66,9 +73,10 @@ class ChapterDownloadWorker(
         val endChapter   = inputData.getInt(END_CHAPTER, 1)
         val total        = endChapter - startChapter + 1
 
-        val app  = applicationContext as NCrawlerApp
-        val repo = app.repository
-        val dao  = app.db.downloadProgressDao()
+        val app        = applicationContext as NCrawlerApp
+        val repo       = app.repository
+        val dao        = app.db.downloadProgressDao()
+        val chapterDao = app.db.chapterDao()
 
         Log.d(TAG, "Starting download: $slug chapters $startChapter-$endChapter")
 
@@ -79,25 +87,39 @@ class ChapterDownloadWorker(
 
         var downloaded = 0
 
+        // CHANGE (Downloads overhaul): track failures separately from
+        // successes so the final status can honestly reflect whether
+        // everything in this range actually landed (COMPLETE) or something
+        // is still missing (ERROR). Previously this always reported
+        // COMPLETE regardless of skipped chapters — DownloadStatus.ERROR
+        // was defined but never set anywhere.
+        var failed = 0
+
         for (chapterNum in startChapter..endChapter) {
             // Check if worker was cancelled
             if (isStopped) {
                 Log.d(TAG, "Worker stopped at chapter $chapterNum")
-                dao.updateProgress(slug, downloaded, DownloadStatus.PAUSED)
+                // CHANGE (Downloads overhaul): report the real novel-wide
+                // downloaded count from the DB, not this job's local
+                // counter — matters when this run was only topping up a
+                // few new chapters on an already partly-downloaded novel;
+                // the old code overwrote downloadedChapters with just this
+                // run's small count, losing the rest.
+                dao.updateProgress(slug, chapterDao.downloadedCount(slug), DownloadStatus.PAUSED)
                 return@withContext Result.success()
             }
 
             try {
                 // Check if already downloaded
-                val existing = app.db.chapterDao().getById("$slug::$chapterNum")
+                val existing = chapterDao.getById("$slug::$chapterNum")
                 if (existing == null) {
                     repo.downloadChapter(slug, chapterNum)
                     Log.d(TAG, "Downloaded chapter $chapterNum of $slug")
                 }
                 downloaded++
 
-                // Update progress
-                dao.updateProgress(slug, downloaded, DownloadStatus.DOWNLOADING)
+                // Update progress (real DB count, see note above)
+                dao.updateProgress(slug, chapterDao.downloadedCount(slug), DownloadStatus.DOWNLOADING)
 
                 // Report progress to observers
                 setProgress(workDataOf(
@@ -113,14 +135,20 @@ class ChapterDownloadWorker(
 
             } catch (e: Exception) {
                 Log.e(TAG, "Failed chapter $chapterNum: ${e.message}")
-                // Don't fail the whole job — skip and continue
-                // The missing chapter will show as not downloaded in UI
+                failed++
+                // Don't fail the whole job — skip and continue. The
+                // missing chapter now surfaces as ERROR status below so
+                // the user can retry, instead of the run silently
+                // reporting done with a gap in it.
             }
         }
 
-        // Mark complete
-        dao.updateProgress(slug, downloaded, DownloadStatus.COMPLETE)
-        Log.d(TAG, "Download complete: $slug — $downloaded/$total chapters")
+        // CHANGE (Downloads overhaul): only report COMPLETE when every
+        // chapter in this range actually succeeded — otherwise ERROR,
+        // which the Downloads screen now shows with a real retry action.
+        val finalStatus = if (failed == 0) DownloadStatus.COMPLETE else DownloadStatus.ERROR
+        dao.updateProgress(slug, chapterDao.downloadedCount(slug), finalStatus)
+        Log.d(TAG, "Download finished: $slug — $downloaded/$total this run, $failed failed, status=$finalStatus")
         Result.success()
     }
 }

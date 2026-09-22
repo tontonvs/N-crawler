@@ -5,6 +5,7 @@ import android.util.Log
 import androidx.work.ExistingWorkPolicy
 import androidx.work.WorkManager
 import com.noven.ncrawler.data.db.*
+import com.noven.ncrawler.data.local.DownloadPreferences
 import com.noven.ncrawler.data.scraper.ChapterLink
 import com.noven.ncrawler.data.scraper.HomeSection
 import com.noven.ncrawler.data.scraper.NovelSource
@@ -43,7 +44,10 @@ class NovelRepository(
     private val readingProgressDao  = db.readingProgressDao()
     private val workManager         = WorkManager.getInstance(context)
 
-    private val sourcePrefs = SourcePreferences(context)
+    private val sourcePrefs   = SourcePreferences(context)
+
+    // CHANGE (Downloads overhaul): same pattern as sourcePrefs above.
+    private val downloadPrefs = DownloadPreferences(context)
 
     // ── Composite slug helpers ──────────────────────────────────────────────
     private fun composite(sourceId: String, realSlug: String) = "$sourceId::$realSlug"
@@ -221,10 +225,31 @@ class NovelRepository(
 
         novelDao.setLibrary(slug, true)
 
+        // CHANGE (Downloads overhaul): concurrency guard — a low-end-device
+        // safeguard from DownloadPreferences.getConcurrentLimit() (default
+        // 1). If another novel is already actively downloading and the
+        // limit is reached, this one stays QUEUED in the DB only — no
+        // WorkManager request goes out yet. Deliberately simple: nothing
+        // auto-advances the queue when the running download finishes; the
+        // user re-taps Download/Retry on this novel later, which re-checks
+        // capacity here and starts it if free. See DownloadsViewModel.
+        val activeCount = downloadProgressDao.countByStatus(DownloadStatus.DOWNLOADING)
+        if (activeCount >= downloadPrefs.getConcurrentLimit()) {
+            Log.d(TAG, "Concurrency limit reached ($activeCount active) — $slug stays queued")
+            return
+        }
+
+        enqueueDownloadWork(slug, minNum, maxNum)
+    }
+
+    // CHANGE (Downloads overhaul): shared by queueDownloadAll and
+    // checkForUpdates so wifi-only handling lives in exactly one place.
+    private fun enqueueDownloadWork(slug: String, startChapter: Int, endChapter: Int) {
         val request = ChapterDownloadWorker.buildRequest(
             slug         = slug,
-            startChapter = minNum,
-            endChapter   = maxNum
+            startChapter = startChapter,
+            endChapter   = endChapter,
+            wifiOnly     = downloadPrefs.isWifiOnly()
         )
         workManager.enqueueUniqueWork(
             "download_$slug",
@@ -240,6 +265,24 @@ class NovelRepository(
         }
     }
 
+    // CHANGE (Downloads overhaul): frees a novel's downloaded chapters to
+    // reclaim storage. Cancels any in-flight work first so a running
+    // worker can't recreate a chapter mid-delete. Library membership is
+    // left untouched on purpose — deleting a download frees space, it does
+    // not remove the novel from the user's Library.
+    suspend fun deleteDownload(slug: String) {
+        workManager.cancelAllWorkByTag(slug)
+        chapterDao.deleteForNovel(slug)
+        downloadProgressDao.delete(slug)
+    }
+
+    // CHANGE (Downloads overhaul): approximate downloaded size for a novel,
+    // for the Downloads screen. See ChapterDao.totalContentBytes for the
+    // "approximate" caveat.
+    suspend fun downloadedSizeBytes(slug: String): Long = chapterDao.totalContentBytes(slug) ?: 0L
+
+    fun downloadPreferences(): DownloadPreferences = downloadPrefs
+
     // ── Check for new chapters ────────────────────────────────────────────────
     suspend fun checkForUpdates(slug: String): Int {
         val (source, realSlug) = sourceFor(slug)
@@ -247,31 +290,35 @@ class NovelRepository(
         val (fresh, chapters) = result
         novelDao.upsert(rewrapSlug(fresh, source.id))
 
-        val downloaded = chapterDao.downloadedCount(slug)
-        val newChapters = chapters.size - downloaded
-        Log.d(TAG, "Update check $slug: ${chapters.size} total, $downloaded downloaded, $newChapters new")
+        // FIX (Downloads overhaul): this used to assume downloaded chapters
+        // were exactly chapters 1..downloadedCount — a contiguous block
+        // from the start. Not true once any chapter has ever failed and
+        // been skipped (worker keeps going past a failure). Compare
+        // against the real set of downloaded chapter numbers instead.
+        val downloadedNums = chapterDao.downloadedChapterNums(slug).toSet()
+        val missing = chapters.filter { it.num !in downloadedNums }
+        val newChapters = missing.size
+        Log.d(TAG, "Update check $slug: ${chapters.size} total, ${downloadedNums.size} downloaded, $newChapters new")
 
-        if (newChapters > 0) {
-            val downloadedNums = (1..downloaded).toSet()
-            val missing = chapters.filter { it.num !in downloadedNums }
-            if (missing.isNotEmpty()) {
-                val minNew = missing.minOf { it.num }
-                val maxNew = missing.maxOf { it.num }
+        if (missing.isNotEmpty()) {
+            val minNew = missing.minOf { it.num }
+            val maxNew = missing.maxOf { it.num }
 
-                downloadProgressDao.get(slug)?.let {
-                    downloadProgressDao.upsert(
-                        it.copy(
-                            totalChapters = chapters.size,
-                            status = DownloadStatus.QUEUED
-                        )
+            downloadProgressDao.get(slug)?.let {
+                downloadProgressDao.upsert(
+                    it.copy(
+                        totalChapters = chapters.size,
+                        status = DownloadStatus.QUEUED
                     )
-                }
-
-                workManager.enqueueUniqueWork(
-                    "download_$slug",
-                    ExistingWorkPolicy.REPLACE,
-                    ChapterDownloadWorker.buildRequest(slug, minNew, maxNew)
                 )
+            }
+
+            // Same concurrency guard as queueDownloadAll — see there for why.
+            val activeCount = downloadProgressDao.countByStatus(DownloadStatus.DOWNLOADING)
+            if (activeCount < downloadPrefs.getConcurrentLimit()) {
+                enqueueDownloadWork(slug, minNew, maxNew)
+            } else {
+                Log.d(TAG, "Concurrency limit reached ($activeCount active) — $slug update stays queued")
             }
         }
         return newChapters
