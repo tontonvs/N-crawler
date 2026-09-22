@@ -17,6 +17,11 @@ object SourceRegistry {
         // JSON-embedded-HTML extraction for chapter content. See
         // NovelArrowSource.kt header for the full confirmed structure.
         NovelArrowSource(),
+        // CHANGE: NovelFull added — plain server-rendered HTML throughout,
+        // no anti-bot wall hit during verification. Confidence varies by
+        // method; see NovelFullSource.kt header for what was confirmed
+        // live vs. inferred structurally.
+        NovelFullSource(),
     )
 
     fun all(): List<NovelSource> = all
