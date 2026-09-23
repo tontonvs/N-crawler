@@ -33,8 +33,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.DownloadForOffline
+import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.PauseCircle
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarHalf
 import androidx.compose.material.icons.outlined.StarOutline
@@ -81,6 +86,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.palette.graphics.Palette
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import com.noven.ncrawler.data.db.DownloadProgress
+import com.noven.ncrawler.data.db.DownloadStatus
 import com.noven.ncrawler.data.db.NovelEntity
 import com.noven.ncrawler.data.local.DominantColorStore
 import com.noven.ncrawler.data.scraper.ChapterLink
@@ -205,6 +212,81 @@ private fun PlayButton(label: String, onClick: () -> Unit) {
             fontSize   = 15.sp,
             fontWeight = FontWeight.SemiBold,
         )
+    }
+}
+
+// ── Download button (top row) ───────────────────────────────────────────────
+// CHANGE (Downloads overhaul, detail-screen wiring): DetailViewModel already
+// had downloadAll()/cancelDownload() and a live downloadProgress flow — this
+// screen just never rendered them, so tapping nothing here ever actually
+// started a download. Reuses the exact status vocabulary DownloadsScreen
+// established: tap starts a download when idle, pauses an active one,
+// resumes a paused one, retries a failed one, and — once complete — opens
+// the Downloads screen, since "tap to manage/delete" is the only useful
+// thing left to do with a completed download from here.
+@Composable
+private fun DownloadCircleBtn(
+    progress: DownloadProgress?,
+    onStart: () -> Unit,
+    onPause: () -> Unit,
+    onManage: () -> Unit,
+) {
+    val status = progress?.status
+    val action = when (status) {
+        null, DownloadStatus.PAUSED, DownloadStatus.ERROR -> onStart
+        DownloadStatus.QUEUED, DownloadStatus.DOWNLOADING  -> onPause
+        DownloadStatus.COMPLETE                            -> onManage
+    }
+    ReaderCircleBtn(onClick = action) {
+        when (status) {
+            DownloadStatus.DOWNLOADING -> {
+                CircularProgressIndicator(
+                    modifier    = Modifier.size(20.dp),
+                    strokeWidth = 2.dp,
+                    color       = Color.White.copy(alpha = 0.9f),
+                )
+            }
+            DownloadStatus.QUEUED -> {
+                Icon(
+                    Icons.Filled.Schedule,
+                    contentDescription = "Queued to download",
+                    tint               = Color.White.copy(alpha = 0.9f),
+                    modifier           = Modifier.size(22.dp),
+                )
+            }
+            DownloadStatus.PAUSED -> {
+                Icon(
+                    Icons.Filled.PauseCircle,
+                    contentDescription = "Download paused — tap to resume",
+                    tint               = Color.White.copy(alpha = 0.9f),
+                    modifier           = Modifier.size(24.dp),
+                )
+            }
+            DownloadStatus.ERROR -> {
+                Icon(
+                    Icons.Filled.ErrorOutline,
+                    contentDescription = "Download failed — tap to retry",
+                    tint               = Color(0xFFFF6B6B),
+                    modifier           = Modifier.size(24.dp),
+                )
+            }
+            DownloadStatus.COMPLETE -> {
+                Icon(
+                    Icons.Filled.CheckCircle,
+                    contentDescription = "Downloaded — tap to manage",
+                    tint               = Color.White.copy(alpha = 0.9f),
+                    modifier           = Modifier.size(24.dp),
+                )
+            }
+            null -> {
+                Icon(
+                    Icons.Filled.DownloadForOffline,
+                    contentDescription = "Download all chapters",
+                    tint               = Color.White.copy(alpha = 0.9f),
+                    modifier           = Modifier.size(24.dp),
+                )
+            }
+        }
     }
 }
 
@@ -394,6 +476,9 @@ fun DetailScreen(
     slug: String,
     onBack: () -> Unit,
     onReadChapter: (chapterNum: Int) -> Unit,
+    // CHANGE (Downloads overhaul): only used once the download is COMPLETE —
+    // see DownloadCircleBtn below.
+    onDownloadsClick: () -> Unit,
     vm: DetailViewModel = viewModel(),
 ) {
     LaunchedEffect(slug) { vm.load(slug) }
@@ -501,7 +586,7 @@ fun DetailScreen(
             }
         }
 
-        // ── Floating top row: back + refresh — always on top ─────────────
+        // ── Floating top row: back + download + refresh — always on top ──
         // Reader-style 48dp circles with 24dp icons (same as the reader header).
         Row(
             modifier              = Modifier
@@ -519,13 +604,21 @@ fun DetailScreen(
                     modifier           = Modifier.size(24.dp),
                 )
             }
-            ReaderCircleBtn(onClick = vm::checkForUpdates) {
-                Icon(
-                    Icons.Filled.Refresh,
-                    contentDescription = "Check updates",
-                    tint               = Color.White.copy(alpha = 0.9f),
-                    modifier           = Modifier.size(24.dp),
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                DownloadCircleBtn(
+                    progress = downloadProgress,
+                    onStart  = vm::downloadAll,
+                    onPause  = vm::cancelDownload,
+                    onManage = onDownloadsClick,
                 )
+                ReaderCircleBtn(onClick = vm::checkForUpdates) {
+                    Icon(
+                        Icons.Filled.Refresh,
+                        contentDescription = "Check updates",
+                        tint               = Color.White.copy(alpha = 0.9f),
+                        modifier           = Modifier.size(24.dp),
+                    )
+                }
             }
         }
 

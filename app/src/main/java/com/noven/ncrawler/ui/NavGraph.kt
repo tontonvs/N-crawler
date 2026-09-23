@@ -191,9 +191,13 @@ fun NCrawlerNavGraph() {
             ) { back ->
                 val slug = back.arguments?.getString("slug") ?: return@composable
                 DetailScreen(
-                    slug          = slug,
-                    onBack        = { nav.popBackStack() },
-                    onReadChapter = { chapter -> nav.navigate(Routes.reader(slug, chapter)) }
+                    slug             = slug,
+                    onBack           = { nav.popBackStack() },
+                    onReadChapter    = { chapter -> nav.navigate(Routes.reader(slug, chapter)) },
+                    // CHANGE (Downloads overhaul): the new download button on
+                    // Detail opens the Downloads screen once a novel finishes
+                    // downloading, so it stays useful after that first tap.
+                    onDownloadsClick = { nav.navigate(Routes.DOWNLOADS) }
                 )
             }
 
