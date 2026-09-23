@@ -64,6 +64,22 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // CHANGE (partial downloads): backs the Detail screen's download-options
+    // sheet — "Last N chapters" and volume/custom-range picks.
+    fun downloadLast(count: Int) {
+        viewModelScope.launch {
+            try { repo.queueDownloadLast(currentSlug, count) }
+            catch (e: Exception) { /* silent */ }
+        }
+    }
+
+    fun downloadRange(startChapter: Int, endChapter: Int) {
+        viewModelScope.launch {
+            try { repo.queueDownloadRange(currentSlug, startChapter, endChapter) }
+            catch (e: Exception) { /* silent */ }
+        }
+    }
+
     fun cancelDownload() {
         viewModelScope.launch {
             repo.cancelDownload(currentSlug)

@@ -203,46 +203,82 @@ class NovelRepository(
     }
 
     // ── Download queue (background) ───────────────────────────────────────────
+
+    // CHANGE (partial downloads): queueDownloadAll is now a thin wrapper —
+    // the real logic lives in queueDownloadRange below so "download all",
+    // "download last N", and "download this range/volume" all share one
+    // path instead of three near-duplicate copies of the progress-row /
+    // concurrency-guard bookkeeping.
     suspend fun queueDownloadAll(slug: String) {
         val chapters = getChapterList(slug)
         if (chapters.isEmpty()) return
+        queueDownloadRange(slug, chapters.minOf { it.num }, chapters.maxOf { it.num })
+    }
 
-        val downloaded = chapterDao.downloadedCount(slug)
-        val total      = chapters.size
-        val minNum     = chapters.minOf { it.num }
-        val maxNum     = chapters.maxOf { it.num }
+    // CHANGE (partial downloads): downloads only the most recent [count]
+    // chapters — e.g. "Last 200". Clamped to the novel's actual chapter
+    // range so asking for more than exists just downloads everything.
+    suspend fun queueDownloadLast(slug: String, count: Int) {
+        val chapters = getChapterList(slug)
+        if (chapters.isEmpty()) return
+        val maxNum = chapters.maxOf { it.num }
+        val minNum = chapters.minOf { it.num }
+        val start  = (maxNum - count + 1).coerceAtLeast(minNum)
+        queueDownloadRange(slug, start, maxNum)
+    }
 
-        Log.d(TAG, "Queuing download: $slug — $downloaded/$total already done")
+    // CHANGE (partial downloads): the shared entry point. [startChapter]/
+    // [endChapter] are inclusive chapter numbers, not list positions — used
+    // directly by the Detail screen's custom-range slider and volume chips,
+    // and internally by queueDownloadAll/queueDownloadLast above.
+    //
+    // totalChapters is set to the size of the UNION of chapters already on
+    // disk and the newly-requested range, not just the requested range's
+    // size — so downloading "Last 50" after already having 300 chapters
+    // shows "300 / 300", not a confusing "0 / 50" that ignores what's
+    // already there. downloadedChapters is the real on-disk count *before*
+    // this job starts; ChapterDownloadWorker updates it to the real count
+    // as chapters land (see worker's own fix from the previous pass).
+    suspend fun queueDownloadRange(slug: String, startChapter: Int, endChapter: Int) {
+        val chapters = getChapterList(slug)
+        if (chapters.isEmpty()) return
+
+        val allNums       = chapters.map { it.num }.toSet()
+        val requestedNums = (startChapter..endChapter).filter { it in allNums }
+        if (requestedNums.isEmpty()) return
+
+        val existingNums = chapterDao.downloadedChapterNums(slug).toSet()
+        val unionSize     = (existingNums + requestedNums).size
+
+        Log.d(
+            TAG,
+            "Queuing download: $slug — chapters $startChapter..$endChapter " +
+            "(${requestedNums.size} requested, ${existingNums.size} already done, $unionSize total once complete)"
+        )
 
         downloadProgressDao.upsert(
             DownloadProgress(
                 novelSlug          = slug,
-                totalChapters      = total,
-                downloadedChapters = downloaded,
+                totalChapters      = unionSize,
+                downloadedChapters = existingNums.size,
                 status             = DownloadStatus.QUEUED
             )
         )
 
         novelDao.setLibrary(slug, true)
 
-        // CHANGE (Downloads overhaul): concurrency guard — a low-end-device
-        // safeguard from DownloadPreferences.getConcurrentLimit() (default
-        // 1). If another novel is already actively downloading and the
-        // limit is reached, this one stays QUEUED in the DB only — no
-        // WorkManager request goes out yet. Deliberately simple: nothing
-        // auto-advances the queue when the running download finishes; the
-        // user re-taps Download/Retry on this novel later, which re-checks
-        // capacity here and starts it if free. See DownloadsViewModel.
+        // Same concurrency guard as before — see enqueueDownloadWork's
+        // callers and DownloadPreferences.getConcurrentLimit().
         val activeCount = downloadProgressDao.countByStatus(DownloadStatus.DOWNLOADING)
         if (activeCount >= downloadPrefs.getConcurrentLimit()) {
             Log.d(TAG, "Concurrency limit reached ($activeCount active) — $slug stays queued")
             return
         }
 
-        enqueueDownloadWork(slug, minNum, maxNum)
+        enqueueDownloadWork(slug, requestedNums.min(), requestedNums.max())
     }
 
-    // CHANGE (Downloads overhaul): shared by queueDownloadAll and
+    // CHANGE (Downloads overhaul): shared by every queue* method above and
     // checkForUpdates so wifi-only handling lives in exactly one place.
     private fun enqueueDownloadWork(slug: String, startChapter: Int, endChapter: Int) {
         val request = ChapterDownloadWorker.buildRequest(
@@ -257,6 +293,7 @@ class NovelRepository(
             request
         )
     }
+
 
     suspend fun cancelDownload(slug: String) {
         workManager.cancelAllWorkByTag(slug)
