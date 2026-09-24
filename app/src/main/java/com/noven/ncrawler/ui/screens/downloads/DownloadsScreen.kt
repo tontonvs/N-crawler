@@ -37,6 +37,14 @@ fun DownloadsScreen(
 ) {
     val allItems by vm.downloadItems.collectAsStateWithLifecycle()
 
+    // CHANGE (reliability fix): true whenever download-only-on-Wi-Fi is on
+    // and the device currently isn't on an unmetered network. Any QUEUED
+    // item in that state is not actually progressing — WorkManager is just
+    // holding it until the network constraint is met, with no error and no
+    // feedback otherwise. This makes that visible instead of leaving the
+    // user staring at "Queued..." indefinitely.
+    val blockedByNetwork by vm.downloadsBlockedByNetwork.collectAsStateWithLifecycle()
+
     // CHANGE: three sections instead of two. ERROR/PAUSED items need a user
     // action to continue, so they're grouped apart from a healthy
     // in-progress download instead of being invisible among "Downloading".
@@ -108,11 +116,12 @@ fun DownloadsScreen(
                     item { SectionHeader("Downloading") }
                     items(activeDownloads, key = { it.novel.slug + "_active" }) { entry ->
                         DownloadCard(
-                            item      = entry,
-                            vm        = vm,
-                            onClick   = { onNovelClick(entry.novel.slug) },
-                            onPrimary = { vm.pause(entry.novel.slug) },
-                            onDelete  = { pendingDelete = entry }
+                            item             = entry,
+                            vm               = vm,
+                            blockedByNetwork = blockedByNetwork,
+                            onClick          = { onNovelClick(entry.novel.slug) },
+                            onPrimary        = { vm.pause(entry.novel.slug) },
+                            onDelete         = { pendingDelete = entry }
                         )
                     }
                     item { Spacer(Modifier.height(8.dp)) }
@@ -122,11 +131,12 @@ fun DownloadsScreen(
                     item { SectionHeader("Needs attention") }
                     items(needsAttention, key = { it.novel.slug + "_attention" }) { entry ->
                         DownloadCard(
-                            item      = entry,
-                            vm        = vm,
-                            onClick   = { onNovelClick(entry.novel.slug) },
-                            onPrimary = { vm.resume(entry.novel.slug) },
-                            onDelete  = { pendingDelete = entry }
+                            item             = entry,
+                            vm               = vm,
+                            blockedByNetwork = blockedByNetwork,
+                            onClick          = { onNovelClick(entry.novel.slug) },
+                            onPrimary        = { vm.resume(entry.novel.slug) },
+                            onDelete         = { pendingDelete = entry }
                         )
                     }
                     item { Spacer(Modifier.height(8.dp)) }
@@ -136,11 +146,12 @@ fun DownloadsScreen(
                     item { SectionHeader("Downloaded") }
                     items(completedDownloads, key = { it.novel.slug + "_done" }) { entry ->
                         DownloadCard(
-                            item      = entry,
-                            vm        = vm,
-                            onClick   = { onNovelClick(entry.novel.slug) },
-                            onPrimary = null,
-                            onDelete  = { pendingDelete = entry }
+                            item             = entry,
+                            vm               = vm,
+                            blockedByNetwork = blockedByNetwork,
+                            onClick          = { onNovelClick(entry.novel.slug) },
+                            onPrimary        = null,
+                            onDelete         = { pendingDelete = entry }
                         )
                     }
                 }
@@ -186,6 +197,7 @@ private fun SectionHeader(title: String) {
 private fun DownloadCard(
     item: DownloadItem,
     vm: DownloadsViewModel,
+    blockedByNetwork: Boolean,
     onClick: () -> Unit,
     onPrimary: (() -> Unit)?,
     onDelete: () -> Unit
@@ -211,6 +223,11 @@ private fun DownloadCard(
     ) {
         value = vm.sizeBytesFor(item.novel.slug)
     }
+
+    // CHANGE (reliability fix): only relevant for a still-QUEUED item —
+    // once it's actually DOWNLOADING the network clearly wasn't the
+    // problem.
+    val waitingForWifi = blockedByNetwork && progress.status == DownloadStatus.QUEUED
 
     Card(
         modifier  = Modifier.fillMaxWidth().clickable(onClick = onClick),
@@ -266,7 +283,7 @@ private fun DownloadCard(
                     Spacer(Modifier.height(4.dp))
 
                     Text(
-                        statusLine(progress, sizeBytes),
+                        statusLine(progress, sizeBytes, waitingForWifi),
                         style = MaterialTheme.typography.labelSmall,
                         color = if (progress.status == DownloadStatus.ERROR)
                             MaterialTheme.colorScheme.error
@@ -275,12 +292,12 @@ private fun DownloadCard(
                 }
 
                 // Status icon
-                StatusIcon(progress.status)
+                StatusIcon(progress.status, waitingForWifi)
             }
 
-            // CHANGE: explicit per-item actions — previously the whole
-            // card just navigated to the novel with no way to manage the
-            // download itself.
+            // CHANGE (Downloads overhaul): explicit per-item actions —
+            // previously the whole card just navigated to the novel with no
+            // way to manage the download itself.
             Row(
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                 horizontalArrangement = Arrangement.End,
@@ -311,12 +328,15 @@ private fun primaryLabel(status: DownloadStatus): String = when (status) {
     DownloadStatus.COMPLETE    -> ""
 }
 
-private fun statusLine(progress: DownloadProgress, sizeBytes: Long?): String {
+private fun statusLine(progress: DownloadProgress, sizeBytes: Long?, waitingForWifi: Boolean): String {
     val sizeSuffix = sizeBytes?.takeIf { it > 0 }?.let { " · ${formatBytes(it)}" } ?: ""
     return when (progress.status) {
         DownloadStatus.COMPLETE    -> "Complete — ${progress.totalChapters} chapters$sizeSuffix"
         DownloadStatus.DOWNLOADING -> "${progress.downloadedChapters} / ${progress.totalChapters} chapters$sizeSuffix"
-        DownloadStatus.QUEUED      -> "Queued..."
+        // CHANGE (reliability fix): was always "Queued..." even when the
+        // real reason it's not moving is the wifi-only constraint with no
+        // Wi-Fi currently available.
+        DownloadStatus.QUEUED      -> if (waitingForWifi) "Waiting for Wi-Fi…" else "Queued..."
         DownloadStatus.PAUSED      -> "Paused — ${progress.downloadedChapters}/${progress.totalChapters}$sizeSuffix"
         DownloadStatus.ERROR       ->
             "${(progress.totalChapters - progress.downloadedChapters).coerceAtLeast(0)} chapter(s) failed — tap Retry"
@@ -330,7 +350,19 @@ private fun formatBytes(bytes: Long): String {
 }
 
 @Composable
-private fun StatusIcon(status: DownloadStatus) {
+private fun StatusIcon(status: DownloadStatus, waitingForWifi: Boolean = false) {
+    // CHANGE (reliability fix): a Wi-Fi-blocked QUEUED item gets its own
+    // icon instead of the generic clock, so it reads as "waiting on
+    // something external" rather than "about to start any second".
+    if (status == DownloadStatus.QUEUED && waitingForWifi) {
+        Icon(
+            Icons.Default.WifiOff,
+            contentDescription = "Waiting for Wi-Fi",
+            tint     = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp)
+        )
+        return
+    }
     when (status) {
         DownloadStatus.DOWNLOADING -> {
             CircularProgressIndicator(

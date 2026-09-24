@@ -3,6 +3,18 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- Needed so the download worker can run as a foreground service and
+         survive past Android's ~10-minute background execution budget for
+         plain (non-foreground) WorkManager jobs. FOREGROUND_SERVICE_DATA_SYNC
+         is the specific type required on API 34+ for a data-transfer task
+         like chapter downloading. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
+    <!-- Required at runtime on API 33+ to actually show the foreground
+         notification — requested in MainActivity on launch. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <application
         android:name=".NCrawlerApp"
         android:allowBackup="true"
