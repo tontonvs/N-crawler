@@ -389,8 +389,22 @@ private fun ReaderContent(
     // [ … ] and * … * passages, split out once per chapter
     val parsed = remember(paragraphs) { paragraphs.map { parseFx(it) } }
     val anyFx  = remember(parsed) { parsed.any { segs -> segs.any { it.fx != Fx.PLAIN } } }
-    // The animation clock only exists when this chapter has something to animate
-    val fxPhases = if (anyFx) rememberFxPhases() else null
+    // CHANGE (perf fix): the chapter body below is a plain Column +
+    // verticalScroll, not a LazyColumn — every paragraph is composed and
+    // laid out at once regardless of what's actually on screen. That's fine
+    // for a normal chapter, but on a long one it means every FX paragraph
+    // (not just the visible ones) keeps recomposing every single frame for
+    // as long as the chapter is open, since none of them are ever
+    // discarded for being off-screen. Past LONG_CHAPTER_FX_THRESHOLD
+    // paragraphs, freeze to the same static look reducedMotion already
+    // uses below, rather than paying that cost continuously. A real
+    // windowed (LazyColumn) rewrite of the chapter body would let long
+    // chapters keep the live animation too — bigger change, left for a
+    // separate pass since it also means reworking the pull-to-next-chapter
+    // gesture, which currently reads a plain ScrollState.
+    val fxPhases = if (anyFx)
+        rememberFxPhases(freeze = paragraphs.size > LONG_CHAPTER_FX_THRESHOLD)
+    else null
 
     // ── Elastic pull up for the next chapter ─────────────────────────────
     // At the very end of the text, dragging further up stretches the page
@@ -630,16 +644,22 @@ private fun parseFx(text: String): List<FxSeg> {
 // a visible FxParagraph reads .value, so nothing else recomposes per frame.
 private class FxPhases(val neon: State<Float>, val pulse: State<Float>)
 
+// Paragraph count past which a chapter's FX animation freezes instead of
+// running live — see the CHANGE note at the call site above.
+private const val LONG_CHAPTER_FX_THRESHOLD = 150
+
 @Composable
-private fun rememberFxPhases(): FxPhases {
+private fun rememberFxPhases(freeze: Boolean = false): FxPhases {
     val context = LocalContext.current
     val reducedMotion = remember(context) {
         Settings.Global.getFloat(
             context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f
         ) == 0f
     }
-    // "Remove animations": keep the colours, freeze the motion
-    if (reducedMotion) return remember { FxPhases(mutableStateOf(0f), mutableStateOf(0.6f)) }
+    // "Remove animations", or a long chapter where the live version would
+    // mean many non-windowed paragraphs recomposing every frame: keep the
+    // colours, freeze the motion.
+    if (reducedMotion || freeze) return remember { FxPhases(mutableStateOf(0f), mutableStateOf(0.6f)) }
 
     val transition = rememberInfiniteTransition(label = "readerFx")
     val neon = transition.animateFloat(

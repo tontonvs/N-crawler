@@ -214,42 +214,70 @@ class NovelArrowSource : NovelSource {
         )
     }
 
+    // ── Info-only — perf fix ─────────────────────────────────────────────────
+    // Same metadata as fetchDetail() below, minus the chapter list, so the
+    // Detail screen can paint immediately. See fetchNovelMetadata() — this
+    // and fetchDetail() now share that one parsing implementation so they
+    // can't drift out of sync with each other.
+    override suspend fun fetchInfo(slug: String): NovelEntity? = try {
+        fetchNovelMetadata(slug)
+    } catch (e: Exception) {
+        Log.e(TAG, "fetchInfo($slug) failed: ${e.message}", e)
+        null
+    }
+
     // ── Detail — confirmed clean JSON API ──────────────────────────────────────
     override suspend fun fetchDetail(slug: String): Pair<NovelEntity, List<ChapterLink>>? {
         return try {
-            val json = JSONObject(fetchText("$API/novels/$slug"))
-            val item = json.optJSONObject("item") ?: return null
-            val info = item.optJSONObject("novelInfo") ?: return null
-
-            val title = info.optString("novel_name").ifBlank { return null }
-            val synopsis = htmlToPlainText(info.optString("novel_desc"))
-            val genres = info.optJSONArray("novel_genres")?.let { arr ->
-                (0 until arr.length()).joinToString(", ") { arr.getString(it) }
-            } ?: ""
-            val rating        = ratingOutOfTen(info.optJSONObject("avgPoint"))
-            val totalChapters = info.optInt("totalChapter", 0)
-            val statusCode    = info.optInt("novel_status", 0)
-            val recentChapterName = info.optJSONObject("recentChapter")?.optString("chapter_name") ?: ""
-
-            Log.d(TAG, "Detail: title=$title totalChapters=$totalChapters rating=$rating")
+            val base = fetchNovelMetadata(slug) ?: return null
 
             // Real chapter list — every id/title/url straight from the site's
             // own data, nothing synthesized or guessed.
             val chapters = fetchAllChapters(slug)
-            Log.d(TAG, "fetchAllChapters returned ${chapters.size} chapters (expected $totalChapters)")
+            Log.d(TAG, "fetchAllChapters returned ${chapters.size} chapters (expected ${base.chapterCount})")
 
             val urlMap = chapters.joinToString("\t") { "${it.num}|${it.url}" }
-            val novel = NovelEntity(
-                slug = slug, title = title, coverUrl = coverUrlFor(slug),
-                synopsis = synopsis, status = statusFromCode(statusCode), rating = rating,
-                genres = genres, chapterCount = chapters.size.takeIf { it > 0 } ?: totalChapters,
-                latestChapter = recentChapterName, chapterUrls = urlMap
+            val novel = base.copy(
+                chapterCount = chapters.size.takeIf { it > 0 } ?: base.chapterCount,
+                chapterUrls  = urlMap
             )
             Pair(novel, chapters)
         } catch (e: Exception) {
             Log.e(TAG, "fetchDetail($slug) failed: ${e.message}", e)
             null
         }
+    }
+
+    // CHANGE (perf fix): factored out of fetchDetail() so fetchInfo() above
+    // gets the same title/synopsis/rating/genres without also paying for
+    // fetchAllChapters() — which for a long, real-paginated novel means
+    // several sequential HTTP round-trips before anything could render.
+    // Returns chapterUrls blank and chapterCount from the API's own
+    // totalChapter field; callers that need the real per-chapter URL map
+    // still go through fetchDetail().
+    private suspend fun fetchNovelMetadata(slug: String): NovelEntity? {
+        val json = JSONObject(fetchText("$API/novels/$slug"))
+        val item = json.optJSONObject("item") ?: return null
+        val info = item.optJSONObject("novelInfo") ?: return null
+
+        val title = info.optString("novel_name").ifBlank { return null }
+        val synopsis = htmlToPlainText(info.optString("novel_desc"))
+        val genres = info.optJSONArray("novel_genres")?.let { arr ->
+            (0 until arr.length()).joinToString(", ") { arr.getString(it) }
+        } ?: ""
+        val rating        = ratingOutOfTen(info.optJSONObject("avgPoint"))
+        val totalChapters = info.optInt("totalChapter", 0)
+        val statusCode    = info.optInt("novel_status", 0)
+        val recentChapterName = info.optJSONObject("recentChapter")?.optString("chapter_name") ?: ""
+
+        Log.d(TAG, "Detail: title=$title totalChapters=$totalChapters rating=$rating")
+
+        return NovelEntity(
+            slug = slug, title = title, coverUrl = coverUrlFor(slug),
+            synopsis = synopsis, status = statusFromCode(statusCode), rating = rating,
+            genres = genres, chapterCount = totalChapters,
+            latestChapter = recentChapterName
+        )
     }
 
     // ── Chapter list — confirmed clean JSON API ─────────────────────────────────

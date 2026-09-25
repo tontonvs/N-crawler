@@ -155,6 +155,30 @@ class NovelRepository(
     }
 
     // ── Novel detail ──────────────────────────────────────────────────────────
+
+    // CHANGE (perf fix): metadata-only path for DetailViewModel's initial
+    // paint. Deliberately does NOT require chapterUrls to be cached — a
+    // novel whose chapter list hasn't loaded yet (or hasn't ever) still
+    // serves this instantly. Chapters are fetched separately and afterward
+    // via getChapterList() below.
+    suspend fun getNovelInfo(slug: String): NovelEntity? {
+        val cached = novelDao.getBySlug(slug)
+        if (cached != null && cached.synopsis.isNotBlank() && cached.coverUrl.isNotBlank())
+            return cached
+
+        val (source, realSlug) = sourceFor(slug)
+        val result = source.fetchInfo(realSlug) ?: return cached
+        val fresh  = rewrapSlug(result, source.id)
+        // fetchInfo() never returns chapterUrls, and upsert() below replaces
+        // the whole row — without this, refreshing a novel's info would
+        // silently wipe any chapter list already cached from a previous
+        // full fetch, forcing it to re-download on the next visit.
+        val novel = if (cached != null && cached.chapterUrls.isNotBlank())
+            fresh.copy(chapterUrls = cached.chapterUrls) else fresh
+        novelDao.upsert(novel)
+        return novel
+    }
+
     suspend fun getNovel(slug: String): NovelEntity? {
         val cached = novelDao.getBySlug(slug)
         // Also require coverUrl — a row can have synopsis/chapterUrls filled in

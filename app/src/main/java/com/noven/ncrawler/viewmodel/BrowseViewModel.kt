@@ -144,12 +144,19 @@ class BrowseViewModel(app: Application) : AndroidViewModel(app) {
                 _popularState.value = BrowseUiState.Error(e.message ?: "Failed to load")
             }
         }
-        // CHANGE: extra homepage sections (Completed/Ongoing/New for
-        // NovelArrow, empty for any other source) — own coroutine so a
-        // slow or failing fetch here can't hold up Latest/Popular above,
-        // and a plain empty list (not an error state) just renders nothing,
-        // same as before this feature existed.
+        // CHANGE (perf fix): extra homepage sections (Completed/Ongoing/New
+        // for NovelArrow, empty for any other source) — still its own
+        // coroutine so a slow or failing fetch here can't hold up Latest/
+        // Popular above, but now started slightly after them instead of in
+        // the same instant. On cold launch this was 5 full-page fetches (1
+        // homepage + 1 popular + 3 more inside fetchExtraSections) all
+        // competing for network/CPU in the same moment the JVM/Compose
+        // runtime is also cold-starting. These sections render below the
+        // fold, so a short, deliberate delay costs nothing visible while
+        // letting Latest/Popular — what's actually on screen first — get
+        // there faster.
         viewModelScope.launch {
+            delay(500)
             try {
                 _extraSections.value = repo.fetchExtraSections()
                 Log.d(TAG, "fetchExtraSections() returned ${_extraSections.value.size} sections")

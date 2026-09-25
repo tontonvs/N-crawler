@@ -763,8 +763,9 @@ fun DetailScreen(
 
             is DetailUiState.Success -> {
                 CinematicDetail(
-                    novel          = s.novel,
-                    chapters       = s.chapters,
+                    novel           = s.novel,
+                    chapters        = s.chapters,
+                    chaptersLoading = s.chaptersLoading,
                     lastReadChapter = s.lastReadChapter,
                     bgTop          = bgTop,
                     accent         = accent,
@@ -822,7 +823,13 @@ fun DetailScreen(
                     onStart     = vm::downloadAll,
                     onPause     = vm::cancelDownload,
                     onManage    = onDownloadsClick,
-                    onLongPress = { if (successState != null) showDownloadSheet = true },
+                    // CHANGE (perf fix): successState now exists as soon as
+                    // metadata loads, before chapters have — also require
+                    // !chaptersLoading so this can't open the range-slider
+                    // sheet against an empty list during that window.
+                    onLongPress = {
+                        if (successState != null && !successState.chaptersLoading) showDownloadSheet = true
+                    },
                 )
                 ReaderCircleBtn(onClick = vm::checkForUpdates) {
                     Icon(
@@ -850,9 +857,9 @@ fun DetailScreen(
         }
 
         // CHANGE (partial downloads): long-press the download button to get
-        // here. Guarded on successState so it can never be requested before
-        // the chapter list has actually loaded.
-        if (showDownloadSheet && successState != null) {
+        // here. Guarded on successState + !chaptersLoading so it can never
+        // be requested before the chapter list has actually loaded.
+        if (showDownloadSheet && successState != null && !successState.chaptersLoading) {
             DownloadOptionsSheet(
                 chapters        = successState.chapters,
                 accent          = accent,
@@ -871,6 +878,7 @@ fun DetailScreen(
 private fun CinematicDetail(
     novel: NovelEntity,
     chapters: List<ChapterLink>,
+    chaptersLoading: Boolean,
     lastReadChapter: Int?,
     bgTop: Color,
     accent: Color,
@@ -1128,7 +1136,12 @@ private fun CinematicDetail(
                                 fontWeight = FontWeight.Bold,
                             )
                             Text(
-                                text       = "${chapters.size} total",
+                                // CHANGE (perf fix): chapters can now still
+                                // be streaming in when this first renders —
+                                // "0 total" would read as broken rather than
+                                // loading.
+                                text       = if (chaptersLoading && chapters.isEmpty())
+                                    "Loading…" else "${chapters.size} total",
                                 color      = accent.copy(alpha = 0.85f),
                                 fontFamily = MontserratFamily,
                                 fontSize   = 14.sp,
@@ -1139,6 +1152,29 @@ private fun CinematicDetail(
                             color     = Color.White.copy(alpha = 0.10f),
                             thickness = 0.5.dp,
                         )
+
+                        if (chaptersLoading && chapters.isEmpty()) {
+                            Row(
+                                modifier             = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 24.dp),
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment     = Alignment.CenterVertically,
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier    = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp,
+                                    color       = accent,
+                                )
+                                Spacer(Modifier.width(10.dp))
+                                Text(
+                                    text       = "Loading chapter list…",
+                                    color      = Color.White.copy(alpha = 0.7f),
+                                    fontFamily = MontserratFamily,
+                                    fontSize   = 14.sp,
+                                )
+                            }
+                        }
 
                         // Preview 10, or the full list once "See All" is tapped.
                         // Plain (non-lazy) rows, same as before — fine up to a

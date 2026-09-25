@@ -36,6 +36,16 @@ interface NovelSource {
     /** Returns null if the novel/slug doesn't exist on this source. */
     suspend fun fetchDetail(slug: String): Pair<NovelEntity, List<ChapterLink>>?
 
+    // CHANGE (perf fix): metadata-only fetch, deliberately without the
+    // chapter list — lets the Detail screen paint title/cover/synopsis
+    // immediately instead of blocking on fetchDetail()'s full chapter fetch
+    // (which can mean several sequential paginated requests for a long
+    // novel). Defaults to calling fetchDetail() and discarding the chapter
+    // list, so every source keeps working exactly as before with zero
+    // changes required; only a source actually worth the speed-up needs to
+    // override this with a real metadata-only endpoint call.
+    suspend fun fetchInfo(slug: String): NovelEntity? = fetchDetail(slug)?.first
+
     /** Returns (chapterTitle, chapterContent). */
     suspend fun fetchChapterByUrl(url: String): Pair<String, String>
 
