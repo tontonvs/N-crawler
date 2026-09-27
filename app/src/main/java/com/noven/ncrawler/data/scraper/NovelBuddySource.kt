@@ -124,8 +124,13 @@ class NovelBuddySource : NovelSource {
             val chapters = mutableListOf<ChapterLink>()
             for (i in items.length() - 1 downTo 0) {
                 val item = items.optJSONObject(i) ?: continue
-                val name = item.optString("name").ifBlank { continue }
-                val href = item.optString("url").ifBlank { continue }
+                val name = item.optString("name")
+                val href = item.optString("url")
+                // Plain if/continue here, not ifBlank { continue } — continue
+                // inside an inline lambda is a non-local jump and needs an
+                // experimental compiler flag Tom's build doesn't have enabled.
+                // This does the same thing without needing one.
+                if (name.isBlank() || href.isBlank()) continue
                 chapters.add(ChapterLink(num = chapters.size + 1, title = name, url = absoluteUrl(href)))
             }
             Log.d(TAG, "fetchDetail($slug): ${chapters.size} chapters")
