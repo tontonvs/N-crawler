@@ -34,6 +34,11 @@ object SourceRegistry {
         //   a long-established aggregator with no relation to the
         //   novelbin/novelarrow/novelping lineage above.
         LightNovelWorldSource(),
+        // CHANGE: NovelPing added. Detail/search/chapter-list use the same JSON
+        // API family NovelArrowSource reverse-engineered (confirmed still alive
+        // on novelping.com), with HTML fallbacks. New sources start DISABLED for
+        // existing users until toggled on in Sources settings (lowest priority).
+        NovelPingSource(),
     )
 
     fun all(): List<NovelSource> = all

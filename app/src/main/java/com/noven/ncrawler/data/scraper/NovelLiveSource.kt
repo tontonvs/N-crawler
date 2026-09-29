@@ -24,6 +24,13 @@ import java.util.concurrent.TimeUnit
  *     FreeWebNovel — confirmed from multiple novellive.com URLs seen in
  *     search results (e.g. novellive.com/book/cultivation-online-novel)
  *
+ * CHANGE (diagnostic report, 2026-09-29): detail pages CONFIRMED working —
+ * all og:novel:* meta tags present. But /sort/latest-release returned HTTP 404
+ * (wrong listing path), which is why Home showed nothing. Listing fetches now
+ * try a list of candidate paths and finally the site homepage, and the card
+ * parser falls back to a structural parse (links whose href is exactly
+ * /book/<slug>) when the h3>a selector matches nothing.
+ *
  * NOT confirmed: exact CSS/meta selectors (og: tags, h3>a card structure,
  * div.txt chapter content div). This is a best-effort port of
  * FreeWebNovelScraper's proven logic with /novel/ → /book/ swapped
@@ -60,34 +67,48 @@ class NovelLiveSource : NovelSource {
         Log.d(TAG, "GET $url")
         val resp = client.newCall(Request.Builder().url(url).build()).execute()
         Log.d(TAG, "HTTP ${resp.code} ← $url")
-        val body = resp.use { it.body!!.string() }
+        val body = resp.use { it.body?.string().orEmpty() }
         Log.d(TAG, "Body: ${body.length} chars")
+        // CHANGE: a 404/403 page used to be parsed as if it were a real listing
+        // (0 cards, no error). Now it fails loudly so firstListing() can try the next path.
+        if (!resp.isSuccessful) throw java.io.IOException("HTTP ${resp.code} for $url")
         Jsoup.parse(body, url)
     }
 
     // Path assumed identical in SHAPE to FreeWebNovel's (same template),
     // "novel" → "book" swapped, "english-novel" segment dropped since it's
     // unconfirmed here — falls back to bare /sort/latest-release if that 404s.
+    // CHANGE: /sort/latest-release and /sort/most-popular are unconfirmed
+    // (the first returned 404 in the diagnostic). Try each candidate in order and
+    // keep the first that yields cards; the site homepage is the last resort
+    // because it is known to exist.
+    private suspend fun firstListing(label: String, paths: List<String>): List<NovelEntity> {
+        var lastError: Exception? = null
+        for (path in paths) {
+            try {
+                val cards = parseNovelCards(fetch("$BASE$path"))
+                if (cards.isNotEmpty()) {
+                    Log.d(TAG, "$label: using $path (${cards.size} novels)")
+                    return cards
+                }
+                Log.w(TAG, "$label: $path returned 0 cards, trying next")
+            } catch (e: Exception) {
+                lastError = e
+                Log.w(TAG, "$label: $path failed: ${e.message}")
+            }
+        }
+        if (lastError != null) throw lastError
+        return emptyList()
+    }
+
     override suspend fun fetchHomepage(): List<NovelEntity> {
         Log.d(TAG, "fetchHomepage()")
-        return try {
-            val doc = fetch("$BASE/sort/latest-release")
-            parseNovelCards(doc)
-        } catch (e: Exception) {
-            Log.e(TAG, "fetchHomepage failed: ${e.message}", e)
-            throw e
-        }
+        return firstListing("fetchHomepage", listOf("/sort/latest-release", "/"))
     }
 
     override suspend fun fetchPopular(): List<NovelEntity> {
         Log.d(TAG, "fetchPopular()")
-        return try {
-            val doc = fetch("$BASE/sort/most-popular")
-            parseNovelCards(doc)
-        } catch (e: Exception) {
-            Log.e(TAG, "fetchPopular failed: ${e.message}", e)
-            throw e
-        }
+        return firstListing("fetchPopular", listOf("/sort/most-popular", "/"))
     }
 
     override suspend fun fetchGenre(genre: String, page: Int): List<NovelEntity> {
@@ -278,6 +299,32 @@ class NovelLiveSource : NovelSource {
                 synopsis = "", status = "", rating = ratingText,
                 genres = genresText, chapterCount = 0, latestChapter = ""
             ))
+        }
+
+        // CHANGE: structural fallback — if the h3>a selector matched nothing
+        // (site markup differs from FreeWebNovel's), accept any link whose href is
+        // exactly /book/<slug>, taking the title from title=/img alt/link text.
+        if (result.isEmpty()) {
+            val exact = Regex("^(?:https?://novellive\\.com)?/book/([^/?#]+)/?$")
+            doc.select("a[href*=/book/]").forEach { a ->
+                val slug = exact.find(a.attr("href").trim())?.groupValues?.get(1) ?: return@forEach
+                val title = a.attr("title").trim()
+                    .ifBlank { a.selectFirst("img")?.attr("alt")?.trim().orEmpty() }
+                    .ifBlank { a.text().trim() }
+                if (title.isBlank()) return@forEach
+                val cover = findCoverNear(a, 3)
+                val existing = result.indexOfFirst { it.slug == slug }
+                if (existing == -1) {
+                    result.add(NovelEntity(
+                        slug = slug, title = title, coverUrl = cover,
+                        synopsis = "", status = "", rating = "",
+                        genres = "", chapterCount = 0, latestChapter = ""
+                    ))
+                } else if (result[existing].coverUrl.isBlank() && cover.isNotBlank()) {
+                    result[existing] = result[existing].copy(coverUrl = cover)
+                }
+            }
+            Log.d(TAG, "parseNovelCards: structural fallback found ${result.size} novels")
         }
 
         Log.d(TAG, "parseNovelCards: returning ${result.size} novels")
