@@ -147,6 +147,27 @@ class ChapterDownloadWorker(
         )
     }
 
+    // CHANGE (download crash fix): starting the foreground service can be refused
+    // (Android 12+ blocks it when the app is in the background, e.g. a job
+    // WorkManager re-runs after a process restart). That used to throw straight
+    // out of doWork() and leave the row stuck at DOWNLOADING. Now a refusal is
+    // logged once and the download carries on as a normal background job — it
+    // may hit the ~10-minute budget on huge ranges, but it still makes
+    // progress and never wedges the queue.
+    private var foregroundOk = true
+
+    private suspend fun promote(info: ForegroundInfo) {
+        if (!foregroundOk) return
+        try {
+            setForeground(info)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            foregroundOk = false
+            Log.w(TAG, "Couldn't start foreground service (${e.javaClass.simpleName}: ${e.message}) — continuing in background")
+        }
+    }
+
     // Retries a chapter in place. Cancellation and locked chapters are never
     // retried — they propagate immediately.
     private suspend fun downloadWithRetry(repo: NovelRepository, slug: String, chapterNum: Int) {
@@ -168,8 +189,34 @@ class ChapterDownloadWorker(
         }
     }
 
+    // CHANGE (download crash fix): any unexpected exception now ends in a
+    // proper ERROR row + a hand-off to the next queued download, instead of
+    // propagating with the row still marked DOWNLOADING (which blocked every
+    // later download — see NovelRepository.reconcileDownloads).
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
-        val slug         = inputData.getString(SLUG) ?: return@withContext Result.failure()
+        val slug = inputData.getString(SLUG) ?: return@withContext Result.failure()
+        try {
+            runDownload(slug)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "Download crashed for $slug: ${e.javaClass.simpleName}: ${e.message}", e)
+            withContext(NonCancellable) {
+                val app = applicationContext as NCrawlerApp
+                try {
+                    app.db.downloadProgressDao().updateProgress(
+                        slug, app.db.chapterDao().downloadedCount(slug), DownloadStatus.ERROR
+                    )
+                    app.repository.startNextQueued()
+                } catch (inner: Exception) {
+                    Log.w(TAG, "Couldn't record failure for $slug: ${inner.message}")
+                }
+            }
+            Result.failure()
+        }
+    }
+
+    private suspend fun runDownload(slug: String): Result {
         val startChapter = inputData.getInt(START_CHAPTER, 1)
         val endChapter   = inputData.getInt(END_CHAPTER, 1)
         val total        = endChapter - startChapter + 1
@@ -186,7 +233,7 @@ class ChapterDownloadWorker(
         // CHANGE (reliability fix): promote to a foreground service before
         // doing any work. This is what exempts the job from the ~10-minute
         // background execution budget.
-        setForeground(foregroundInfo(novelTitle, 0, total))
+        promote(foregroundInfo(novelTitle, 0, total))
 
         // Mark as downloading
         dao.get(slug)?.let {
@@ -226,7 +273,7 @@ class ChapterDownloadWorker(
                             PROGRESS_DONE  to present,
                             PROGRESS_TOTAL to total
                         ))
-                        setForeground(foregroundInfo(novelTitle, present, total))
+                        promote(foregroundInfo(novelTitle, present, total))
                     }
                 } catch (e: CancellationException) {
                     // Never treat a cancellation as a chapter failure — let it
@@ -254,7 +301,7 @@ class ChapterDownloadWorker(
                 // CHANGE (note 7): batch checkpoint + cool-down.
                 if (processed % BATCH_SIZE == 0 && chapterNum < endChapter) {
                     dao.updateProgress(slug, chapterDao.downloadedCount(slug), DownloadStatus.DOWNLOADING)
-                    setForeground(foregroundInfo(novelTitle, present, total))
+                    promote(foregroundInfo(novelTitle, present, total))
                     Log.d(TAG, "Batch of $BATCH_SIZE done at chapter $chapterNum ($present/$total present, $failed failed) — cooling down")
                     if (fetchedFromNetwork) delay(BATCH_COOLDOWN_MS)
                 }
@@ -273,7 +320,7 @@ class ChapterDownloadWorker(
 
         if (isStopped) {
             dao.updateProgress(slug, chapterDao.downloadedCount(slug), DownloadStatus.PAUSED)
-            return@withContext Result.success()
+            return Result.success()
         }
 
         // Only report COMPLETE when every fetchable chapter in this range
@@ -305,6 +352,6 @@ class ChapterDownloadWorker(
         } catch (e: Exception) {
             Log.w(TAG, "Couldn't start next queued download: ${e.message}")
         }
-        Result.success()
+        return Result.success()
     }
 }

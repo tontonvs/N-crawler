@@ -271,10 +271,16 @@ private fun DownloadCard(
     // actually lands (downloadedChapters ticks up) — a single indexed SUM
     // query, cheap, but no reason to repeat it on every recomposition on a
     // low-end device.
+    // CHANGE (download fix): SUM(LENGTH(content)) reads every stored chapter
+    // body. Re-running it after EVERY chapter (every ~2 s) on a large novel is
+    // a lot of disk work for a low-end phone while a download is also writing.
+    // Now it refreshes every 25 chapters, and whenever the status changes
+    // (so the final number is always exact).
     val sizeBytes by produceState<Long?>(
         initialValue = null,
         key1 = item.novel.slug,
-        key2 = progress.downloadedChapters
+        key2 = progress.downloadedChapters / 25,
+        key3 = progress.status
     ) {
         value = vm.sizeBytesFor(item.novel.slug)
     }

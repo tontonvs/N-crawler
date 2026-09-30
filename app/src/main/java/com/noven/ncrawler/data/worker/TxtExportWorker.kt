@@ -71,6 +71,22 @@ class TxtExportWorker(
                 .build()
     }
 
+    // Same reasoning as ChapterDownloadWorker.promote(): a refused foreground
+    // start must not fail the export — it just runs as a normal background job.
+    private var foregroundOk = true
+
+    private suspend fun promote(info: ForegroundInfo) {
+        if (!foregroundOk) return
+        try {
+            setForeground(info)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            foregroundOk = false
+            Log.w(TAG, "Couldn't start foreground service (${e.javaClass.simpleName}: ${e.message}) — continuing in background")
+        }
+    }
+
     private data class Child(val docId: String, val isDir: Boolean, val size: Long)
 
     private fun foregroundInfo(title: String, done: Int, total: Int): ForegroundInfo {
@@ -122,7 +138,7 @@ class TxtExportWorker(
         val total = nums.size
         Log.d(TAG, "Export start: $slug — $total chapters, folder=$tree")
 
-        setForeground(foregroundInfo(novelTitle, 0, total))
+        promote(foregroundInfo(novelTitle, 0, total))
 
         val resolver = applicationContext.contentResolver
         var written = 0
@@ -194,7 +210,7 @@ class TxtExportWorker(
                     }
                 }
 
-                setForeground(foregroundInfo(novelTitle, written + skipped + failed, total))
+                promote(foregroundInfo(novelTitle, written + skipped + failed, total))
                 delay(BATCH_PAUSE_MS)
             }
         } catch (e: CancellationException) {

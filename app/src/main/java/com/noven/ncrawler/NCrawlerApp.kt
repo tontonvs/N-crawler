@@ -4,9 +4,14 @@ import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.os.Build
+import android.util.Log
 import androidx.work.Configuration
 import com.noven.ncrawler.data.db.AppDatabase
 import com.noven.ncrawler.data.repository.NovelRepository
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 class NCrawlerApp : Application(), Configuration.Provider {
 
@@ -21,9 +26,25 @@ class NCrawlerApp : Application(), Configuration.Provider {
         const val DOWNLOAD_CHANNEL_ID = "chapter_downloads"
     }
 
+    // CHANGE (download fix): app-lifetime scope for launch-time housekeeping.
+    // SupervisorJob so one failing task can never cancel another.
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     override fun onCreate() {
         super.onCreate()
         createDownloadNotificationChannel()
+
+        // CHANGE (download fix): a download row left as DOWNLOADING after the
+        // process died (or the worker failed) counted against the concurrent
+        // limit forever — every new download then sat QUEUED and "nothing was
+        // downloading". Reconcile against WorkManager's real state on launch.
+        appScope.launch {
+            try {
+                repository.reconcileDownloads()
+            } catch (e: Exception) {
+                Log.w("NCrawler_App", "reconcileDownloads failed: ${e.message}")
+            }
+        }
     }
 
     private fun createDownloadNotificationChannel() {

@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
 
@@ -23,6 +24,18 @@
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@style/Theme.NCrawler">
+
+        <!-- CHANGE (download crash fix): WorkManager runs setForeground() work in
+             its own SystemForegroundService. On Android 14+ the service element
+             itself must declare the type the worker passes to ForegroundInfo
+             (dataSync). Without this the first setForeground() call kills the
+             whole app with InvalidForegroundServiceTypeException — i.e. "app
+             closes as soon as a download starts". tools:node="merge" adds the
+             attribute to WorkManager's own declaration instead of replacing it. -->
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            tools:node="merge" />
 
         <activity
             android:name=".MainActivity"

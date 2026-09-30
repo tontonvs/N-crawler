@@ -3,6 +3,7 @@ package com.noven.ncrawler.data.repository
 import android.content.Context
 import android.util.Log
 import androidx.work.ExistingWorkPolicy
+import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import com.noven.ncrawler.data.db.*
 import com.noven.ncrawler.data.local.DownloadPreferences
@@ -13,8 +14,10 @@ import com.noven.ncrawler.data.scraper.SourcePreferences
 import com.noven.ncrawler.data.scraper.SourceRegistry
 import com.noven.ncrawler.data.worker.ChapterDownloadWorker
 import com.noven.ncrawler.data.worker.TxtExportWorker
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -287,6 +290,39 @@ class NovelRepository(
             }
             purgeChecked = true
         }
+    }
+
+    // ── Launch-time reconcile (download fix) ─────────────────────────────────
+    // A DOWNLOADING row is only true while a worker is actually running. If the
+    // process was killed (or the worker failed before it could write a final
+    // status) the row stays DOWNLOADING forever, and because the concurrency
+    // guard counts DOWNLOADING rows, every later download just sits QUEUED.
+    // Here: any DOWNLOADING row with no live WorkManager job for it is demoted
+    // to PAUSED (the user sees Resume). A job WorkManager has re-scheduled
+    // (ENQUEUED) is left alone — it continues by itself. Then the freed slot is
+    // handed to the oldest QUEUED download.
+    suspend fun reconcileDownloads() = withContext(Dispatchers.IO) {
+        var demoted = 0
+        for (row in downloadProgressDao.observeAll().first()) {
+            if (row.status != DownloadStatus.DOWNLOADING) continue
+            val live = try {
+                workManager.getWorkInfosForUniqueWork("download_${row.novelSlug}").get().any {
+                    it.state == WorkInfo.State.RUNNING ||
+                    it.state == WorkInfo.State.ENQUEUED ||
+                    it.state == WorkInfo.State.BLOCKED
+                }
+            } catch (e: Exception) {
+                true // can't tell — leave the row alone rather than guess
+            }
+            if (!live) {
+                downloadProgressDao.updateProgress(
+                    row.novelSlug, chapterDao.downloadedCount(row.novelSlug), DownloadStatus.PAUSED
+                )
+                demoted++
+            }
+        }
+        Log.d(TAG, "reconcileDownloads: $demoted stale DOWNLOADING row(s) set to PAUSED")
+        startNextQueued()
     }
 
     // ── TXT export (see TxtExportWorker) ──────────────────────────────────────
