@@ -153,7 +153,7 @@ class ReaderViewModel(app: Application) : AndroidViewModel(app) {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                ReaderUiState.Error(e.message ?: "Failed to load chapter")
+                ReaderUiState.Error(friendlyError(e, "Couldn't load chapter"))
             }
         }
     }

@@ -131,9 +131,7 @@ class BrowseViewModel(app: Application) : AndroidViewModel(app) {
                 throw e   // superseded by a newer load — must not surface as an error
             } catch (e: Exception) {
                 Log.e(TAG, "fetchHomepage() FAILED: ${e::class.simpleName}: ${e.message}", e)
-                _browseState.value = BrowseUiState.Error(
-                    "${e::class.simpleName}: ${e.message ?: "Unknown error"}"
-                )
+                _browseState.value = BrowseUiState.Error(friendlyError(e, "Couldn't load"))
             }
         }
         val popularJob = viewModelScope.launch {
@@ -148,7 +146,7 @@ class BrowseViewModel(app: Application) : AndroidViewModel(app) {
                 throw e
             } catch (e: Exception) {
                 Log.e(TAG, "fetchPopular() FAILED: ${e.message}", e)
-                _popularState.value = BrowseUiState.Error(e.message ?: "Failed to load")
+                _popularState.value = BrowseUiState.Error(friendlyError(e, "Couldn't load"))
             }
         }
         homepageJobs = listOf(latestJob, popularJob)
@@ -175,7 +173,7 @@ class BrowseViewModel(app: Application) : AndroidViewModel(app) {
                 throw e   // a newer keystroke replaced this search
             } catch (e: Exception) {
                 Log.e(TAG, "search('$q') FAILED: ${e.message}", e)
-                _searchState.value = BrowseUiState.Error(e.message ?: "Search failed")
+                _searchState.value = BrowseUiState.Error(friendlyError(e, "Search failed"))
             }
         }
     }

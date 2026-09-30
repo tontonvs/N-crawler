@@ -21,6 +21,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.noven.ncrawler.NCrawlerApp
 import com.noven.ncrawler.ui.components.GenreGlassTile
+import com.noven.ncrawler.ui.components.staggerIn
 
 // Fallback genre list — straight from freewebnovel.com's own genre sidebar. Used when the
 // active source doesn't publish its own (see NovelSource.knownGenres).
@@ -74,7 +75,11 @@ fun DiscoverScreen(onGenreClick: (String) -> Unit) {
                     genre    = genre,
                     styleIdx = index % 6,
                     onClick  = { onGenreClick(genre) },
-                    modifier = Modifier.fillMaxWidth()
+                    // CHANGE (motion): tiles stack in one row at a time (2 per row),
+                    // first screenful only, once.
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .staggerIn(index / 2, distance = 12.dp, stepMs = 35, maxAnimated = 7)
                 )
             }
         }

@@ -29,9 +29,11 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavType
 import androidx.navigation.compose.*
 import androidx.navigation.navArgument
+import com.noven.ncrawler.ui.components.Motion
 import com.noven.ncrawler.ui.components.NavIcons
 import com.noven.ncrawler.ui.screens.browse.BrowseScreen
 import com.noven.ncrawler.ui.screens.browse.SearchOverlay
@@ -61,6 +63,88 @@ object Routes {
 
 // Routes where bottom nav is hidden (immersive screens)
 private val fullScreenRoutes = listOf("detail/", "reader/")
+
+// ── Screen transitions ───────────────────────────────────────────────────────
+// Two kinds of move, so you always know where you are:
+//  • Going DEEPER (detail / reader / genre / downloads): the new screen slides
+//    in from the right over 300ms while the old one drifts back a little and
+//    fades — going back plays the same thing in reverse, a touch faster.
+//  • Switching TABS (home / library / discover / settings): a short 6% slide
+//    toward the tab's side + fade. Tabs are tapped all day, so it stays light.
+// Only slide + fade (GPU layers) — nothing re-measures during the move.
+private fun String?.isDeeper(): Boolean =
+    this != null && (startsWith("detail/") || startsWith("reader/") ||
+        startsWith("genre/") || this == Routes.DOWNLOADS)
+
+private fun String?.tabIndex(): Int = when (this) {
+    Routes.BROWSE   -> 0
+    Routes.LIBRARY  -> 1
+    Routes.DISCOVER -> 2
+    Routes.SETTINGS -> 3
+    else            -> -1
+}
+
+// +1 = target tab sits to the right, -1 = left, 0 = no side (fade + tiny rise)
+private fun tabDirection(from: String?, to: String?): Int {
+    val a = from.tabIndex()
+    val b = to.tabIndex()
+    return if (a < 0 || b < 0) 0 else (b - a).coerceIn(-1, 1)
+}
+
+private fun tabEnter(from: String?, to: String?): EnterTransition {
+    val dir = tabDirection(from, to)
+    val fade = fadeIn(tween(200, delayMillis = 40, easing = LinearOutSlowInEasing))
+    return if (dir == 0) {
+        fade + slideInVertically(tween(260, easing = Motion.EaseOut)) { (it * 0.02f).toInt() }
+    } else {
+        fade + slideInHorizontally(tween(260, easing = Motion.EaseOut)) { (it * 0.06f).toInt() * dir }
+    }
+}
+
+private fun tabExit(from: String?, to: String?): ExitTransition {
+    val dir = tabDirection(from, to)
+    val fade = fadeOut(tween(110, easing = LinearEasing))
+    return if (dir == 0) fade
+    else fade + slideOutHorizontally(tween(200, easing = Motion.EaseOut)) { -(it * 0.04f).toInt() * dir }
+}
+
+private fun AnimatedContentTransitionScope<NavBackStackEntry>.screenEnter(): EnterTransition {
+    val from = initialState.destination.route
+    val to   = targetState.destination.route
+    return if (to.isDeeper()) {
+        slideInHorizontally(tween(Motion.SCREEN_MS, easing = Motion.EaseOut)) { (it * 0.16f).toInt() } +
+            fadeIn(tween(220, easing = LinearOutSlowInEasing))
+    } else tabEnter(from, to)
+}
+
+private fun AnimatedContentTransitionScope<NavBackStackEntry>.screenExit(): ExitTransition {
+    val from = initialState.destination.route
+    val to   = targetState.destination.route
+    return if (to.isDeeper()) {
+        slideOutHorizontally(tween(Motion.SCREEN_MS, easing = Motion.EaseOut)) { -(it * 0.06f).toInt() } +
+            fadeOut(tween(200, easing = LinearEasing))
+    } else tabExit(from, to)
+}
+
+// Back: `initialState` is the screen leaving, `targetState` the one revealed.
+private fun AnimatedContentTransitionScope<NavBackStackEntry>.screenPopEnter(): EnterTransition {
+    val from = initialState.destination.route
+    val to   = targetState.destination.route
+    return if (from.isDeeper()) {
+        slideInHorizontally(tween(Motion.SCREEN_MS, easing = Motion.EaseOut)) { -(it * 0.06f).toInt() } +
+            fadeIn(tween(240, easing = LinearOutSlowInEasing))
+    } else tabEnter(from, to)
+}
+
+private fun AnimatedContentTransitionScope<NavBackStackEntry>.screenPopExit(): ExitTransition {
+    val from = initialState.destination.route
+    val to   = targetState.destination.route
+    return if (from.isDeeper()) {
+        // Leaving is quicker and quieter than arriving.
+        slideOutHorizontally(tween(240, easing = FastOutLinearInEasing)) { (it * 0.16f).toInt() } +
+            fadeOut(tween(200, easing = LinearEasing))
+    } else tabExit(from, to)
+}
 
 @Composable
 fun NCrawlerNavGraph() {
@@ -136,7 +220,11 @@ fun NCrawlerNavGraph() {
         NavHost(
             navController    = nav,
             startDestination = Routes.BROWSE,
-            modifier         = Modifier.fillMaxSize()
+            modifier         = Modifier.fillMaxSize(),
+            enterTransition    = { screenEnter() },
+            exitTransition     = { screenExit() },
+            popEnterTransition = { screenPopEnter() },
+            popExitTransition  = { screenPopExit() }
         ) {
             composable(Routes.BROWSE) {
                 BrowseScreen(
@@ -232,8 +320,10 @@ fun NCrawlerNavGraph() {
         // opaque background fully covers the nav, making it untappable.
         AnimatedVisibility(
             visible = showSearchOverlay,
-            enter   = fadeIn(),
-            exit    = fadeOut()
+            // Rises 4% while fading in; closes faster than it opens.
+            enter   = fadeIn(tween(200, easing = LinearOutSlowInEasing)) +
+                      slideInVertically(tween(280, easing = Motion.EaseOut)) { (it * 0.04f).toInt() },
+            exit    = fadeOut(tween(140, easing = LinearEasing))
         ) {
             SearchOverlay(
                 vm           = browseVm,
@@ -248,8 +338,10 @@ fun NCrawlerNavGraph() {
         // ── Floating bottom nav ────────────────────────────────────────────
         AnimatedVisibility(
             visible  = !isFullScreen,
-            enter    = fadeIn() + slideInVertically(initialOffsetY = { it }),
-            exit     = fadeOut() + slideOutVertically(targetOffsetY = { it }),
+            enter    = fadeIn(tween(220, easing = LinearOutSlowInEasing)) +
+                       slideInVertically(tween(300, easing = Motion.EaseOut)) { it },
+            exit     = fadeOut(tween(140, easing = LinearEasing)) +
+                       slideOutVertically(tween(200, easing = FastOutLinearInEasing)) { it },
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .navigationBarsPadding()
@@ -485,13 +577,13 @@ private fun SearchFab(active: Boolean, onClick: () -> Unit) {
         label         = "searchFabIcon"
     )
 
-    // Occasional-frequency tap, so a small press-in spring is fine — it stays
-    // under 150ms and never fires on load.
+    // CHANGE: no bounce (was MediumBouncy) — this is tapped constantly, so it
+    // just presses in and settles.
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
     val scale by animateFloatAsState(
         targetValue   = if (isPressed) 0.90f else 1f,
-        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
+        animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumHigh),
         label         = "searchFabPress"
     )
 

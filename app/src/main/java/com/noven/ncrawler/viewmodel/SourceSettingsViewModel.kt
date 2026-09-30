@@ -73,7 +73,7 @@ class SourceSettingsViewModel(app: Application) : AndroidViewModel(app) {
             val ok = prefs.setEnabled(sourceId, enabled)
             if (!ok) {
                 _uiState.value = _uiState.value.copy(
-                    message = "At least one source has to stay enabled"
+                    message = "Keep one source on"
                 )
             }
             refresh()

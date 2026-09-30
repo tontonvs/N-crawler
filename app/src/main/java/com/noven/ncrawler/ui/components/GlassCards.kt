@@ -1,13 +1,7 @@
 package com.noven.ncrawler.ui.components
 
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,7 +14,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -30,9 +23,6 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -40,7 +30,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coil.compose.AsyncImage
 import com.noven.ncrawler.data.db.NovelEntity
 import com.noven.ncrawler.ui.theme.AccentBlue
 import com.noven.ncrawler.ui.theme.AntonFamily
@@ -139,24 +128,13 @@ fun NovelGlassCard(
     modifier: Modifier = Modifier,
     coverAspect: Float = NovelCardCoverAspect
 ) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isPressed by interactionSource.collectIsPressedAsState()
-    val scale by animateFloatAsState(
-        targetValue   = if (isPressed) 0.96f else 1f,
-        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessHigh),
-        label         = "novelCardPress"
-    )
+    // CHANGE (motion): press feedback now comes from the shared pressable() —
+    // no bounce (cards are tapped constantly) and the scale is read in the draw
+    // phase, so a press no longer recomposes the whole card every frame.
     val coverShape = RoundedCornerShape(GlassCardRadius)
 
     Column(
-        modifier = modifier
-            .graphicsLayer(scaleX = scale, scaleY = scale)
-            .clickable(
-                interactionSource = interactionSource,
-                indication        = null,
-                role              = Role.Button,
-                onClick           = onClick
-            )
+        modifier = modifier.pressable(onClick = onClick, pressedScale = 0.96f)
     ) {
         // Cover — rounded on ALL corners, with a soft shadow for depth.
         // surfaceVariant shows while loading / if the URL is blank.
@@ -173,10 +151,10 @@ fun NovelGlassCard(
                 .clip(coverShape)
                 .background(MaterialTheme.colorScheme.surfaceVariant)
         ) {
-            AsyncImage(
-                model              = novel.coverUrl,
+            // CHANGE (motion): cover fades in over the placeholder instead of popping.
+            CoverImage(
+                url                = novel.coverUrl,
                 contentDescription = novel.title,
-                contentScale       = ContentScale.Crop,
                 modifier           = Modifier.matchParentSize()
             )
         }
@@ -240,8 +218,8 @@ fun GenreGlassTile(
     Box(
         modifier = modifier
             .height(height)
+            .pressable(onClick = onClick, pressedScale = 0.96f)   // CHANGE (motion): press-in feedback
             .glassCard()
-            .clickable(role = Role.Button, onClick = onClick)
             .padding(6.dp),
         contentAlignment = Alignment.Center
     ) {

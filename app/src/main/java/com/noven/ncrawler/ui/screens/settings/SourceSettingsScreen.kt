@@ -34,6 +34,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.noven.ncrawler.ui.components.errorShake
+import com.noven.ncrawler.ui.components.staggerIn
 import com.noven.ncrawler.ui.theme.MontserratFamily
 import com.noven.ncrawler.ui.theme.glassBorder
 import com.noven.ncrawler.ui.theme.glassSurface
@@ -80,6 +82,14 @@ fun SourceSettingsScreen(
     // The row the user just tapped an arrow on. Set BEFORE the ViewModel call so
     // the row already knows it is "the moved one" when the list reorders.
     var movedKey by remember { mutableStateOf<Any?>(null) }
+
+    // CHANGE (motion): when a switch is refused ("Keep one source on") the row
+    // you tapped gives a quick sharp shake, in step with the message.
+    var blockedKey  by remember { mutableStateOf<Any?>(null) }
+    var blockedTick by remember { mutableStateOf(0) }
+    LaunchedEffect(state.message) {
+        if (state.message != null && blockedKey != null) blockedTick++
+    }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -131,7 +141,7 @@ fun SourceSettingsScreen(
             item { SectionLabel("Sources") }
             item {
                 Text(
-                    "Novels are pulled from the highest-priority source that has them. Reorder or turn sources off below — at least one has to stay on.",
+                    "The top source is tried first. Reorder or switch off.",
                     fontFamily = MontserratFamily,
                     fontSize   = 13.sp,
                     lineHeight = 20.sp,
@@ -145,9 +155,14 @@ fun SourceSettingsScreen(
                     item     = item,
                     index    = index,
                     isMoved  = movedKey == item.id,
+                    shakeTick = if (blockedKey == item.id) blockedTick else 0,
                     // A toggle can reorder rows too — clear the "moved" marker so a
                     // previously moved row doesn't glow for a change it didn't cause.
-                    onToggle = { enabled -> movedKey = null; vm.toggle(item.id, enabled) },
+                    onToggle = { enabled ->
+                        movedKey = null
+                        blockedKey = item.id
+                        vm.toggle(item.id, enabled)
+                    },
                     onUp     = { movedKey = item.id; vm.moveUp(item.id) },
                     onDown   = { movedKey = item.id; vm.moveDown(item.id) }
                 )
@@ -201,7 +216,7 @@ private fun WifiOnlyCard(wifiOnly: Boolean, onChange: (Boolean) -> Unit) {
                 color      = colors.onSurface
             )
             Text(
-                "Chapter downloads wait for an unmetered connection instead of using mobile data.",
+                "Downloads wait for Wi-Fi. No mobile data.",
                 fontFamily = MontserratFamily,
                 fontSize   = 12.sp,
                 lineHeight = 17.sp,
@@ -229,6 +244,7 @@ private fun SourceRow(
     item: SourceUiItem,
     index: Int,
     isMoved: Boolean,
+    shakeTick: Int,
     onToggle: (Boolean) -> Unit,
     onUp: () -> Unit,
     onDown: () -> Unit
@@ -277,6 +293,11 @@ private fun SourceRow(
 
     Box(
         modifier = Modifier
+            // CHANGE (motion): rows stack in on first open (once), and shake when a
+            // switch is refused. Both are separate transform layers, so neither
+            // fights the reorder slide below.
+            .staggerIn(index, distance = 12.dp, stepMs = 45, maxAnimated = 8)
+            .errorShake(trigger = shakeTick, amplitude = 7.dp, onEnter = false)
             .zIndex(if (isMoved) 1f else 0f)      // the moved row passes over its neighbour
             .graphicsLayer {
                 translationY = if (pendingDelta != 0) pendingDelta * pitch else slide.value

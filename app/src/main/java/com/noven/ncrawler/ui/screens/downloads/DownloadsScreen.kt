@@ -1,14 +1,11 @@
 package com.noven.ncrawler.ui.screens.downloads
 
-import android.widget.Toast
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -17,17 +14,18 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import coil.compose.AsyncImage
 import com.noven.ncrawler.data.db.DownloadProgress
 import com.noven.ncrawler.data.db.DownloadStatus
+import com.noven.ncrawler.ui.components.CoverImage
+import com.noven.ncrawler.ui.components.errorShake
+import com.noven.ncrawler.ui.components.pressable
+import com.noven.ncrawler.ui.components.staggerIn
 import com.noven.ncrawler.ui.theme.MontserratFamily
 import com.noven.ncrawler.viewmodel.DownloadItem
 import com.noven.ncrawler.viewmodel.DownloadsViewModel
@@ -68,45 +66,6 @@ fun DownloadsScreen(
 
     var pendingDelete by remember { mutableStateOf<DownloadItem?>(null) }
 
-    // CHANGE (TXT export): folder picker + export entry point. First Export tap
-    // (no folder saved yet) opens the system folder picker, remembers the
-    // choice, then starts the export for the novel that was tapped. The folder
-    // icon on each card re-opens the picker any time (slug stays null → it only
-    // changes the folder).
-    val context = LocalContext.current
-    var pendingExportSlug by remember { mutableStateOf<String?>(null) }
-    val folderPicker = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocumentTree()
-    ) { uri ->
-        val slug = pendingExportSlug
-        pendingExportSlug = null
-        if (uri != null) {
-            if (vm.onExportFolderChosen(uri)) {
-                if (slug != null) {
-                    vm.exportTxt(slug)
-                    Toast.makeText(context, "Exporting TXT files — progress is in the notification", Toast.LENGTH_SHORT).show()
-                } else {
-                    Toast.makeText(context, "Export folder saved", Toast.LENGTH_SHORT).show()
-                }
-            } else {
-                Toast.makeText(context, "Couldn't use that folder — pick another", Toast.LENGTH_LONG).show()
-            }
-        }
-    }
-    val requestExport: (String) -> Unit = { slug ->
-        if (vm.hasExportFolder()) {
-            vm.exportTxt(slug)
-            Toast.makeText(context, "Exporting TXT files — progress is in the notification", Toast.LENGTH_SHORT).show()
-        } else {
-            pendingExportSlug = slug
-            folderPicker.launch(null)
-        }
-    }
-    val requestPickFolder: () -> Unit = {
-        pendingExportSlug = null
-        folderPicker.launch(null)
-    }
-
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
@@ -137,16 +96,18 @@ fun DownloadsScreen(
                     Icon(
                         Icons.Default.DownloadForOffline,
                         contentDescription = null,
-                        modifier = Modifier.size(64.dp),
+                        modifier = Modifier.size(64.dp).staggerIn(0, distance = 10.dp),
                         tint     = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
                     )
                     Text(
                         "No downloads yet",
+                        modifier = Modifier.staggerIn(1, distance = 10.dp, stepMs = 70),
                         style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
-                        "Tap the download button on any novel to read offline",
+                        "Download a novel to read offline",
+                        modifier = Modifier.staggerIn(2, distance = 10.dp, stepMs = 70),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                     )
@@ -161,15 +122,16 @@ fun DownloadsScreen(
             ) {
                 if (activeDownloads.isNotEmpty()) {
                     item { SectionHeader("Downloading") }
-                    items(activeDownloads, key = { it.novel.slug + "_active" }) { entry ->
+                    // CHANGE (motion): one running index across all three sections, so
+                    // the cards stack in top to bottom as a single sequence (once).
+                    itemsIndexed(activeDownloads, key = { _, it -> it.novel.slug + "_active" }) { i, entry ->
                         DownloadCard(
+                            modifier         = Modifier.staggerIn(i),
                             item             = entry,
                             vm               = vm,
                             blockedByNetwork = blockedByNetwork,
                             onClick          = { onNovelClick(entry.novel.slug) },
                             onPrimary        = { vm.pause(entry.novel.slug) },
-                            onExport         = { requestExport(entry.novel.slug) },
-                            onPickFolder     = requestPickFolder,
                             onDelete         = { pendingDelete = entry }
                         )
                     }
@@ -178,15 +140,14 @@ fun DownloadsScreen(
 
                 if (needsAttention.isNotEmpty()) {
                     item { SectionHeader("Needs attention") }
-                    items(needsAttention, key = { it.novel.slug + "_attention" }) { entry ->
+                    itemsIndexed(needsAttention, key = { _, it -> it.novel.slug + "_attention" }) { i, entry ->
                         DownloadCard(
+                            modifier         = Modifier.staggerIn(i + activeDownloads.size),
                             item             = entry,
                             vm               = vm,
                             blockedByNetwork = blockedByNetwork,
                             onClick          = { onNovelClick(entry.novel.slug) },
                             onPrimary        = { vm.resume(entry.novel.slug) },
-                            onExport         = { requestExport(entry.novel.slug) },
-                            onPickFolder     = requestPickFolder,
                             onDelete         = { pendingDelete = entry }
                         )
                     }
@@ -195,15 +156,14 @@ fun DownloadsScreen(
 
                 if (completedDownloads.isNotEmpty()) {
                     item { SectionHeader("Downloaded") }
-                    items(completedDownloads, key = { it.novel.slug + "_done" }) { entry ->
+                    itemsIndexed(completedDownloads, key = { _, it -> it.novel.slug + "_done" }) { i, entry ->
                         DownloadCard(
+                            modifier         = Modifier.staggerIn(i + activeDownloads.size + needsAttention.size),
                             item             = entry,
                             vm               = vm,
                             blockedByNetwork = blockedByNetwork,
                             onClick          = { onNovelClick(entry.novel.slug) },
                             onPrimary        = null,
-                            onExport         = { requestExport(entry.novel.slug) },
-                            onPickFolder     = requestPickFolder,
                             onDelete         = { pendingDelete = entry }
                         )
                     }
@@ -219,10 +179,7 @@ fun DownloadsScreen(
             onDismissRequest = { pendingDelete = null },
             title            = { Text("Delete download?") },
             text = {
-                Text(
-                    "This removes the downloaded chapters for \"${entry.novel.title}\" to free up space. " +
-                    "It stays in your Library and you can download it again anytime."
-                )
+                Text("Removes \"${entry.novel.title}\" chapters from this phone. It stays in your Library.")
             },
             confirmButton = {
                 TextButton(onClick = {
@@ -248,13 +205,12 @@ private fun SectionHeader(title: String) {
 
 @Composable
 private fun DownloadCard(
+    modifier: Modifier = Modifier,
     item: DownloadItem,
     vm: DownloadsViewModel,
     blockedByNetwork: Boolean,
     onClick: () -> Unit,
     onPrimary: (() -> Unit)?,
-    onExport: () -> Unit,
-    onPickFolder: () -> Unit,
     onDelete: () -> Unit
 ) {
     val progress = item.progress
@@ -271,16 +227,10 @@ private fun DownloadCard(
     // actually lands (downloadedChapters ticks up) — a single indexed SUM
     // query, cheap, but no reason to repeat it on every recomposition on a
     // low-end device.
-    // CHANGE (download fix): SUM(LENGTH(content)) reads every stored chapter
-    // body. Re-running it after EVERY chapter (every ~2 s) on a large novel is
-    // a lot of disk work for a low-end phone while a download is also writing.
-    // Now it refreshes every 25 chapters, and whenever the status changes
-    // (so the final number is always exact).
     val sizeBytes by produceState<Long?>(
         initialValue = null,
         key1 = item.novel.slug,
-        key2 = progress.downloadedChapters / 25,
-        key3 = progress.status
+        key2 = progress.downloadedChapters
     ) {
         value = vm.sizeBytesFor(item.novel.slug)
     }
@@ -290,8 +240,13 @@ private fun DownloadCard(
     // problem.
     val waitingForWifi = blockedByNetwork && progress.status == DownloadStatus.QUEUED
 
+    // CHANGE (motion): press-in feedback (was a ripple) + a quick shake when this
+    // download fails while it's on screen.
     Card(
-        modifier  = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        modifier  = modifier
+            .fillMaxWidth()
+            .errorShake(trigger = progress.status == DownloadStatus.ERROR, onEnter = false)
+            .pressable(onClick = onClick, pressedScale = 0.98f),
         shape     = RoundedCornerShape(12.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
         colors    = CardDefaults.cardColors(
@@ -310,10 +265,9 @@ private fun DownloadCard(
                         .clip(RoundedCornerShape(8.dp))
                         .background(MaterialTheme.colorScheme.surfaceVariant)
                 ) {
-                    AsyncImage(
-                        model              = item.novel.coverUrl,
+                    CoverImage(
+                        url                = item.novel.coverUrl,
                         contentDescription = item.novel.title,
-                        contentScale       = ContentScale.Crop,
                         modifier           = Modifier.fillMaxSize()
                     )
                 }
@@ -369,26 +323,6 @@ private fun DownloadCard(
                         Text(primaryLabel(progress.status))
                     }
                 }
-                // CHANGE (TXT export): only offered when there is something on
-                // disk to export, and not mid-queue (nothing downloaded yet).
-                if (progress.downloadedChapters > 0 && progress.status != DownloadStatus.QUEUED) {
-                    TextButton(onClick = onExport) {
-                        Icon(
-                            Icons.Default.Description,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(Modifier.width(6.dp))
-                        Text("Export TXT")
-                    }
-                    IconButton(onClick = onPickFolder) {
-                        Icon(
-                            Icons.Default.FolderOpen,
-                            contentDescription = "Choose export folder",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
                 IconButton(onClick = onDelete) {
                     Icon(
                         Icons.Default.DeleteOutline,
@@ -412,15 +346,15 @@ private fun primaryLabel(status: DownloadStatus): String = when (status) {
 private fun statusLine(progress: DownloadProgress, sizeBytes: Long?, waitingForWifi: Boolean): String {
     val sizeSuffix = sizeBytes?.takeIf { it > 0 }?.let { " · ${formatBytes(it)}" } ?: ""
     return when (progress.status) {
-        DownloadStatus.COMPLETE    -> "Complete — ${progress.totalChapters} chapters$sizeSuffix"
-        DownloadStatus.DOWNLOADING -> "${progress.downloadedChapters} / ${progress.totalChapters} chapters$sizeSuffix"
+        DownloadStatus.COMPLETE    -> "${progress.totalChapters} chapters$sizeSuffix"
+        DownloadStatus.DOWNLOADING -> "${progress.downloadedChapters} / ${progress.totalChapters}$sizeSuffix"
         // CHANGE (reliability fix): was always "Queued..." even when the
         // real reason it's not moving is the wifi-only constraint with no
         // Wi-Fi currently available.
-        DownloadStatus.QUEUED      -> if (waitingForWifi) "Waiting for Wi-Fi…" else "Queued..."
-        DownloadStatus.PAUSED      -> "Paused — ${progress.downloadedChapters}/${progress.totalChapters}$sizeSuffix"
+        DownloadStatus.QUEUED      -> if (waitingForWifi) "Waiting for Wi-Fi" else "Queued"
+        DownloadStatus.PAUSED      -> "Paused · ${progress.downloadedChapters}/${progress.totalChapters}"
         DownloadStatus.ERROR       ->
-            "${(progress.totalChapters - progress.downloadedChapters).coerceAtLeast(0)} chapter(s) failed — tap Retry"
+            "${(progress.totalChapters - progress.downloadedChapters).coerceAtLeast(0)} failed"
     }
 }
 
@@ -430,59 +364,63 @@ private fun formatBytes(bytes: Long): String {
     return "%.1f MB".format(kb / 1024.0)
 }
 
+// CHANGE (motion): the icon cross-fades (180ms) when the status changes — a
+// download finishing or failing used to swap instantly and was easy to miss.
 @Composable
 private fun StatusIcon(status: DownloadStatus, waitingForWifi: Boolean = false) {
-    // CHANGE (reliability fix): a Wi-Fi-blocked QUEUED item gets its own
-    // icon instead of the generic clock, so it reads as "waiting on
-    // something external" rather than "about to start any second".
-    if (status == DownloadStatus.QUEUED && waitingForWifi) {
-        Icon(
-            Icons.Default.WifiOff,
-            contentDescription = "Waiting for Wi-Fi",
-            tint     = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(20.dp)
-        )
-        return
-    }
-    when (status) {
-        DownloadStatus.DOWNLOADING -> {
-            CircularProgressIndicator(
-                modifier    = Modifier.size(20.dp),
-                strokeWidth = 2.dp,
-                color       = MaterialTheme.colorScheme.primary
-            )
-        }
-        DownloadStatus.COMPLETE -> {
+    // A Wi-Fi-blocked QUEUED item gets its own icon instead of the generic clock,
+    // so it reads as "waiting on something external", not "about to start".
+    Crossfade(
+        targetState   = status to (waitingForWifi && status == DownloadStatus.QUEUED),
+        animationSpec = tween(180)
+    ) { (st, wifiBlocked) ->
+        if (wifiBlocked) {
             Icon(
-                Icons.Default.CheckCircle,
-                contentDescription = "Complete",
-                tint     = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(20.dp)
-            )
-        }
-        DownloadStatus.QUEUED -> {
-            Icon(
-                Icons.Default.Schedule,
-                contentDescription = "Queued",
+                Icons.Default.WifiOff,
+                contentDescription = "Waiting for Wi-Fi",
                 tint     = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(20.dp)
             )
-        }
-        DownloadStatus.PAUSED -> {
-            Icon(
-                Icons.Default.PauseCircle,
-                contentDescription = "Paused",
-                tint     = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(20.dp)
-            )
-        }
-        DownloadStatus.ERROR -> {
-            Icon(
-                Icons.Default.ErrorOutline,
-                contentDescription = "Error",
-                tint     = MaterialTheme.colorScheme.error,
-                modifier = Modifier.size(20.dp)
-            )
+        } else when (st) {
+            DownloadStatus.DOWNLOADING -> {
+                CircularProgressIndicator(
+                    modifier    = Modifier.size(20.dp),
+                    strokeWidth = 2.dp,
+                    color       = MaterialTheme.colorScheme.primary
+                )
+            }
+            DownloadStatus.COMPLETE -> {
+                Icon(
+                    Icons.Default.CheckCircle,
+                    contentDescription = "Complete",
+                    tint     = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+            DownloadStatus.QUEUED -> {
+                Icon(
+                    Icons.Default.Schedule,
+                    contentDescription = "Queued",
+                    tint     = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+            DownloadStatus.PAUSED -> {
+                Icon(
+                    Icons.Default.PauseCircle,
+                    contentDescription = "Paused",
+                    tint     = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+            DownloadStatus.ERROR -> {
+                Icon(
+                    Icons.Default.ErrorOutline,
+                    contentDescription = "Error",
+                    tint     = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
         }
     }
 }

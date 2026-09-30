@@ -1,5 +1,7 @@
 package com.noven.ncrawler.ui.screens.discover
 
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -7,6 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -16,8 +19,9 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.WifiOff
@@ -34,11 +38,20 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.noven.ncrawler.ui.components.GlassCardRadius
+import com.noven.ncrawler.ui.components.Motion
+import com.noven.ncrawler.ui.components.NovelCardCoverAspect
 import com.noven.ncrawler.ui.components.NovelGlassCard
+import com.noven.ncrawler.ui.components.ShimmerScope
+import com.noven.ncrawler.ui.components.errorShake
+import com.noven.ncrawler.ui.components.skeleton
+import com.noven.ncrawler.ui.components.skeletonBase
+import com.noven.ncrawler.ui.components.staggerIn
 import com.noven.ncrawler.ui.components.NovelGridMinCard
 import com.noven.ncrawler.ui.theme.AccentBlue
 import com.noven.ncrawler.viewmodel.GenreViewModel
@@ -102,65 +115,121 @@ fun GenreScreen(
             )
         }
 
-        when {
-            state.isLoading && novels.isEmpty() -> {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = AccentBlue)
+        // CHANGE (motion): one phase, cross-faded — the skeleton grid melts into
+        // the real grid instead of a spinner popping out. Errors shake once.
+        val phase = when {
+            state.isLoading && novels.isEmpty()      -> GenrePhase.LOADING
+            state.error != null && novels.isEmpty()  -> GenrePhase.ERROR
+            novels.isEmpty()                         -> GenrePhase.EMPTY
+            else                                     -> GenrePhase.CONTENT
+        }
+
+        Crossfade(
+            targetState   = phase,
+            modifier      = Modifier.fillMaxSize(),
+            animationSpec = tween(Motion.BASE_MS)
+        ) { p ->
+            when (p) {
+                GenrePhase.LOADING -> GenreSkeleton()
+
+                GenrePhase.ERROR -> {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Column(
+                            modifier            = Modifier.errorShake(),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Icon(Icons.Rounded.WifiOff, null,
+                                tint = MaterialTheme.colorScheme.error.copy(alpha = 0.8f),
+                                modifier = Modifier.size(40.dp))
+                            Spacer(Modifier.height(8.dp))
+                            Text(state.error ?: "Something went wrong",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(Modifier.height(12.dp))
+                            TextButton(onClick = { vm.load(genre) }) { Text("Retry") }
+                        }
+                    }
                 }
-            }
-            state.error != null && novels.isEmpty() -> {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(Icons.Rounded.WifiOff, null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(40.dp))
-                        Spacer(Modifier.height(8.dp))
-                        Text(state.error ?: "Something went wrong",
+
+                GenrePhase.EMPTY -> {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text("Nothing here yet",
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Spacer(Modifier.height(12.dp))
-                        TextButton(onClick = { vm.load(genre) }) { Text("Retry") }
                     }
                 }
-            }
-            novels.isEmpty() -> {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("No novels found in $genre",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-            else -> {
-                LazyVerticalGrid(
-                    // FIX: Adaptive, not Fixed(2) — in landscape two columns stretched
-                    // every card across half the screen; now it just adds columns.
-                    columns         = GridCells.Adaptive(minSize = NovelGridMinCard),
-                    state           = gridState,
-                    contentPadding  = PaddingValues(16.dp, 12.dp, 16.dp, 100.dp),
-                    horizontalArrangement = Arrangement.spacedBy(20.dp),
-                    verticalArrangement   = Arrangement.spacedBy(16.dp)
-                ) {
-                    // CHANGE: shared NovelGlassCard (same card as the homepage
-                    // rows) replaces the private GenreNovelCard copy. The
-                    // homepage rows now use this exact card size (same width
-                    // formula, same default 6:7 cover), so a novel looks the
-                    // same on both screens.
-                    items(novels, key = { it.slug }) { novel ->
-                        NovelGlassCard(
-                            novel    = novel,
-                            onClick  = { onNovelClick(novel.slug) },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                    if (state.isLoadingMore) {
-                        item(span = { GridItemSpan(maxLineSpan) }) {
-                            Box(Modifier.fillMaxWidth().padding(16.dp), Alignment.Center) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(22.dp),
-                                    strokeWidth = 2.dp,
-                                    color = AccentBlue
-                                )
+
+                GenrePhase.CONTENT -> {
+                    LazyVerticalGrid(
+                        // FIX: Adaptive, not Fixed(2) — in landscape two columns stretched
+                        // every card across half the screen; now it just adds columns.
+                        columns         = GridCells.Adaptive(minSize = NovelGridMinCard),
+                        state           = gridState,
+                        contentPadding  = PaddingValues(16.dp, 12.dp, 16.dp, 100.dp),
+                        horizontalArrangement = Arrangement.spacedBy(20.dp),
+                        verticalArrangement   = Arrangement.spacedBy(16.dp)
+                    ) {
+                        // Shared NovelGlassCard (same card as the homepage rows).
+                        // CHANGE (motion): first screenful stacks in, once; pages
+                        // loaded later just appear (no lag while scrolling).
+                        itemsIndexed(novels, key = { _, n -> n.slug }) { index, novel ->
+                            NovelGlassCard(
+                                novel    = novel,
+                                onClick  = { onNovelClick(novel.slug) },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .staggerIn(index / 2, distance = 12.dp, stepMs = 35, maxAnimated = 6)
+                            )
+                        }
+                        if (state.isLoadingMore) {
+                            item(span = { GridItemSpan(maxLineSpan) }) {
+                                Box(Modifier.fillMaxWidth().padding(16.dp), Alignment.Center) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(22.dp),
+                                        strokeWidth = 2.dp,
+                                        color = AccentBlue
+                                    )
+                                }
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+private enum class GenrePhase { LOADING, ERROR, EMPTY, CONTENT }
+
+// Placeholder grid shown while the first page loads — same cover ratio + title
+// bar as NovelGlassCard so nothing jumps when the real cards fade in.
+@Composable
+private fun GenreSkeleton() {
+    val base = skeletonBase()
+    ShimmerScope {
+        LazyVerticalGrid(
+            columns               = GridCells.Adaptive(minSize = NovelGridMinCard),
+            userScrollEnabled     = false,
+            contentPadding        = PaddingValues(16.dp, 12.dp, 16.dp, 100.dp),
+            horizontalArrangement = Arrangement.spacedBy(20.dp),
+            verticalArrangement   = Arrangement.spacedBy(16.dp)
+        ) {
+            items(8) {
+                Column(Modifier.fillMaxWidth()) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(NovelCardCoverAspect)
+                            .clip(RoundedCornerShape(GlassCardRadius))
+                            .skeleton(base)
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Box(
+                        Modifier
+                            .fillMaxWidth(0.8f)
+                            .height(12.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .skeleton(base)
+                    )
+                    Spacer(Modifier.height(20.dp))
                 }
             }
         }

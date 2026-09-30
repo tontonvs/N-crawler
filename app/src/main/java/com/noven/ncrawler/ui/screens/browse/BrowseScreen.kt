@@ -51,11 +51,17 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.unit.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import coil.compose.AsyncImage
 import com.noven.ncrawler.data.db.NovelEntity
 import androidx.core.graphics.ColorUtils
 import com.noven.ncrawler.data.local.DominantColorStore
+import com.noven.ncrawler.ui.components.CoverImage
 import com.noven.ncrawler.ui.components.GenreGlassTile
+import com.noven.ncrawler.ui.components.Motion
+import com.noven.ncrawler.ui.components.ShimmerScope
+import com.noven.ncrawler.ui.components.errorShake
+import com.noven.ncrawler.ui.components.pressable
+import com.noven.ncrawler.ui.components.skeleton
+import com.noven.ncrawler.ui.components.staggerIn
 import com.noven.ncrawler.ui.components.NovelGlassCard
 import com.noven.ncrawler.ui.components.novelCardWidthFor
 import com.noven.ncrawler.ui.theme.*
@@ -426,9 +432,11 @@ fun SearchOverlay(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalArrangement   = Arrangement.spacedBy(8.dp)
                         ) {
-                            recentSearches.take(5).forEach { term ->
+                            // CHANGE (motion): chips pop in one after another (30ms apart).
+                            recentSearches.take(5).forEachIndexed { chipIndex, term ->
                                 Row(
                                     modifier = Modifier
+                                        .staggerIn(chipIndex, distance = 8.dp, stepMs = 30)
                                         .widthIn(max = 168.dp)
                                         .clip(RoundedCornerShape(12.dp))
                                         .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f))
@@ -469,7 +477,7 @@ fun SearchOverlay(
                 } else {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text(
-                            "Search for a novel by title",
+                            "Search by title",
                             fontFamily = MontserratFamily,
                             fontSize   = 15.sp,
                             color      = MaterialTheme.colorScheme.onSurfaceVariant
@@ -505,12 +513,25 @@ private fun BrowseContent(
     onContinueReading: ((slug: String, chapterNum: Int) -> Unit)?,
     recentlyReading: List<ContinueReadingInfo>
 ) {
-    when (state) {
-        is BrowseUiState.Loading -> BrowseSkeleton()
-        is BrowseUiState.Error   -> BrowseError(state.message, onRetry)
-        is BrowseUiState.Empty   -> BrowseError("No novels found", onRetry)
-        is BrowseUiState.Success -> {
-            val novels = state.novels
+    // CHANGE (motion): skeleton -> content is a short cross-fade (not a hard cut),
+    // and inside the content the top blocks stack in one after another (once).
+    // Errors get a quick shake. The phase is what animates; the content itself
+    // reads the latest state.
+    val phase = when (state) {
+        is BrowseUiState.Loading -> 0
+        is BrowseUiState.Error, is BrowseUiState.Empty -> 1
+        is BrowseUiState.Success -> 2
+    }
+    Crossfade(
+        targetState   = phase,
+        modifier      = Modifier.fillMaxSize(),
+        animationSpec = tween(Motion.QUICK_MS + 40)
+    ) { p ->
+    when (p) {
+        0 -> ShimmerScope { BrowseSkeleton() }
+        1 -> BrowseError((state as? BrowseUiState.Error)?.message ?: "No novels found", onRetry)
+        else -> (state as? BrowseUiState.Success)?.let { success ->
+            val novels = success.novels
             val hero   = novels.firstOrNull()
 
             // Group into up to 5 genre rows each, samples of ~10 per genre —
@@ -543,6 +564,12 @@ private fun BrowseContent(
                 groupByTopGenres(novels, maxGenres = 8, perGenre = 1).map { it.first }
             }
 
+            // Order in the entrance stack. Only the first screenful animates; rows
+            // further down just appear as you scroll to them (no lag while flicking).
+            val hasRecent   = recentlyReading.isNotEmpty() && onContinueReading != null
+            val genreOrder  = if (hasRecent) 2 else 1
+            val latestOrder = genreOrder + (if (showcaseGenres.isNotEmpty()) 1 else 0)
+
             LazyColumn(
                 modifier       = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(bottom = 120.dp)
@@ -553,20 +580,24 @@ private fun BrowseContent(
                 // of the feed and opens its detail page like before.
                 if (continueReading != null && onContinueReading != null) {
                     item {
-                        HeroBanner(
-                            novel      = continueReading.novel,
-                            resumeChapter = continueReading.progress.lastChapterNum,
-                            onClick    = {
-                                onContinueReading(
-                                    continueReading.novel.slug,
-                                    continueReading.progress.lastChapterNum
-                                )
-                            }
-                        )
+                        Box(Modifier.staggerIn(0, maxAnimated = 5)) {
+                            HeroBanner(
+                                novel      = continueReading.novel,
+                                resumeChapter = continueReading.progress.lastChapterNum,
+                                onClick    = {
+                                    onContinueReading(
+                                        continueReading.novel.slug,
+                                        continueReading.progress.lastChapterNum
+                                    )
+                                }
+                            )
+                        }
                     }
                 } else if (hero != null) {
                     item {
-                        HeroBanner(novel = hero, resumeChapter = null, onClick = { onNovelClick(hero.slug) })
+                        Box(Modifier.staggerIn(0, maxAnimated = 5)) {
+                            HeroBanner(novel = hero, resumeChapter = null, onClick = { onNovelClick(hero.slug) })
+                        }
                     }
                 }
 
@@ -577,12 +608,14 @@ private fun BrowseContent(
                 // (minus the "i") is the tap target.
                 if (recentlyReading.isNotEmpty() && onContinueReading != null) {
                     item {
-                        Spacer(Modifier.height(24.dp))
-                        RecentlyReadRow(
-                            items          = recentlyReading,
-                            onOpenReader   = onContinueReading,
-                            onOpenDetail   = onNovelClick
-                        )
+                        Column(Modifier.staggerIn(1, maxAnimated = 5)) {
+                            Spacer(Modifier.height(24.dp))
+                            RecentlyReadRow(
+                                items          = recentlyReading,
+                                onOpenReader   = onContinueReading,
+                                onOpenDetail   = onNovelClick
+                            )
+                        }
                     }
                 }
 
@@ -592,12 +625,14 @@ private fun BrowseContent(
                 // the existing DiscoverScreen (every genre, full list).
                 if (showcaseGenres.isNotEmpty()) {
                     item {
-                        Spacer(Modifier.height(24.dp))
-                        GenreShowcaseRow(
-                            genres          = showcaseGenres,
-                            onGenreClick    = onGenreClick,
-                            onDiscoverClick = onDiscoverClick
-                        )
+                        Column(Modifier.staggerIn(genreOrder, maxAnimated = 5)) {
+                            Spacer(Modifier.height(24.dp))
+                            GenreShowcaseRow(
+                                genres          = showcaseGenres,
+                                onGenreClick    = onGenreClick,
+                                onDiscoverClick = onDiscoverClick
+                            )
+                        }
                     }
                 }
 
@@ -605,17 +640,21 @@ private fun BrowseContent(
                 // "See more" on each opens that genre's full list ─────────────
                 if (latestGenreRows.isNotEmpty()) {
                     item {
-                        Spacer(Modifier.height(24.dp))
-                        SectionHeader("Latest Updates")
+                        Column(Modifier.staggerIn(latestOrder, maxAnimated = 5)) {
+                            Spacer(Modifier.height(24.dp))
+                            SectionHeader("Latest Updates")
+                        }
                     }
-                    items(latestGenreRows, key = { "latest_${it.first}" }) { (genre, rowNovels) ->
-                        Spacer(Modifier.height(16.dp))
-                        GenreRow(
-                            genre        = genre,
-                            novels       = rowNovels,
-                            onNovelClick = onNovelClick,
-                            onSeeMore    = { onGenreClick(genre) }
-                        )
+                    itemsIndexed(latestGenreRows, key = { _, it -> "latest_${it.first}" }) { i, (genre, rowNovels) ->
+                        Column(Modifier.staggerIn(latestOrder + 1 + i, maxAnimated = 5)) {
+                            Spacer(Modifier.height(16.dp))
+                            GenreRow(
+                                genre        = genre,
+                                novels       = rowNovels,
+                                onNovelClick = onNovelClick,
+                                onSeeMore    = { onGenreClick(genre) }
+                            )
+                        }
                     }
                 } else if (showFlatLatest) {
                     // FIX: no genre data to group by (e.g. NovelArrow) —
@@ -672,6 +711,7 @@ private fun BrowseContent(
                 }
             }
         }
+    }
     }
 }
 
@@ -818,15 +858,14 @@ private fun HeroBanner(novel: NovelEntity, resumeChapter: Int?, onClick: () -> U
             .fillMaxWidth()
             .padding(horizontal = 16.dp)
             .height(320.dp)
+            .pressable(onClick = onClick, pressedScale = 0.98f)   // CHANGE (motion)
             .clip(RoundedCornerShape(20.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
-            .clickable(onClick = onClick)
     ) {
         // Cover image — drifting (the card's clip() trims the overscan)
-        AsyncImage(
-            model              = novel.coverUrl,
+        CoverImage(
+            url                = novel.coverUrl,
             contentDescription = novel.title,
-            contentScale       = ContentScale.Crop,
             modifier           = Modifier
                 .fillMaxSize()
                 .graphicsLayer {
@@ -989,14 +1028,13 @@ private fun RecentCard(
         modifier = Modifier
             .width(140.dp)
             .height(210.dp)
+            .pressable(onClick = onOpenReader, pressedScale = 0.97f)   // CHANGE (motion)
             .clip(RoundedCornerShape(16.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
-            .clickable(onClick = onOpenReader)
     ) {
-        AsyncImage(
-            model              = novel.coverUrl,
+        CoverImage(
+            url                = novel.coverUrl,
             contentDescription = novel.title,
-            contentScale       = ContentScale.Crop,
             modifier           = Modifier.fillMaxSize()
         )
 
@@ -1153,10 +1191,10 @@ private fun SeeMoreGenreCard(onClick: () -> Unit, modifier: Modifier = Modifier)
     Box(
         modifier = modifier
             .height(72.dp)
+            .pressable(onClick = onClick, pressedScale = 0.96f)   // CHANGE (motion)
             .clip(RoundedCornerShape(16.dp))
             .background(AccentBlue.copy(alpha = 0.10f))
             .border(1.5.dp, AccentBlue.copy(alpha = 0.35f), RoundedCornerShape(16.dp))
-            .clickable(onClick = onClick)
             .padding(6.dp),
         contentAlignment = Alignment.Center
     ) {
@@ -1243,11 +1281,12 @@ private fun SearchContent(
     onNovelClick: (String) -> Unit
 ) {
     when (state) {
-        is BrowseUiState.Loading -> SearchSkeleton()
+        is BrowseUiState.Loading -> ShimmerScope { SearchSkeleton() }
         is BrowseUiState.Empty   -> SearchEmpty(query)
         is BrowseUiState.Error   -> Box(Modifier.fillMaxSize(), Alignment.Center) {
             Text(
                 state.message,
+                modifier   = Modifier.errorShake(trigger = state.message),   // CHANGE (motion)
                 fontFamily = MontserratFamily,
                 color      = MaterialTheme.colorScheme.error
             )
@@ -1282,11 +1321,10 @@ private fun SearchRow(novel: NovelEntity, onClick: () -> Unit) {
                 .clip(RoundedCornerShape(10.dp))
                 .background(MaterialTheme.colorScheme.surfaceVariant)
         ) {
-            AsyncImage(
-                model              = novel.coverUrl,
-                contentDescription = novel.title,
-                contentScale       = ContentScale.Crop,
-                modifier           = Modifier.fillMaxSize()
+            CoverImage(
+            url                = novel.coverUrl,
+            contentDescription = novel.title,
+            modifier           = Modifier.fillMaxSize()
             )
         }
         Column(modifier = Modifier.weight(1f)) {
@@ -1332,7 +1370,7 @@ private fun BrowseSkeleton() {
                 .padding(horizontal = 16.dp)
                 .height(320.dp)
                 .clip(RoundedCornerShape(20.dp))
-                .background(shimmer)
+                .skeleton(shimmer)
         )
         Spacer(Modifier.height(24.dp))
 
@@ -1349,7 +1387,7 @@ private fun BrowseSkeleton() {
                         .width(140.dp)
                         .height(210.dp)
                         .clip(RoundedCornerShape(16.dp))
-                        .background(shimmer)
+                        .skeleton(shimmer)
                 )
             }
         }
@@ -1369,7 +1407,7 @@ private fun BrowseSkeleton() {
                         .width(104.dp)
                         .height(72.dp)
                         .clip(RoundedCornerShape(16.dp))
-                        .background(shimmer)
+                        .skeleton(shimmer)
                 )
             }
         }
@@ -1397,7 +1435,7 @@ private fun BrowseSkeleton() {
                                 .fillMaxWidth()
                                 .height(skeletonCardWidth * (7f / 6f))
                                 .clip(RoundedCornerShape(16.dp))
-                                .background(shimmer)
+                                .skeleton(shimmer)
                         )
                         Spacer(Modifier.height(12.dp))
                         Box(
@@ -1405,7 +1443,7 @@ private fun BrowseSkeleton() {
                                 .fillMaxWidth(0.8f)
                                 .height(12.dp)
                                 .clip(RoundedCornerShape(6.dp))
-                                .background(shimmer)
+                                .skeleton(shimmer)
                         )
                         Spacer(Modifier.height(20.dp))
                     }
@@ -1417,7 +1455,7 @@ private fun BrowseSkeleton() {
 }
 
 // Small shimmer bar standing in for a text label — used throughout the
-// skeleton above instead of repeating the same Box(...).background(shimmer)
+// skeleton above instead of repeating the same Box(...).skeleton(shimmer)
 // four times with slightly different sizes.
 @Composable
 private fun SkeletonLabel(shimmer: Color, width: androidx.compose.ui.unit.Dp, height: androidx.compose.ui.unit.Dp = 20.dp) {
@@ -1426,7 +1464,7 @@ private fun SkeletonLabel(shimmer: Color, width: androidx.compose.ui.unit.Dp, he
             .padding(horizontal = 16.dp)
             .size(width, height)
             .clip(RoundedCornerShape(4.dp))
-            .background(shimmer)
+            .skeleton(shimmer)
     )
 }
 
@@ -1442,20 +1480,20 @@ private fun SearchSkeleton() {
                     Modifier
                         .size(48.dp, 66.dp)
                         .clip(RoundedCornerShape(10.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                        .skeleton(MaterialTheme.colorScheme.surfaceVariant)
                 )
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Box(
                         Modifier
                             .size(140.dp, 13.dp)
                             .clip(RoundedCornerShape(4.dp))
-                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .skeleton(MaterialTheme.colorScheme.surfaceVariant)
                     )
                     Box(
                         Modifier
                             .size(90.dp, 10.dp)
                             .clip(RoundedCornerShape(4.dp))
-                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .skeleton(MaterialTheme.colorScheme.surfaceVariant)
                     )
                 }
             }
@@ -1487,7 +1525,11 @@ private fun SearchEmpty(query: String) {
 @Composable
 private fun BrowseError(message: String, onRetry: () -> Unit) {
     Box(Modifier.fillMaxSize(), Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        // CHANGE (motion): sharp quick shake when the error lands.
+        Column(
+            modifier            = Modifier.errorShake(trigger = message),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
             Icon(
                 Icons.Rounded.WifiOff,
                 contentDescription = null,

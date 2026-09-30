@@ -60,7 +60,7 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
             val novel = try {
                 repo.getNovelInfo(slug)
             } catch (e: Exception) {
-                _state.value = DetailUiState.Error(e.message ?: "Failed to load")
+                _state.value = DetailUiState.Error(friendlyError(e, "Couldn't load"))
                 return@launch
             }
             if (novel == null) {
@@ -121,7 +121,7 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
     // "Last 50" download pulled the whole novel.
     fun startOrResumeDownload() {
         if ((_state.value as? DetailUiState.Success)?.chaptersLoading == true) {
-            _updateMessage.value = "Chapters are still loading"
+            _updateMessage.value = "Still loading chapters"
             return
         }
         viewModelScope.launch {
@@ -176,11 +176,11 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 _updateMessage.value = when {
                     newCount <= 0                  -> "Already up to date"
-                    _downloadProgress.value != null -> "$newCount new chapter(s) — downloading in background"
-                    else                           -> "$newCount new chapter(s) available"
+                    _downloadProgress.value != null -> "$newCount new · downloading"
+                    else                           -> "$newCount new chapters"
                 }
             } catch (e: Exception) {
-                _updateMessage.value = "Update check failed"
+                _updateMessage.value = "Couldn't check updates"
             }
         }
     }

@@ -2,10 +2,9 @@ package com.noven.ncrawler.ui.screens.library
 
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -16,16 +15,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import coil.compose.AsyncImage
 import com.noven.ncrawler.data.db.DownloadStatus
+import com.noven.ncrawler.ui.components.CoverImage
+import com.noven.ncrawler.ui.components.errorShake
 import com.noven.ncrawler.ui.components.glassCard
+import com.noven.ncrawler.ui.components.pressable
+import com.noven.ncrawler.ui.components.staggerIn
 import com.noven.ncrawler.ui.theme.MontserratFamily
 import com.noven.ncrawler.viewmodel.LibraryItem
 import com.noven.ncrawler.viewmodel.LibraryViewModel
@@ -70,8 +71,10 @@ fun LibraryScreen(
                 contentPadding = PaddingValues(start = 16.dp, top = 8.dp, end = 16.dp, bottom = 120.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                items(items, key = { it.novel.slug }) { item ->
+                // CHANGE (motion): cards stack in (first screenful, once).
+                itemsIndexed(items, key = { _, it -> it.novel.slug }) { index, item ->
                     LibraryCard(
+                        modifier = Modifier.staggerIn(index),
                         item     = item,
                         onClick  = { onNovelClick(item.novel.slug) },
                         onContinue = {
@@ -88,6 +91,7 @@ fun LibraryScreen(
 
 @Composable
 private fun LibraryCard(
+    modifier: Modifier = Modifier,
     item: LibraryItem,
     onClick: () -> Unit,
     onContinue: () -> Unit,
@@ -112,8 +116,14 @@ private fun LibraryCard(
         label        = "readProgress"
     )
 
+    // CHANGE (motion): press-in feedback (was a plain ripple) + a quick shake if
+    // a download on this card fails while you're looking at it.
     Box(
-        modifier = Modifier.fillMaxWidth().glassCard().clickable(onClick = onClick)
+        modifier = modifier
+            .fillMaxWidth()
+            .errorShake(trigger = download?.status == DownloadStatus.ERROR, onEnter = false)
+            .pressable(onClick = onClick, pressedScale = 0.98f)
+            .glassCard()
     ) {
         Row(
             modifier = Modifier.padding(12.dp),
@@ -127,10 +137,9 @@ private fun LibraryCard(
                     .clip(RoundedCornerShape(10.dp))
                     .background(MaterialTheme.colorScheme.surfaceVariant)
             ) {
-                AsyncImage(
-                    model              = novel.coverUrl,
+                CoverImage(
+                    url                = novel.coverUrl,
                     contentDescription = novel.title,
-                    contentScale       = ContentScale.Crop,
                     modifier           = Modifier.fillMaxSize()
                 )
             }
@@ -205,7 +214,7 @@ private fun LibraryCard(
                                     color       = MaterialTheme.colorScheme.primary
                                 )
                                 Text(
-                                    "${download.downloadedChapters}/${download.totalChapters} downloaded",
+                                    "${download.downloadedChapters}/${download.totalChapters}",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -223,7 +232,7 @@ private fun LibraryCard(
                                     tint     = MaterialTheme.colorScheme.primary
                                 )
                                 Text(
-                                    "All chapters downloaded",
+                                    "Downloaded",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.primary
                                 )
@@ -231,7 +240,7 @@ private fun LibraryCard(
                         }
                         DownloadStatus.PAUSED -> {
                             Text(
-                                "Download paused",
+                                "Paused",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -239,14 +248,14 @@ private fun LibraryCard(
                         // These two used to render nothing at all.
                         DownloadStatus.QUEUED -> {
                             Text(
-                                "Download queued",
+                                "Queued",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                         DownloadStatus.ERROR -> {
                             Text(
-                                "Some chapters failed — retry in Downloads",
+                                "Failed — retry in Downloads",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.error
                             )
@@ -295,16 +304,18 @@ private fun LibraryEmptyState(modifier: Modifier = Modifier) {
             Icon(
                 Icons.Default.CollectionsBookmark,
                 contentDescription = null,
-                modifier = Modifier.size(64.dp),
+                modifier = Modifier.size(64.dp).staggerIn(0, distance = 10.dp),
                 tint     = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
             )
             Text(
-                "Your library is empty",
+                "Nothing saved yet",
+                modifier = Modifier.staggerIn(1, distance = 10.dp, stepMs = 70),
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Text(
-                "Tap the bookmark icon on any novel to save it here",
+                "Tap the bookmark on a novel to save it",
+                modifier = Modifier.staggerIn(2, distance = 10.dp, stepMs = 70),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
             )

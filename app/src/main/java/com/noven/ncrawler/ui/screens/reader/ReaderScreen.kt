@@ -75,6 +75,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.noven.ncrawler.data.db.ChapterEntity
 import com.noven.ncrawler.data.scraper.ChapterLink
+import com.noven.ncrawler.ui.components.errorShake
 import com.noven.ncrawler.ui.theme.MontserratFamily
 import com.noven.ncrawler.viewmodel.ReaderSettings
 import com.noven.ncrawler.viewmodel.ReaderSwatch
@@ -202,40 +203,54 @@ fun ReaderScreen(
                 if (!showSettings && !showToc && !showAudioOverlay) showControls = !showControls
             }
     ) {
-        when (val s = state) {
-            is ReaderUiState.Loading -> {
-                CircularProgressIndicator(modifier = Modifier.align(Alignment.Center), color = accent)
-            }
-            is ReaderUiState.Error -> {
-                Column(
-                    modifier            = Modifier.align(Alignment.Center),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Icon(Icons.Default.WifiOff, contentDescription = null,
-                        modifier = Modifier.size(48.dp), tint = fg.copy(alpha = 0.5f))
-                    Spacer(Modifier.height(12.dp))
-                    Text(s.message, color = fg.copy(alpha = 0.7f), textAlign = TextAlign.Center,
-                        modifier = Modifier.padding(horizontal = 32.dp))
-                    Spacer(Modifier.height(16.dp))
-                    Button(
-                        onClick = { vm.load(slug, chapterNum) },
-                        colors  = ButtonDefaults.buttonColors(containerColor = accent, contentColor = bg)
-                    ) { Text("Retry") }
+        // CHANGE (motion): Loading / Error / Content cross-fade (180ms) — a chapter
+        // change no longer hard-cuts, and the error block shakes once.
+        val readerPhase = when (state) {
+            is ReaderUiState.Loading -> 0
+            is ReaderUiState.Error   -> 1
+            is ReaderUiState.Success -> 2
+        }
+        Crossfade(
+            targetState   = readerPhase,
+            modifier      = Modifier.fillMaxSize(),
+            animationSpec = tween(180)
+        ) { p ->
+            when (p) {
+                0 -> Box(Modifier.fillMaxSize()) {
+                    CircularProgressIndicator(modifier = Modifier.align(Alignment.Center), color = accent)
                 }
-            }
-            is ReaderUiState.Success -> {
-                ReaderContent(
-                    chapter     = s.chapter,
-                    title       = chapterTitle ?: "Chapter $currentNum",
-                    settings    = settings,
-                    fg          = fg,
-                    bodyFg      = bodyFg,
-                    accent      = accent,
-                    darkBg      = darkBg,
-                    scrollState = scrollState,
-                    hasNext     = hasNext,
-                    onPullNext  = vm::loadNext
-                )
+                1 -> Box(Modifier.fillMaxSize()) {
+                    Column(
+                        modifier            = Modifier.align(Alignment.Center).errorShake(),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Icon(Icons.Default.WifiOff, contentDescription = null,
+                            modifier = Modifier.size(48.dp), tint = fg.copy(alpha = 0.5f))
+                        Spacer(Modifier.height(12.dp))
+                        Text((state as? ReaderUiState.Error)?.message ?: "Something went wrong",
+                            color = fg.copy(alpha = 0.7f), textAlign = TextAlign.Center,
+                            modifier = Modifier.padding(horizontal = 32.dp))
+                        Spacer(Modifier.height(16.dp))
+                        Button(
+                            onClick = { vm.load(slug, chapterNum) },
+                            colors  = ButtonDefaults.buttonColors(containerColor = accent, contentColor = bg)
+                        ) { Text("Retry") }
+                    }
+                }
+                else -> (state as? ReaderUiState.Success)?.let { s ->
+                    ReaderContent(
+                        chapter     = s.chapter,
+                        title       = chapterTitle ?: "Chapter $currentNum",
+                        settings    = settings,
+                        fg          = fg,
+                        bodyFg      = bodyFg,
+                        accent      = accent,
+                        darkBg      = darkBg,
+                        scrollState = scrollState,
+                        hasNext     = hasNext,
+                        onPullNext  = vm::loadNext
+                    )
+                }
             }
         }
 
@@ -339,8 +354,8 @@ fun ReaderScreen(
         // ── Audio overlay ─────────────────────────────────────────────────
         AnimatedVisibility(
             visible  = showAudioOverlay,
-            enter    = fadeIn(),
-            exit     = fadeOut(),
+            enter    = fadeIn(tween(220)),
+            exit     = fadeOut(tween(140)),
             modifier = Modifier.fillMaxSize()
         ) {
             AudioComingSoonOverlay(
@@ -1746,7 +1761,7 @@ private fun AudioComingSoonOverlay(
             )
             Spacer(Modifier.height(6.dp))
             Text(
-                "Tap anywhere to go back to reading",
+                "Tap to go back",
                 fontFamily = MontserratFamily,
                 fontSize   = 12.sp,
                 color      = content.copy(alpha = 0.6f)

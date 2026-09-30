@@ -2,6 +2,7 @@ package com.noven.ncrawler.ui.screens.detail
 
 import android.graphics.drawable.BitmapDrawable
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
@@ -20,6 +21,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -108,6 +110,10 @@ import com.noven.ncrawler.data.db.DownloadStatus
 import com.noven.ncrawler.data.db.NovelEntity
 import com.noven.ncrawler.data.local.DominantColorStore
 import com.noven.ncrawler.data.scraper.ChapterLink
+import com.noven.ncrawler.ui.components.Motion
+import com.noven.ncrawler.ui.components.errorShake
+import com.noven.ncrawler.ui.components.pressScale
+import com.noven.ncrawler.ui.components.pressable
 import com.noven.ncrawler.ui.theme.MontserratFamily
 import com.noven.ncrawler.ui.theme.StarGold
 import com.noven.ncrawler.viewmodel.DetailUiState
@@ -199,14 +205,24 @@ private fun ReaderCircleBtn(
     size: Dp = 48.dp,
     content: @Composable () -> Unit,
 ) {
+    // CHANGE (motion): press-in scale (90ms, no bounce) instead of a ripple —
+    // same feel as the floating nav. The scale sits outside the clip so the
+    // whole circle shrinks.
+    val source = remember { MutableInteractionSource() }
     Box(
         contentAlignment = Alignment.Center,
         modifier         = Modifier
             .size(size)
+            .pressScale(source, 0.92f)
             .clip(CircleShape)
             .background(Color.Black.copy(alpha = 0.40f))
             .background(Color.White.copy(alpha = 0.13f))
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
+            .combinedClickable(
+                interactionSource = source,
+                indication        = null,
+                onClick           = onClick,
+                onLongClick       = onLongClick
+            ),
     ) { content() }
 }
 
@@ -217,8 +233,7 @@ private fun PlayButton(label: String, onClick: () -> Unit) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier            = Modifier
-            .clip(RoundedCornerShape(24.dp))
-            .clickable(onClick = onClick)
+            .pressable(onClick = onClick, pressedScale = 0.95f)   // CHANGE (motion)
             .padding(horizontal = 20.dp, vertical = 6.dp),
     ) {
         ReaderCircleBtn(onClick = onClick, size = 76.dp) {
@@ -391,7 +406,7 @@ private fun DownloadOptionsSheet(
             )
             Spacer(Modifier.height(2.dp))
             Text(
-                "$total chapters available",
+                "$total chapters",
                 color      = Color.White.copy(alpha = 0.55f),
                 fontFamily = MontserratFamily,
                 fontSize   = 13.sp,
@@ -435,7 +450,7 @@ private fun DownloadOptionsSheet(
             Spacer(Modifier.height(4.dp))
             val rangeChapterCount = rangeSelection.endInclusive.roundToInt() - rangeSelection.start.roundToInt() + 1
             Text(
-                "Ch. ${rangeSelection.start.roundToInt()} – ${rangeSelection.endInclusive.roundToInt()}  ·  $rangeChapterCount chapters",
+                "Ch. ${rangeSelection.start.roundToInt()}–${rangeSelection.endInclusive.roundToInt()} · $rangeChapterCount",
                 color      = Color.White,
                 fontFamily = MontserratFamily,
                 fontSize   = 14.sp,
@@ -718,9 +733,22 @@ fun DetailScreen(
 
     Box(modifier = Modifier.fillMaxSize()) {
 
-        when (val s = state) {
+        // CHANGE (motion): Loading -> Error / Content cross-fades (240ms) instead of
+        // a hard cut; the error block shakes once. The phase animates; the content
+        // reads the latest state.
+        val phase = when (state) {
+            is DetailUiState.Loading -> 0
+            is DetailUiState.Error   -> 1
+            is DetailUiState.Success -> 2
+        }
+        Crossfade(
+            targetState   = phase,
+            modifier      = Modifier.fillMaxSize(),
+            animationSpec = tween(Motion.BASE_MS)
+        ) { p ->
+        when (p) {
 
-            is DetailUiState.Loading -> {
+            0 -> {
                 // Solid dark bg while loading
                 Box(
                     modifier         = Modifier.fillMaxSize().background(FallbackTop),
@@ -730,14 +758,17 @@ fun DetailScreen(
                 }
             }
 
-            is DetailUiState.Error -> {
+            1 -> {
                 Box(
                     modifier         = Modifier.fillMaxSize().background(FallbackTop),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Column(
+                        modifier            = Modifier.errorShake(),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
                         Text(
-                            s.message,
+                            (state as? DetailUiState.Error)?.message ?: "Something went wrong",
                             color      = Color.White.copy(alpha = 0.7f),
                             fontFamily = MontserratFamily,
                             fontSize   = 16.sp,
@@ -765,7 +796,7 @@ fun DetailScreen(
                 }
             }
 
-            is DetailUiState.Success -> {
+            else -> (state as? DetailUiState.Success)?.let { s ->
                 CinematicDetail(
                     novel           = s.novel,
                     chapters        = s.chapters,
@@ -801,6 +832,7 @@ fun DetailScreen(
                     },
                 )
             }
+        }
         }
 
         // ── Floating top row: back + download + refresh — always on top ──
@@ -1075,7 +1107,7 @@ private fun CinematicDetail(
 
                         // Play button
                         val readLabel = if (lastReadChapter != null)
-                            "Continue Ch.$lastReadChapter" else "Start Reading"
+                            "Continue Ch.$lastReadChapter" else "Start"
                         val targetChapter = lastReadChapter
                             ?: chapters.lastOrNull()?.num
                             ?: 1
@@ -1108,7 +1140,7 @@ private fun CinematicDetail(
                         )
                         Spacer(Modifier.height(10.dp))
                         Text(
-                            text       = novel.synopsis.ifBlank { "No summary available." },
+                            text       = novel.synopsis.ifBlank { "No summary." },
                             color      = Color.White.copy(alpha = 0.85f),
                             fontFamily = MontserratFamily,
                             fontSize   = 16.sp,
@@ -1181,7 +1213,7 @@ private fun CinematicDetail(
                                 )
                                 Spacer(Modifier.width(10.dp))
                                 Text(
-                                    text       = "Loading chapter list…",
+                                    text       = "Loading chapters…",
                                     color      = Color.White.copy(alpha = 0.7f),
                                     fontFamily = MontserratFamily,
                                     fontSize   = 14.sp,
@@ -1230,7 +1262,7 @@ private fun CinematicDetail(
                                         .padding(horizontal = 22.dp, vertical = 10.dp),
                                 ) {
                                     Text(
-                                        text       = "See All ${chapters.size} Chapters",
+                                        text       = "All ${chapters.size} chapters",
                                         color      = Color.White,
                                         fontFamily = MontserratFamily,
                                         fontSize   = 15.sp,

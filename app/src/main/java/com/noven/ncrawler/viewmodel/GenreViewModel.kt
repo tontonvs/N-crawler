@@ -54,7 +54,7 @@ class GenreViewModel(app: Application) : AndroidViewModel(app) {
                 Log.e(TAG, "load('$genre') failed: ${e.message}", e)
                 _state.value = _state.value.copy(
                     isLoading = false,
-                    error     = e.message ?: "Failed to load"
+                    error     = friendlyError(e, "Couldn't load")
                 )
             }
         }
