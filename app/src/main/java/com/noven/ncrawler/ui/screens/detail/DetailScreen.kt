@@ -48,6 +48,8 @@ import androidx.compose.material.icons.filled.DownloadForOffline
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.PauseCircle
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Star
@@ -107,6 +109,7 @@ import com.noven.ncrawler.data.db.NovelEntity
 import com.noven.ncrawler.data.local.DominantColorStore
 import com.noven.ncrawler.data.scraper.ChapterLink
 import com.noven.ncrawler.ui.theme.MontserratFamily
+import com.noven.ncrawler.ui.theme.StarGold
 import com.noven.ncrawler.viewmodel.DetailUiState
 import com.noven.ncrawler.viewmodel.DetailViewModel
 import kotlinx.coroutines.delay
@@ -146,7 +149,7 @@ private const val CHAPTERS_INDEX = 2
 private fun StarRating(
     rawRating: String,                     // e.g. "8.7" from NovelEntity.rating
     modifier: Modifier = Modifier,
-    starColor: Color = Color(0xFFFFB400),
+    starColor: Color = StarGold,   // was a hardcoded near-duplicate of StarGold
     emptyColor: Color = Color.White.copy(alpha = 0.30f),
 ) {
     val score = rawRating.toFloatOrNull() ?: 0f
@@ -691,6 +694,7 @@ fun DetailScreen(
 
     val state           by vm.state.collectAsStateWithLifecycle()
     val downloadProgress by vm.downloadProgress.collectAsStateWithLifecycle()
+    val inLibrary       by vm.inLibrary.collectAsStateWithLifecycle()
     val updateMessage   by vm.updateMessage.collectAsStateWithLifecycle()
 
     // CHANGE (partial downloads): only non-null once the novel and its
@@ -820,7 +824,7 @@ fun DetailScreen(
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 DownloadCircleBtn(
                     progress    = downloadProgress,
-                    onStart     = vm::downloadAll,
+                    onStart     = vm::startOrResumeDownload,   // resume the original range, not the whole novel
                     onPause     = vm::cancelDownload,
                     onManage    = onDownloadsClick,
                     // CHANGE (perf fix): successState now exists as soon as
@@ -831,6 +835,15 @@ fun DetailScreen(
                         if (successState != null && !successState.chaptersLoading) showDownloadSheet = true
                     },
                 )
+                // Library membership — there was no way to add/remove a novel from here.
+                ReaderCircleBtn(onClick = vm::toggleLibrary) {
+                    Icon(
+                        if (inLibrary) Icons.Filled.Bookmark else Icons.Filled.BookmarkBorder,
+                        contentDescription = if (inLibrary) "Remove from library" else "Add to library",
+                        tint               = Color.White.copy(alpha = 0.9f),
+                        modifier           = Modifier.size(24.dp),
+                    )
+                }
                 ReaderCircleBtn(onClick = vm::checkForUpdates) {
                     Icon(
                         Icons.Filled.Refresh,

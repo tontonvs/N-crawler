@@ -18,11 +18,13 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import com.noven.ncrawler.data.db.DownloadProgress
 import com.noven.ncrawler.data.db.DownloadStatus
+import com.noven.ncrawler.ui.theme.MontserratFamily
 import com.noven.ncrawler.viewmodel.DownloadItem
 import com.noven.ncrawler.viewmodel.DownloadsViewModel
 import kotlin.math.roundToInt
@@ -63,18 +65,19 @@ fun DownloadsScreen(
     var pendingDelete by remember { mutableStateOf<DownloadItem?>(null) }
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
                 title = {
                     Text(
                         "Downloads",
-                        style = MaterialTheme.typography.titleLarge.copy(
-                            fontWeight = FontWeight.Bold
-                        )
+                        fontFamily = MontserratFamily,
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize   = 24.sp
                     )
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
+                    containerColor = MaterialTheme.colorScheme.background
                 )
             )
         }
@@ -100,7 +103,7 @@ fun DownloadsScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
-                        "Tap 'Download All' on any novel to read offline",
+                        "Tap the download button on any novel to read offline",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                     )
@@ -109,7 +112,8 @@ fun DownloadsScreen(
         } else {
             LazyColumn(
                 modifier       = Modifier.fillMaxSize().padding(padding),
-                contentPadding = PaddingValues(16.dp),
+                // 120dp bottom so the last item clears the floating nav (was 16dp).
+                contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 120.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 if (activeDownloads.isNotEmpty()) {

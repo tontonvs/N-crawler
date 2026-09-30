@@ -62,7 +62,6 @@ private val ROW_GAP = 10.dp
 
 @Composable
 fun SourceSettingsScreen(
-    onBack: () -> Unit,
     vm: SourceSettingsViewModel = viewModel()
 ) {
     val state by vm.uiState.collectAsStateWithLifecycle()
@@ -85,7 +84,10 @@ fun SourceSettingsScreen(
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         snackbarHost   = {
-            SnackbarHost(snackbarHost) { data ->
+            // FIX: the floating nav sits over the bottom edge, so the snackbar
+            // ("at least one source has to stay enabled") rendered behind it and
+            // couldn't be read. Lift it above the nav.
+            SnackbarHost(snackbarHost, modifier = Modifier.padding(bottom = 76.dp)) { data ->
                 Snackbar(modifier = Modifier.padding(12.dp)) {
                     Text(
                         data.visuals.message,
@@ -101,18 +103,14 @@ fun SourceSettingsScreen(
                     .fillMaxWidth()
                     .statusBarsPadding()
                     .background(MaterialTheme.colorScheme.surface)
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(onClick = onBack) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Back",
-                        tint = MaterialTheme.colorScheme.onSurface
-                    )
-                }
+                // FIX: removed the back arrow — this is a root tab of the floating
+                // nav (no other tab has one) — and the screen now also holds
+                // download settings, so it's titled "Settings".
                 Text(
-                    "Sources",
+                    "Settings",
                     fontFamily    = MontserratFamily,
                     fontWeight    = FontWeight.ExtraBold,
                     fontSize      = 20.sp,
@@ -130,6 +128,7 @@ fun SourceSettingsScreen(
             contentPadding      = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 120.dp),
             verticalArrangement = Arrangement.spacedBy(ROW_GAP)
         ) {
+            item { SectionLabel("Sources") }
             item {
                 Text(
                     "Novels are pulled from the highest-priority source that has them. Reorder or turn sources off below — at least one has to stay on.",
@@ -153,7 +152,75 @@ fun SourceSettingsScreen(
                     onDown   = { movedKey = item.id; vm.moveDown(item.id) }
                 )
             }
+
+            item {
+                Spacer(Modifier.height(8.dp))
+                SectionLabel("Downloads")
+            }
+            item { WifiOnlyCard(wifiOnly = state.wifiOnly, onChange = vm::setWifiOnly) }
         }
+    }
+}
+
+@Composable
+private fun SectionLabel(text: String) {
+    Text(
+        text.uppercase(),
+        fontFamily    = MontserratFamily,
+        fontWeight    = FontWeight.Bold,
+        fontSize      = 12.sp,
+        letterSpacing = 1.sp,
+        color         = MaterialTheme.colorScheme.primary
+    )
+}
+
+@Composable
+private fun WifiOnlyCard(wifiOnly: Boolean, onChange: (Boolean) -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    val dark   = isSystemInDarkTheme()
+    val accent = colors.primary
+    val shape  = RoundedCornerShape(16.dp)
+    val cardFill   = if (dark) colors.surfaceVariant else glassSurface()
+    val cardBorder = if (dark) colors.outline else glassBorder()
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(cardFill)
+            .border(1.dp, cardBorder, shape)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                "Download on Wi-Fi only",
+                fontFamily = MontserratFamily,
+                fontWeight = FontWeight.Bold,
+                fontSize   = 15.sp,
+                color      = colors.onSurface
+            )
+            Text(
+                "Chapter downloads wait for an unmetered connection instead of using mobile data.",
+                fontFamily = MontserratFamily,
+                fontSize   = 12.sp,
+                lineHeight = 17.sp,
+                color      = colors.onSurfaceVariant
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        Switch(
+            checked = wifiOnly,
+            onCheckedChange = onChange,
+            colors = SwitchDefaults.colors(
+                checkedThumbColor    = Color.White,
+                checkedTrackColor    = accent,
+                checkedBorderColor   = accent,
+                uncheckedThumbColor  = colors.onSurfaceVariant,
+                uncheckedTrackColor  = colors.background,
+                uncheckedBorderColor = colors.outline
+            )
+        )
     }
 }
 

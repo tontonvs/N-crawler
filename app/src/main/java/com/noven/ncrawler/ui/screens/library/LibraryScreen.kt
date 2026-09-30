@@ -25,6 +25,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import com.noven.ncrawler.data.db.DownloadStatus
+import com.noven.ncrawler.ui.components.glassCard
+import com.noven.ncrawler.ui.theme.MontserratFamily
 import com.noven.ncrawler.viewmodel.LibraryItem
 import com.noven.ncrawler.viewmodel.LibraryViewModel
 
@@ -37,19 +39,22 @@ fun LibraryScreen(
 ) {
     val items by vm.libraryItems.collectAsStateWithLifecycle()
 
+    // FIX: header used the stock Material bar + default font; now matches the
+    // Discover/Settings look (Montserrat, background-coloured bar).
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
                 title = {
                     Text(
                         "Library",
-                        style = MaterialTheme.typography.titleLarge.copy(
-                            fontWeight = FontWeight.Bold
-                        )
+                        fontFamily = MontserratFamily,
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize   = 24.sp
                     )
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
+                    containerColor = MaterialTheme.colorScheme.background
                 )
             )
         }
@@ -61,7 +66,8 @@ fun LibraryScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding),
-                contentPadding = PaddingValues(16.dp),
+                // 120dp bottom so the last card clears the floating nav (was 16dp).
+                contentPadding = PaddingValues(start = 16.dp, top = 8.dp, end = 16.dp, bottom = 120.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 items(items, key = { it.novel.slug }) { item ->
@@ -106,13 +112,8 @@ private fun LibraryCard(
         label        = "readProgress"
     )
 
-    Card(
-        modifier  = Modifier.fillMaxWidth().clickable(onClick = onClick),
-        shape     = RoundedCornerShape(16.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-        colors    = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface
-        )
+    Box(
+        modifier = Modifier.fillMaxWidth().glassCard().clickable(onClick = onClick)
     ) {
         Row(
             modifier = Modifier.padding(12.dp),
@@ -139,18 +140,30 @@ private fun LibraryCard(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                Text(
-                    novel.title,
-                    style    = MaterialTheme.typography.titleSmall.copy(
-                        fontWeight = FontWeight.SemiBold
-                    ),
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
+                Row(verticalAlignment = Alignment.Top) {
+                    Text(
+                        novel.title,
+                        modifier   = Modifier.weight(1f).padding(top = 4.dp),
+                        fontFamily = MontserratFamily,
+                        fontWeight = FontWeight.Bold,
+                        fontSize   = 14.sp,
+                        maxLines   = 2,
+                        overflow   = TextOverflow.Ellipsis
+                    )
+                    // onRemove used to be wired up but never shown — no way out of the library.
+                    IconButton(onClick = onRemove, modifier = Modifier.size(32.dp)) {
+                        Icon(
+                            Icons.Default.Bookmark,
+                            contentDescription = "Remove from library",
+                            modifier = Modifier.size(20.dp),
+                            tint     = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
 
                 if (novel.genres.isNotBlank()) {
                     Text(
-                        novel.genres.split(",").take(2).joinToString(" · "),
+                        novel.genres.split(",").take(2).map { it.trim() }.joinToString(" · "),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -221,6 +234,21 @@ private fun LibraryCard(
                                 "Download paused",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        // These two used to render nothing at all.
+                        DownloadStatus.QUEUED -> {
+                            Text(
+                                "Download queued",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        DownloadStatus.ERROR -> {
+                            Text(
+                                "Some chapters failed — retry in Downloads",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error
                             )
                         }
                         else -> {}

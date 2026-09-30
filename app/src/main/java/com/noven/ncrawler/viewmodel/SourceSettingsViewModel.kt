@@ -21,7 +21,8 @@ data class SourceUiItem(
 
 data class SourceSettingsUiState(
     val items: List<SourceUiItem> = emptyList(),
-    val message: String? = null   // transient — e.g. "Can't disable your only source"
+    val message: String? = null,  // transient — e.g. "Can't disable your only source"
+    val wifiOnly: Boolean = true  // downloads on unmetered networks only (default matches DownloadPreferences)
 )
 
 class SourceSettingsViewModel(app: Application) : AndroidViewModel(app) {
@@ -53,7 +54,18 @@ class SourceSettingsViewModel(app: Application) : AndroidViewModel(app) {
                 isDefault   = order.firstOrNull() == source.id
             )
         }
-        _uiState.value = _uiState.value.copy(items = items)
+        _uiState.value = _uiState.value.copy(items = items, wifiOnly = repo.downloadPreferences().isWifiOnly())
+    }
+
+    // Wi-Fi-only defaults to ON but had no toggle anywhere, so on mobile data
+    // downloads just sat on "Waiting for Wi-Fi…". Re-kicks the queue so a
+    // waiting download picks up the new constraint straight away.
+    fun setWifiOnly(enabled: Boolean) {
+        repo.downloadPreferences().setWifiOnly(enabled)
+        _uiState.value = _uiState.value.copy(wifiOnly = enabled)
+        viewModelScope.launch {
+            try { repo.startNextQueued() } catch (e: Exception) { /* best effort */ }
+        }
     }
 
     fun toggle(sourceId: String, enabled: Boolean) {

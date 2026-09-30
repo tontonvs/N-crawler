@@ -16,6 +16,21 @@ interface NovelDao {
     @Query("SELECT * FROM novels WHERE slug = :slug LIMIT 1")
     suspend fun getBySlug(slug: String): NovelEntity?
 
+    // FIX: @Upsert replaces the WHOLE row, so every browse/search refresh used to
+    // reset isInLibrary (and blank fields). The repository now reads the cached
+    // rows through this and merges before upserting.
+    @Query("SELECT * FROM novels WHERE slug IN (:slugs)")
+    suspend fun getBySlugs(slugs: List<String>): List<NovelEntity>
+
+    // Drives the bookmark button on the Detail screen.
+    @Query("SELECT isInLibrary FROM novels WHERE slug = :slug")
+    fun isInLibraryFlow(slug: String): Flow<Boolean?>
+
+    // Downloads no longer depend on the library flag (removing a novel from
+    // the library must not make its downloads vanish from the Downloads tab).
+    @Query("SELECT * FROM novels WHERE slug IN (SELECT novelSlug FROM download_progress)")
+    fun downloadedNovelsFlow(): Flow<List<NovelEntity>>
+
     // Live query — UI collects as Flow
     @Query("SELECT * FROM novels WHERE isInLibrary = 1 ORDER BY title ASC")
     fun libraryFlow(): Flow<List<NovelEntity>>

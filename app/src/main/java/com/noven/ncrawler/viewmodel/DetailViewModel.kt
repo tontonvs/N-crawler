@@ -34,6 +34,10 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
     private val _downloadProgress = MutableStateFlow<DownloadProgress?>(null)
     val downloadProgress: StateFlow<DownloadProgress?> = _downloadProgress.asStateFlow()
 
+    // Drives the bookmark button (Detail had no way to add/remove a library entry).
+    private val _inLibrary = MutableStateFlow(false)
+    val inLibrary: StateFlow<Boolean> = _inLibrary.asStateFlow()
+
     private val _updateMessage = MutableStateFlow<String?>(null)
     val updateMessage: StateFlow<String?> = _updateMessage.asStateFlow()
 
@@ -97,12 +101,43 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
                 _downloadProgress.value = progress
             }
         }
+
+        viewModelScope.launch {
+            repo.isInLibraryFlow(slug).collect { _inLibrary.value = it }
+        }
+    }
+
+    fun toggleLibrary() {
+        viewModelScope.launch {
+            val add = !_inLibrary.value
+            repo.setLibrary(currentSlug, add)
+            _updateMessage.value = if (add) "Added to library" else "Removed from library"
+        }
+    }
+
+    // Tap on the download button: start a fresh "download all", or — when a
+    // download already exists (paused / error) — resume the range that was
+    // originally requested. Used to always call downloadAll(), so retrying a
+    // "Last 50" download pulled the whole novel.
+    fun startOrResumeDownload() {
+        if ((_state.value as? DetailUiState.Success)?.chaptersLoading == true) {
+            _updateMessage.value = "Chapters are still loading"
+            return
+        }
+        viewModelScope.launch {
+            try {
+                if (_downloadProgress.value != null) repo.resumeDownload(currentSlug)
+                else repo.queueDownloadAll(currentSlug)
+            } catch (e: Exception) {
+                _updateMessage.value = "Couldn't start download"
+            }
+        }
     }
 
     fun downloadAll() {
         viewModelScope.launch {
             try { repo.queueDownloadAll(currentSlug) }
-            catch (e: Exception) { /* silent */ }
+            catch (e: Exception) { _updateMessage.value = "Couldn't start download" }
         }
     }
 
@@ -111,14 +146,14 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
     fun downloadLast(count: Int) {
         viewModelScope.launch {
             try { repo.queueDownloadLast(currentSlug, count) }
-            catch (e: Exception) { /* silent */ }
+            catch (e: Exception) { _updateMessage.value = "Couldn't start download" }
         }
     }
 
     fun downloadRange(startChapter: Int, endChapter: Int) {
         viewModelScope.launch {
             try { repo.queueDownloadRange(currentSlug, startChapter, endChapter) }
-            catch (e: Exception) { /* silent */ }
+            catch (e: Exception) { _updateMessage.value = "Couldn't start download" }
         }
     }
 
@@ -132,10 +167,18 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             try {
                 val newCount = repo.checkForUpdates(currentSlug)
-                _updateMessage.value = if (newCount > 0)
-                    "$newCount new chapter(s) — downloading in background"
-                else
-                    "Already up to date"
+                if (newCount > 0) {
+                    // The on-screen chapter list was stale after a check.
+                    val chapters = repo.getChapterList(currentSlug)
+                    (_state.value as? DetailUiState.Success)?.let {
+                        _state.value = it.copy(chapters = chapters)
+                    }
+                }
+                _updateMessage.value = when {
+                    newCount <= 0                  -> "Already up to date"
+                    _downloadProgress.value != null -> "$newCount new chapter(s) — downloading in background"
+                    else                           -> "$newCount new chapter(s) available"
+                }
             } catch (e: Exception) {
                 _updateMessage.value = "Update check failed"
             }

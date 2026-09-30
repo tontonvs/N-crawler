@@ -524,7 +524,10 @@ private fun BrowseContent(
             // non-empty. Each section below now falls back to one flat,
             // ungrouped row instead of disappearing whenever grouping
             // yields zero rows.
-            val latestList        = novels.drop(1)
+            // FIX: drop(1) ran unconditionally, but the hero above only takes the
+            // first novel when there is no Continue Reading card — so with one
+            // showing, the newest release was silently missing from Latest.
+            val latestList        = if (continueReading != null && onContinueReading != null) novels else novels.drop(1)
             val latestGenreRows   = remember(novels) { groupByTopGenres(latestList) }
             val showFlatLatest    = latestGenreRows.isEmpty() && latestList.isNotEmpty()
             val popularNovels     = (popularState as? BrowseUiState.Success)?.novels ?: emptyList()
@@ -628,7 +631,7 @@ private fun BrowseContent(
                             genre        = "Latest",
                             novels       = latestList,
                             onNovelClick = onNovelClick,
-                            onSeeMore    = { onDiscoverClick?.invoke() }
+                            onSeeMore    = null
                         )
                     }
                 }
@@ -662,7 +665,7 @@ private fun BrowseContent(
                             genre        = "Popular",
                             novels       = popularNovels,
                             onNovelClick = onNovelClick,
-                            onSeeMore    = { onDiscoverClick?.invoke() }
+                            onSeeMore    = null
                         )
                     }
                     item { Spacer(Modifier.height(20.dp)) }
@@ -714,7 +717,9 @@ private fun GenreRow(
     genre: String,
     novels: List<NovelEntity>,
     onNovelClick: (String) -> Unit,
-    onSeeMore: () -> Unit
+    // null = nowhere useful to go (flat Latest/Popular rows) — the link is hidden
+    // instead of dumping the user on the generic genre list.
+    onSeeMore: (() -> Unit)?
 ) {
     val uniqueNovels = remember(novels) { novels.distinctBy { it.slug } }
     val cardWidth = novelCardWidth()
@@ -722,7 +727,7 @@ private fun GenreRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp),
+                .padding(start = 16.dp, end = 8.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment     = Alignment.CenterVertically
         ) {
@@ -731,12 +736,18 @@ private fun GenreRow(
                 style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                 color = MaterialTheme.colorScheme.onBackground
             )
-            Text(
-                "See more",
-                style    = MaterialTheme.typography.labelMedium,
-                color    = AccentBlue,
-                modifier = Modifier.clickable(onClick = onSeeMore)
-            )
+            if (onSeeMore != null) {
+                Text(
+                    "See more",
+                    style    = MaterialTheme.typography.labelMedium,
+                    color    = AccentBlue,
+                    // was a bare text-height tap target
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable(onClick = onSeeMore)
+                        .padding(horizontal = 8.dp, vertical = 10.dp)
+                )
+            }
         }
         Spacer(Modifier.height(10.dp))
         // CHANGE: bottom = 8.dp — a LazyRow clips to its bounds, which was cutting
@@ -1100,16 +1111,8 @@ private fun GenreShowcaseRow(
                 ),
                 color = MaterialTheme.colorScheme.onBackground
             )
-            // CHANGE: now wired to Discover (was a dead label — no screen
-            // existed for it before; DiscoverScreen already did).
-            Text(
-                "See all",
-                style    = MaterialTheme.typography.labelMedium,
-                color    = if (onDiscoverClick != null) AccentBlue
-                           else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                modifier = if (onDiscoverClick != null)
-                    Modifier.clickable(onClick = onDiscoverClick) else Modifier
-            )
+            // FIX: the "See all" link that used to sit here opened the same place as
+            // the trailing "See More" card — one route is enough.
         }
         Spacer(Modifier.height(14.dp))
         // CHANGE: fixed 3-card Row → LazyRow so the showcase can hold up to
@@ -1195,11 +1198,8 @@ private fun SectionHeader(title: String) {
             ),
             color = MaterialTheme.colorScheme.onBackground
         )
-        Text(
-            "See all",
-            style = MaterialTheme.typography.labelMedium,
-            color = AccentBlue
-        )
+        // FIX: removed the "See all" label that was here — it had no click
+        // handler, so it looked tappable and did nothing.
     }
 }
 

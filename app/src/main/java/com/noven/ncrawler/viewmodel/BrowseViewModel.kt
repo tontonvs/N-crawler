@@ -8,7 +8,6 @@ import com.noven.ncrawler.NCrawlerApp
 import com.noven.ncrawler.data.db.NovelEntity
 import com.noven.ncrawler.data.db.ReadingProgress
 import com.noven.ncrawler.data.local.RecentSearchStore
-import com.noven.ncrawler.data.scraper.HomeSection
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 
@@ -41,18 +40,6 @@ class BrowseViewModel(app: Application) : AndroidViewModel(app) {
     private val _popularState = MutableStateFlow<BrowseUiState>(BrowseUiState.Loading)
     val popularState: StateFlow<BrowseUiState> = _popularState.asStateFlow()
 
-    // CHANGE: extra homepage rows a source can optionally supply (e.g.
-    // NovelArrow's Completed/Ongoing/New) — empty for any source that
-    // doesn't override NovelSource.fetchExtraSections().
-    private val _extraSections = MutableStateFlow<List<HomeSection>>(emptyList())
-    val extraSections: StateFlow<List<HomeSection>> = _extraSections.asStateFlow()
-
-    // CHANGE: the active source's own published genre list, if it has one —
-    // read once per homepage load (cheap, in-memory, not a network call).
-    // Empty for a source that doesn't override NovelSource.knownGenres().
-    private val _knownGenres = MutableStateFlow<List<String>>(emptyList())
-    val knownGenres: StateFlow<List<String>> = _knownGenres.asStateFlow()
-
     private val _searchState = MutableStateFlow<BrowseUiState>(BrowseUiState.Empty)
     val searchState: StateFlow<BrowseUiState> = _searchState.asStateFlow()
 
@@ -82,16 +69,32 @@ class BrowseViewModel(app: Application) : AndroidViewModel(app) {
             .map { all ->
                 all.drop(1)
                     .take(12)
-                    .mapNotNull { p -> repo.getNovel(p.novelSlug)?.let { ContinueReadingInfo(it, p) } }
+                    // FIX: was repo.getNovel(), which can hit the NETWORK inside this flow
+                    // (and crash the collector when offline). DB-only lookup instead.
+                    .mapNotNull { p -> repo.getCachedNovel(p.novelSlug)?.let { ContinueReadingInfo(it, p) } }
             }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private var searchJob: Job? = null
+    private var homepageJobs: List<Job> = emptyList()
 
     init {
         Log.d(TAG, "BrowseViewModel created — calling loadHomepage()")
         loadHomepage()
         observeContinueReading()
+        observeSourceChanges()
+    }
+
+    // FIX: Home only loaded once per app session, so changing the top-priority
+    // source in Settings left the old source's feed on screen until a restart.
+    private fun observeSourceChanges() {
+        viewModelScope.launch {
+            repo.sourcePreferences().orderFlow()
+                .map { it.firstOrNull() }        // Home is fed by the top source only
+                .distinctUntilChanged()
+                .drop(1)                         // the initial value is loaded by init
+                .collect { loadHomepage() }
+        }
     }
 
     private fun observeContinueReading() {
@@ -101,17 +104,17 @@ class BrowseViewModel(app: Application) : AndroidViewModel(app) {
                 .distinctUntilChanged()
                 .collectLatest { progress ->
                     _continueReading.value = progress?.let { p ->
-                        repo.getNovel(p.novelSlug)?.let { novel -> ContinueReadingInfo(novel, p) }
+                        repo.getCachedNovel(p.novelSlug)?.let { novel -> ContinueReadingInfo(novel, p) }
                     }
                 }
         }
     }
 
     fun loadHomepage() {
-        // Static, in-memory — no network call, safe to just read straight away.
-        _knownGenres.value = repo.knownGenres()
-
-        viewModelScope.launch {
+        // A newer load supersedes any still-running one, so a slow response from
+        // the previous source can't overwrite the new source's feed.
+        homepageJobs.forEach { it.cancel() }
+        val latestJob = viewModelScope.launch {
             Log.d(TAG, "loadHomepage() started")
             _browseState.value = BrowseUiState.Loading
             try {
@@ -124,6 +127,8 @@ class BrowseViewModel(app: Application) : AndroidViewModel(app) {
                 } else {
                     BrowseUiState.Success(novels)
                 }
+            } catch (e: CancellationException) {
+                throw e   // superseded by a newer load — must not surface as an error
             } catch (e: Exception) {
                 Log.e(TAG, "fetchHomepage() FAILED: ${e::class.simpleName}: ${e.message}", e)
                 _browseState.value = BrowseUiState.Error(
@@ -131,7 +136,7 @@ class BrowseViewModel(app: Application) : AndroidViewModel(app) {
                 )
             }
         }
-        viewModelScope.launch {
+        val popularJob = viewModelScope.launch {
             Log.d(TAG, "loadPopular() started")
             _popularState.value = BrowseUiState.Loading
             try {
@@ -139,38 +144,24 @@ class BrowseViewModel(app: Application) : AndroidViewModel(app) {
                 Log.d(TAG, "fetchPopular() returned ${novels.size} novels")
                 _popularState.value = if (novels.isEmpty()) BrowseUiState.Empty
                                        else BrowseUiState.Success(novels)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.e(TAG, "fetchPopular() FAILED: ${e.message}", e)
                 _popularState.value = BrowseUiState.Error(e.message ?: "Failed to load")
             }
         }
-        // CHANGE (perf fix): extra homepage sections (Completed/Ongoing/New
-        // for NovelArrow, empty for any other source) — still its own
-        // coroutine so a slow or failing fetch here can't hold up Latest/
-        // Popular above, but now started slightly after them instead of in
-        // the same instant. On cold launch this was 5 full-page fetches (1
-        // homepage + 1 popular + 3 more inside fetchExtraSections) all
-        // competing for network/CPU in the same moment the JVM/Compose
-        // runtime is also cold-starting. These sections render below the
-        // fold, so a short, deliberate delay costs nothing visible while
-        // letting Latest/Popular — what's actually on screen first — get
-        // there faster.
-        viewModelScope.launch {
-            delay(500)
-            try {
-                _extraSections.value = repo.fetchExtraSections()
-                Log.d(TAG, "fetchExtraSections() returned ${_extraSections.value.size} sections")
-            } catch (e: Exception) {
-                Log.w(TAG, "fetchExtraSections() failed: ${e.message}")
-                _extraSections.value = emptyList()
-            }
-        }
+        homepageJobs = listOf(latestJob, popularJob)
     }
 
     fun onQueryChange(q: String) {
         _query.value = q
         searchJob?.cancel()
         if (q.isBlank()) { _searchState.value = BrowseUiState.Empty; return }
+        // FIX: the state stayed Empty through the 350ms debounce, so the first
+        // keystroke flashed "No results". Show loading straight away instead
+        // (leave existing results on screen while refining a query).
+        if (_searchState.value !is BrowseUiState.Success) _searchState.value = BrowseUiState.Loading
         searchJob = viewModelScope.launch {
             delay(350)
             _searchState.value = BrowseUiState.Loading
@@ -180,6 +171,8 @@ class BrowseViewModel(app: Application) : AndroidViewModel(app) {
                 Log.d(TAG, "search('$q') returned ${results.size} results")
                 _searchState.value = if (results.isEmpty()) BrowseUiState.Empty
                                      else BrowseUiState.Success(results)
+            } catch (e: CancellationException) {
+                throw e   // a newer keystroke replaced this search
             } catch (e: Exception) {
                 Log.e(TAG, "search('$q') FAILED: ${e.message}", e)
                 _searchState.value = BrowseUiState.Error(e.message ?: "Search failed")

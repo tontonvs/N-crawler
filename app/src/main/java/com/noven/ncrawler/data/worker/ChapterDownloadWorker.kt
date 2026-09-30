@@ -96,13 +96,14 @@ class ChapterDownloadWorker(
         }
     }
 
-    private fun foregroundInfo(slug: String, downloaded: Int, total: Int): ForegroundInfo {
+    private fun foregroundInfo(title: String, downloaded: Int, total: Int): ForegroundInfo {
         val notification = NotificationCompat.Builder(
             applicationContext,
             NCrawlerApp.DOWNLOAD_CHANNEL_ID
         )
-            .setContentTitle("Downloading chapters")
-            .setContentText("$slug: $downloaded / $total")
+            // FIX: showed the raw composite id ("novellive::some-slug"); now the title.
+            .setContentTitle(title)
+            .setContentText("Downloading $downloaded / $total")
             .setSmallIcon(android.R.drawable.stat_sys_download)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
@@ -132,10 +133,12 @@ class ChapterDownloadWorker(
 
         Log.d(TAG, "Starting download: $slug chapters $startChapter-$endChapter")
 
+        val novelTitle = app.db.novelDao().getBySlug(slug)?.title?.ifBlank { null } ?: "Downloading chapters"
+
         // CHANGE (reliability fix): promote to a foreground service before
         // doing any work. This is what exempts the job from the ~10-minute
         // background execution budget.
-        setForeground(foregroundInfo(slug, 0, total))
+        setForeground(foregroundInfo(novelTitle, 0, total))
 
         // Mark as downloading
         dao.get(slug)?.let {
@@ -180,7 +183,7 @@ class ChapterDownloadWorker(
                         PROGRESS_DONE  to downloaded,
                         PROGRESS_TOTAL to total
                     ))
-                    setForeground(foregroundInfo(slug, downloaded, total))
+                    setForeground(foregroundInfo(novelTitle, downloaded, total))
 
                     // 2-second delay between chapters — avoids rate limiting
                     if (chapterNum < endChapter) {
@@ -224,6 +227,16 @@ class ChapterDownloadWorker(
         val finalStatus = if (failed == 0) DownloadStatus.COMPLETE else DownloadStatus.ERROR
         dao.updateProgress(slug, chapterDao.downloadedCount(slug), finalStatus)
         Log.d(TAG, "Download finished: $slug — $downloaded/$total this run, $failed failed, status=$finalStatus")
+
+        // FIX: a download that hit the concurrency limit was left QUEUED with
+        // no work enqueued, so nothing ever started it. Hand the freed slot on.
+        try {
+            repo.startNextQueued()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "Couldn't start next queued download: ${e.message}")
+        }
         Result.success()
     }
 }

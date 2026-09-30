@@ -264,8 +264,8 @@ private fun genreGradient(slot: Int, dark: Boolean): Pair<Color, Color> = when (
     2 -> if (dark) Color(0xFFFB923C) to Color(0xFFF87171) else Color(0xFFF97316) to Color(0xFFDC2626)
     // 3 — Pacifico, cool teal-blue
     3 -> if (dark) Color(0xFF22D3EE) to Color(0xFF60A5FA) else Color(0xFF06B6D4) to Color(0xFF3B82F6)
-    // 4 — Cinzel, gold-amber
-    4 -> if (dark) Color(0xFFFBBF24) to Color(0xFFF59E0B) else Color(0xFFF59E0B) to Color(0xFFD97706)
+    // 4 — Cinzel, rose-pink (was gold-amber: yellow is reserved for the star rating)
+    4 -> if (dark) Color(0xFFF472B6) to Color(0xFFEC4899) else Color(0xFFEC4899) to Color(0xFFBE185D)
     // 5 — Anton, green-emerald
     else -> if (dark) Color(0xFF34D399) to Color(0xFF10B981) else Color(0xFF10B981) to Color(0xFF059669)
 }

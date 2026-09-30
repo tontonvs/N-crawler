@@ -29,6 +29,11 @@ interface DownloadProgressDao {
     // download request knows whether to start immediately or stay QUEUED.
     @Query("SELECT COUNT(*) FROM download_progress WHERE status = :status")
     suspend fun countByStatus(status: DownloadStatus): Int
+
+    // FIX: oldest item in a given state — used to auto-start the next QUEUED
+    // download when a slot frees up (nothing ever did before).
+    @Query("SELECT * FROM download_progress WHERE status = :status ORDER BY lastUpdated ASC LIMIT 1")
+    suspend fun firstWithStatus(status: DownloadStatus): DownloadProgress?
 }
 
 @Dao

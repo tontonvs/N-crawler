@@ -78,8 +78,16 @@ fun NCrawlerNavGraph() {
     val browseVm: BrowseViewModel = viewModel()
     var showSearchOverlay by remember { mutableStateOf(false) }
 
+    // FIX: only the overlay's X cleared the query; back, tab taps and result taps
+    // left the old search showing when you reopened it. Every close path now
+    // goes through here.
+    fun closeSearch() {
+        showSearchOverlay = false
+        browseVm.clearSearch()
+    }
+
     // Back closes the search overlay before it leaves the screen behind it
-    BackHandler(enabled = showSearchOverlay) { showSearchOverlay = false }
+    BackHandler(enabled = showSearchOverlay) { closeSearch() }
 
     // FIX: tapping a pill icon ALWAYS opens that tab's own screen, from wherever
     // you are. Two earlier bugs:
@@ -97,7 +105,7 @@ fun NCrawlerNavGraph() {
     //  - Library / Discover / Settings pop back to Home and open fresh, so the
     //    tab's root screen is always what you get.
     fun openTab(route: String) {
-        showSearchOverlay = false
+        if (showSearchOverlay) closeSearch()
         if (route == currentRoute) return
         if (route == Routes.BROWSE) {
             if (!nav.popBackStack(Routes.BROWSE, inclusive = false)) {
@@ -148,7 +156,7 @@ fun NCrawlerNavGraph() {
             }
 
             composable(Routes.SETTINGS) {
-                SourceSettingsScreen(onBack = { nav.popBackStack() })
+                SourceSettingsScreen()
             }
 
             composable(Routes.LIBRARY) {
@@ -230,10 +238,10 @@ fun NCrawlerNavGraph() {
             SearchOverlay(
                 vm           = browseVm,
                 onNovelClick = { slug ->
-                    showSearchOverlay = false
+                    closeSearch()
                     nav.navigate(Routes.detail(slug))
                 },
-                onClose      = { showSearchOverlay = false }
+                onClose      = { closeSearch() }
             )
         }
 
@@ -251,7 +259,13 @@ fun NCrawlerNavGraph() {
                 selectedIndex = selectedIndex,
                 searchOpen    = showSearchOverlay,
                 onTab         = ::openTab,
-                onSearchClick = { showSearchOverlay = !showSearchOverlay }
+                onSearchClick = {
+                    if (showSearchOverlay) {
+                        closeSearch()
+                    } else {
+                        showSearchOverlay = true
+                    }
+                }
             )
         }
     }

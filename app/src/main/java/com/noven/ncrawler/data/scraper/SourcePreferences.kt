@@ -1,6 +1,10 @@
 package com.noven.ncrawler.data.scraper
 
 import android.content.Context
+import android.content.SharedPreferences
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
 
 /**
  * Stores the user's enabled sources and their priority order.
@@ -25,8 +29,22 @@ class SourcePreferences(context: Context) {
     fun getPriorityOrder(): List<String> {
         val saved = prefs.getString(KEY_ORDER, null)
         if (saved.isNullOrBlank()) return SourceRegistry.all().map { it.id }
-        val ids = saved.split(",").filter { it.isNotBlank() }
+        // FIX: drop IDs that are no longer registered (e.g. the retired
+        // "novelarrow"). They used to count as "enabled" and silently resolved
+        // to FreeWebNovel via SourceRegistry.byId's fallback.
+        val valid = SourceRegistry.all().map { it.id }.toSet()
+        val ids = saved.split(",").filter { it.isNotBlank() && it in valid }.distinct()
         return ids.ifEmpty { listOf(SourceRegistry.DEFAULT_SOURCE_ID) }
+    }
+
+    /** Emits the current order immediately, then again whenever it changes (Home reloads off this). */
+    fun orderFlow(): Flow<List<String>> = callbackFlow {
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == KEY_ORDER) trySend(getPriorityOrder())
+        }
+        prefs.registerOnSharedPreferenceChangeListener(listener)
+        trySend(getPriorityOrder())
+        awaitClose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
     }
 
     fun setPriorityOrder(orderedIds: List<String>) {

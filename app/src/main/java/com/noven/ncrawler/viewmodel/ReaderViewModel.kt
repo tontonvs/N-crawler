@@ -60,7 +60,7 @@ private val ReaderBgDark    = Color(0xFF0D0C0A)
 private val ReaderBgLight   = Color(0xFFF5F0E8)
 private val ReaderTextDark  = Color(0xFFE8E4DC)
 private val ReaderTextLight = Color(0xFF1A1714)
-private val ReaderAmber     = Color(0xFFFFCA28)
+private val ReaderAccentDefault = Color(0xFF7FB2F0)   // was amber — yellow is reserved for the star rating
 // Used only when a cover has no swatch at all — a neutral, so it never invents a tint
 private val NeutralDominant = Color(0xFF3A3A3A)
 
@@ -314,8 +314,8 @@ class ReaderViewModel(app: Application) : AndroidViewModel(app) {
 // Fallback set when there's no cover to derive from yet — two plain options
 // plus one amber-tinted "Tinted" placeholder so the swatch row isn't empty.
 private fun defaultSwatches(): List<ReaderSwatch> = listOf(
-    ReaderSwatch("Tinted", Color(0xFF241E14), Color(0xFFE8E4DC), ReaderAmber),
-    ReaderSwatch("Deep",   Color(0xFF17130D), Color(0xFFE8E4DC), Color(0xFFB8860B)),
+    ReaderSwatch("Tinted", Color(0xFF141C26), Color(0xFFE4E8EC), ReaderAccentDefault),
+    ReaderSwatch("Deep",   Color(0xFF0E141C), Color(0xFFE4E8EC), Color(0xFF5B8FD6)),
     ReaderSwatch("Alternate", Color(0xFF14181F), Color(0xFFE8E4DC), Color(0xFF4F6D8C)),
     ReaderSwatch("Light",  ReaderBgLight, ReaderTextLight, Color(0xFF3C1D18)),
     ReaderSwatch("Dark",   ReaderBgDark,  ReaderTextDark,  Color(0xFF2D2420))

@@ -15,6 +15,7 @@ import com.noven.ncrawler.data.worker.ChapterDownloadWorker
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 
 /**
  * CHANGE (multi-source): every novel is now identified by a composite slug,
@@ -72,6 +73,40 @@ class NovelRepository(
 
     private fun rewrapChapters(chapters: List<ChapterLink>): List<ChapterLink> = chapters // URLs are already absolute; no rewrap needed
 
+    // FIX: every scrape result used to be written with a plain @Upsert, which
+    // replaces the whole row — so any browse/search/refresh reset isInLibrary
+    // to false (the novel vanished from Library and Downloads) and blanked
+    // fields the new scrape didn't carry (chapter list, synopsis, cover).
+    // All writes now go through here: the library flag always survives, and a
+    // blank/zero incoming field never overwrites a cached real value.
+    private fun mergeWithCached(fresh: NovelEntity, old: NovelEntity?): NovelEntity {
+        if (old == null) return fresh
+        return fresh.copy(
+            coverUrl      = fresh.coverUrl.ifBlank { old.coverUrl },
+            synopsis      = fresh.synopsis.ifBlank { old.synopsis },
+            status        = fresh.status.ifBlank { old.status },
+            rating        = fresh.rating.ifBlank { old.rating },
+            genres        = fresh.genres.ifBlank { old.genres },
+            chapterCount  = if (fresh.chapterCount > 0) fresh.chapterCount else old.chapterCount,
+            latestChapter = fresh.latestChapter.ifBlank { old.latestChapter },
+            chapterUrls   = fresh.chapterUrls.ifBlank { old.chapterUrls },
+            isInLibrary   = old.isInLibrary
+        )
+    }
+
+    private suspend fun saveNovels(novels: List<NovelEntity>): List<NovelEntity> {
+        if (novels.isEmpty()) return novels
+        val cached = novelDao.getBySlugs(novels.map { it.slug }.distinct()).associateBy { it.slug }
+        val merged = novels.map { mergeWithCached(it, cached[it.slug]) }
+        novelDao.upsertAll(merged)
+        return merged
+    }
+
+    private suspend fun saveNovel(novel: NovelEntity): NovelEntity = saveNovels(listOf(novel)).first()
+
+    /** DB-only lookup — safe to call from UI flows (never touches the network). */
+    suspend fun getCachedNovel(slug: String): NovelEntity? = novelDao.getBySlug(slug)
+
     // ── Browse / Search ───────────────────────────────────────────────────────
     // Homepage/Popular come from the single top-priority ENABLED source —
     // not merged across sources. Merging multiple full homepage fetches into
@@ -82,23 +117,17 @@ class NovelRepository(
     // single-source home feed feels thin.
     suspend fun fetchHomepage(): List<NovelEntity> {
         val source = enabledSources().first()
-        val novels = source.fetchHomepage().map { rewrapSlug(it, source.id) }
-        if (novels.isNotEmpty()) novelDao.upsertAll(novels)
-        return novels
+        return saveNovels(source.fetchHomepage().map { rewrapSlug(it, source.id) })
     }
 
     suspend fun fetchPopular(): List<NovelEntity> {
         val source = enabledSources().first()
-        val novels = source.fetchPopular().map { rewrapSlug(it, source.id) }
-        if (novels.isNotEmpty()) novelDao.upsertAll(novels)
-        return novels
+        return saveNovels(source.fetchPopular().map { rewrapSlug(it, source.id) })
     }
 
     suspend fun fetchGenre(genre: String, page: Int = 1): List<NovelEntity> {
         val source = enabledSources().first()
-        val novels = source.fetchGenre(genre, page).map { rewrapSlug(it, source.id) }
-        if (novels.isNotEmpty()) novelDao.upsertAll(novels)
-        return novels
+        return saveNovels(source.fetchGenre(genre, page).map { rewrapSlug(it, source.id) })
     }
 
     // CHANGE: same single-top-priority-source pattern as fetchHomepage/
@@ -107,12 +136,9 @@ class NovelRepository(
     // returns the empty defaults, so this is a no-op for them.
     suspend fun fetchExtraSections(): List<HomeSection> {
         val source = enabledSources().first()
-        val sections = source.fetchExtraSections()
-            .map { section -> section.copy(novels = section.novels.map { rewrapSlug(it, source.id) }) }
-        sections.forEach { section ->
-            if (section.novels.isNotEmpty()) novelDao.upsertAll(section.novels)
+        return source.fetchExtraSections().map { section ->
+            section.copy(novels = saveNovels(section.novels.map { rewrapSlug(it, source.id) }))
         }
-        return sections
     }
 
     fun knownGenres(): List<String> = enabledSources().first().knownGenres()
@@ -150,8 +176,8 @@ class NovelRepository(
             .distinctBy { it.title.trim().lowercase() }
             .take(60)
 
-        if (deduped.isNotEmpty()) novelDao.upsertAll(deduped)
-        return deduped.ifEmpty { local }
+        val saved = saveNovels(deduped)
+        return saved.ifEmpty { local }
     }
 
     // ── Novel detail ──────────────────────────────────────────────────────────
@@ -168,15 +194,9 @@ class NovelRepository(
 
         val (source, realSlug) = sourceFor(slug)
         val result = source.fetchInfo(realSlug) ?: return cached
-        val fresh  = rewrapSlug(result, source.id)
-        // fetchInfo() never returns chapterUrls, and upsert() below replaces
-        // the whole row — without this, refreshing a novel's info would
-        // silently wipe any chapter list already cached from a previous
-        // full fetch, forcing it to re-download on the next visit.
-        val novel = if (cached != null && cached.chapterUrls.isNotBlank())
-            fresh.copy(chapterUrls = cached.chapterUrls) else fresh
-        novelDao.upsert(novel)
-        return novel
+        // fetchInfo() never returns chapterUrls; saveNovel() keeps the cached
+        // chapter list (and library flag) when the incoming row lacks them.
+        return saveNovel(rewrapSlug(result, source.id))
     }
 
     suspend fun getNovel(slug: String): NovelEntity? {
@@ -192,9 +212,7 @@ class NovelRepository(
 
         val (source, realSlug) = sourceFor(slug)
         val result = source.fetchDetail(realSlug) ?: return cached
-        val novel  = rewrapSlug(result.first, source.id)
-        novelDao.upsert(novel)
-        return novel
+        return saveNovel(rewrapSlug(result.first, source.id))
     }
 
     suspend fun getChapterList(slug: String): List<ChapterLink> {
@@ -204,7 +222,7 @@ class NovelRepository(
 
         val (source, realSlug) = sourceFor(slug)
         val result = source.fetchDetail(realSlug) ?: return emptyList()
-        novelDao.upsert(rewrapSlug(result.first, source.id))
+        saveNovel(rewrapSlug(result.first, source.id))
         return result.second
     }
 
@@ -273,6 +291,11 @@ class NovelRepository(
 
         val existingNums = chapterDao.downloadedChapterNums(slug).toSet()
         val unionSize     = (existingNums + requestedNums).size
+        val existingRow   = downloadProgressDao.get(slug)   // read BEFORE the upsert below
+
+        // Remember what was asked for so a queued download can start later
+        // and Resume/Retry re-downloads this range, not the whole novel.
+        downloadPrefs.saveRange(slug, requestedNums.min(), requestedNums.max())
 
         Log.d(
             TAG,
@@ -293,13 +316,47 @@ class NovelRepository(
 
         // Same concurrency guard as before — see enqueueDownloadWork's
         // callers and DownloadPreferences.getConcurrentLimit().
-        val activeCount = downloadProgressDao.countByStatus(DownloadStatus.DOWNLOADING)
+        // This novel's own running job doesn't count against the limit — a new
+        // request for it simply replaces that job (see enqueueDownloadWork).
+        val selfActive  = if (existingRow?.status == DownloadStatus.DOWNLOADING) 1 else 0
+        val activeCount = downloadProgressDao.countByStatus(DownloadStatus.DOWNLOADING) - selfActive
         if (activeCount >= downloadPrefs.getConcurrentLimit()) {
+            // Stays QUEUED; startNextQueued() picks it up when a slot frees.
             Log.d(TAG, "Concurrency limit reached ($activeCount active) — $slug stays queued")
             return
         }
 
         enqueueDownloadWork(slug, requestedNums.min(), requestedNums.max())
+    }
+
+    // Resume/Retry: re-run the range the user originally asked for. This used
+    // to call queueDownloadAll, so resuming a "Last 50" download pulled the
+    // entire novel.
+    suspend fun resumeDownload(slug: String) {
+        val range = downloadPrefs.getRange(slug)
+        if (range != null) queueDownloadRange(slug, range.first, range.second)
+        else queueDownloadAll(slug)
+    }
+
+    // Called whenever a download slot frees up (finished, paused, deleted, or
+    // the Wi-Fi setting changed). Previously a request that hit the concurrency
+    // limit was left QUEUED with no work enqueued and nothing ever started it.
+    suspend fun startNextQueued() {
+        if (downloadProgressDao.countByStatus(DownloadStatus.DOWNLOADING) >= downloadPrefs.getConcurrentLimit()) return
+        val next = downloadProgressDao.firstWithStatus(DownloadStatus.QUEUED) ?: return
+
+        val range = downloadPrefs.getRange(next.novelSlug) ?: run {
+            // Queued before ranges were stored: fall back to whatever is missing.
+            val have    = chapterDao.downloadedChapterNums(next.novelSlug).toSet()
+            val missing = getChapterList(next.novelSlug).filter { it.num !in have }
+            if (missing.isEmpty()) {
+                downloadProgressDao.updateProgress(next.novelSlug, have.size, DownloadStatus.COMPLETE)
+                return
+            }
+            missing.minOf { it.num } to missing.maxOf { it.num }
+        }
+        Log.d(TAG, "Starting queued download: ${next.novelSlug} (${range.first}..${range.second})")
+        enqueueDownloadWork(next.novelSlug, range.first, range.second)
     }
 
     // CHANGE (Downloads overhaul): shared by every queue* method above and
@@ -324,6 +381,7 @@ class NovelRepository(
         downloadProgressDao.get(slug)?.let {
             downloadProgressDao.upsert(it.copy(status = DownloadStatus.PAUSED))
         }
+        startNextQueued()
     }
 
     // CHANGE (Downloads overhaul): frees a novel's downloaded chapters to
@@ -335,6 +393,8 @@ class NovelRepository(
         workManager.cancelAllWorkByTag(slug)
         chapterDao.deleteForNovel(slug)
         downloadProgressDao.delete(slug)
+        downloadPrefs.clearRange(slug)
+        startNextQueued()
     }
 
     // CHANGE (Downloads overhaul): approximate downloaded size for a novel,
@@ -345,48 +405,40 @@ class NovelRepository(
     fun downloadPreferences(): DownloadPreferences = downloadPrefs
 
     // ── Check for new chapters ────────────────────────────────────────────────
+    // FIX: "new" used to mean "every chapter not on disk", so after "Last 50"
+    // an update check reported (and queued) the whole rest of the novel. It now
+    // means chapters newer than the list we already knew about, and they are
+    // only auto-downloaded when the user already has a download for this novel.
     suspend fun checkForUpdates(slug: String): Int {
         val (source, realSlug) = sourceFor(slug)
+
+        val previousMax = novelDao.getBySlug(slug)?.chapterUrls
+            ?.takeIf { it.isNotBlank() }
+            ?.let { raw -> parseChapterUrls(raw).maxOfOrNull { it.num } }
+
         val result = source.fetchDetail(realSlug) ?: return 0
         val (fresh, chapters) = result
-        novelDao.upsert(rewrapSlug(fresh, source.id))
+        saveNovel(rewrapSlug(fresh, source.id))
 
-        // FIX (Downloads overhaul): this used to assume downloaded chapters
-        // were exactly chapters 1..downloadedCount — a contiguous block
-        // from the start. Not true once any chapter has ever failed and
-        // been skipped (worker keeps going past a failure). Compare
-        // against the real set of downloaded chapter numbers instead.
-        val downloadedNums = chapterDao.downloadedChapterNums(slug).toSet()
-        val missing = chapters.filter { it.num !in downloadedNums }
-        val newChapters = missing.size
-        Log.d(TAG, "Update check $slug: ${chapters.size} total, ${downloadedNums.size} downloaded, $newChapters new")
+        // No earlier chapter list to compare against — nothing can be "new".
+        if (previousMax == null) return 0
 
-        if (missing.isNotEmpty()) {
-            val minNew = missing.minOf { it.num }
-            val maxNew = missing.maxOf { it.num }
+        val newChapters = chapters.filter { it.num > previousMax }
+        Log.d(TAG, "Update check $slug: ${chapters.size} total, previous newest $previousMax, ${newChapters.size} new")
+        if (newChapters.isEmpty()) return 0
 
-            downloadProgressDao.get(slug)?.let {
-                downloadProgressDao.upsert(
-                    it.copy(
-                        totalChapters = chapters.size,
-                        status = DownloadStatus.QUEUED
-                    )
-                )
-            }
-
-            // Same concurrency guard as queueDownloadAll — see there for why.
-            val activeCount = downloadProgressDao.countByStatus(DownloadStatus.DOWNLOADING)
-            if (activeCount < downloadPrefs.getConcurrentLimit()) {
-                enqueueDownloadWork(slug, minNew, maxNew)
-            } else {
-                Log.d(TAG, "Concurrency limit reached ($activeCount active) — $slug update stays queued")
-            }
+        if (downloadProgressDao.get(slug) != null) {
+            val have  = chapterDao.downloadedChapterNums(slug).toSet()
+            val toGet = newChapters.filter { it.num !in have }
+            if (toGet.isNotEmpty()) queueDownloadRange(slug, toGet.minOf { it.num }, toGet.maxOf { it.num })
         }
-        return newChapters
+        return newChapters.size
     }
 
     // ── Library ───────────────────────────────────────────────────────────────
     fun libraryFlow(): Flow<List<NovelEntity>> = novelDao.libraryFlow()
+    fun isInLibraryFlow(slug: String): Flow<Boolean> = novelDao.isInLibraryFlow(slug).map { it ?: false }
+    fun downloadedNovelsFlow(): Flow<List<NovelEntity>> = novelDao.downloadedNovelsFlow()
     suspend fun setLibrary(slug: String, inLibrary: Boolean) =
         novelDao.setLibrary(slug, inLibrary)
 
@@ -437,7 +489,7 @@ class NovelRepository(
         }
         val (source, realSlug) = sourceFor(slug)
         val result = source.fetchDetail(realSlug) ?: return null
-        novelDao.upsert(rewrapSlug(result.first, source.id))
+        saveNovel(rewrapSlug(result.first, source.id))
         return result.second.find { it.num == chapterNum }?.url
     }
 }

@@ -34,15 +34,15 @@ object SourceRegistry {
         //   a long-established aggregator with no relation to the
         //   novelbin/novelarrow/novelping lineage above.
         LightNovelWorldSource(),
-        // CHANGE: NovelPing added. Detail/search/chapter-list use the same JSON
-        // API family NovelArrowSource reverse-engineered (confirmed still alive
-        // on novelping.com), with HTML fallbacks. New sources start DISABLED for
-        // existing users until toggled on in Sources settings (lowest priority).
-        NovelPingSource(),
     )
 
     fun all(): List<NovelSource> = all
 
+    // FIX: no silent fallback to the default source. An unknown id (old
+    // "novelarrow::" library rows) used to fetch the wrong site with a slug it
+    // never had; now it fails with a clear message and cached chapters still
+    // open offline.
     fun byId(id: String): NovelSource =
-        all.find { it.id == id } ?: all.first { it.id == DEFAULT_SOURCE_ID }
+        all.find { it.id == id }
+            ?: throw IllegalStateException("The source \"$id\" is no longer supported, so this novel can't be refreshed.")
 }

@@ -14,12 +14,16 @@ import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.noven.ncrawler.NCrawlerApp
 import com.noven.ncrawler.ui.components.GenreGlassTile
 
-// Confirmed genre list — straight from freewebnovel.com's own genre sidebar.
+// Fallback genre list — straight from freewebnovel.com's own genre sidebar. Used when the
+// active source doesn't publish its own (see NovelSource.knownGenres).
 // Kept simple per the ask: a flat grid of tiles, tap one → GenreScreen.
 private val ALL_GENRES = listOf(
     "Action", "Adult", "Adventure", "Comedy", "Drama", "Eastern", "Ecchi",
@@ -39,6 +43,12 @@ private val ALL_GENRES = listOf(
 // the system theme.
 @Composable
 fun DiscoverScreen(onGenreClick: (String) -> Unit) {
+    // FIX: always showed FreeWebNovel's genres, whatever source was active, while
+    // the source's own published list (knownGenres) was fetched and thrown away.
+    val context = LocalContext.current
+    val genres  = remember {
+        (context.applicationContext as NCrawlerApp).repository.knownGenres().ifEmpty { ALL_GENRES }
+    }
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -59,7 +69,7 @@ fun DiscoverScreen(onGenreClick: (String) -> Unit) {
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalArrangement   = Arrangement.spacedBy(14.dp)
         ) {
-            itemsIndexed(ALL_GENRES, key = { _, genre -> genre }) { index, genre ->
+            itemsIndexed(genres, key = { _, genre -> genre }) { index, genre ->
                 GenreGlassTile(
                     genre    = genre,
                     styleIdx = index % 6,

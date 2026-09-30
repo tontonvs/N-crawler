@@ -41,6 +41,29 @@ class DownloadPreferences(context: Context) {
         prefs.edit().putInt(KEY_CONCURRENT_LIMIT, limit.coerceAtLeast(1)).apply()
     }
 
+    /**
+     * The chapter range the user last asked for on a novel. Needed so a queued
+     * download can start later, and so Resume/Retry re-downloads that range
+     * instead of the whole novel. Prefs (not a Room column) to avoid a schema
+     * bump — the DB uses destructive migration, which would wipe the library.
+     */
+    fun saveRange(slug: String, start: Int, end: Int) {
+        prefs.edit().putString(rangeKey(slug), "$start:$end").apply()
+    }
+
+    fun getRange(slug: String): Pair<Int, Int>? {
+        val parts = prefs.getString(rangeKey(slug), null)?.split(":") ?: return null
+        val start = parts.getOrNull(0)?.toIntOrNull() ?: return null
+        val end   = parts.getOrNull(1)?.toIntOrNull() ?: return null
+        return start to end
+    }
+
+    fun clearRange(slug: String) {
+        prefs.edit().remove(rangeKey(slug)).apply()
+    }
+
+    private fun rangeKey(slug: String) = "range_$slug"
+
     companion object {
         private const val PREFS_NAME = "ncrawler_downloads"
         const val KEY_WIFI_ONLY = "wifi_only"

@@ -28,12 +28,16 @@ class DownloadsViewModel(app: Application) : AndroidViewModel(app) {
 
     private val repo = (app as NCrawlerApp).repository
 
+    // FIX: joined against the LIBRARY flow, so removing a novel from the library
+    // (or any refresh that reset its flag) made its downloads disappear from
+    // this screen. Downloads now join against the novels that have a download row.
     val downloadItems: StateFlow<List<DownloadItem>> = combine(
         repo.allDownloadProgressFlow(),
-        repo.libraryFlow()
+        repo.downloadedNovelsFlow()
     ) { progressList, novels ->
+        val bySlug = novels.associateBy { it.slug }
         progressList.mapNotNull { progress ->
-            val novel = novels.find { it.slug == progress.novelSlug } ?: return@mapNotNull null
+            val novel = bySlug[progress.novelSlug] ?: return@mapNotNull null
             DownloadItem(novel = novel, progress = progress)
         }
     }.stateIn(
@@ -89,10 +93,11 @@ class DownloadsViewModel(app: Application) : AndroidViewModel(app) {
     /**
      * Resumes a paused download, or retries one with failed chapters.
      * Re-queuing is safe either way — the worker skips any chapter already
-     * saved and only re-attempts what's actually missing.
+     * saved and only re-attempts what's actually missing. FIX: re-runs the
+     * range originally requested (was: the whole novel, even after "Last 50").
      */
     fun resume(slug: String) {
-        viewModelScope.launch { repo.queueDownloadAll(slug) }
+        viewModelScope.launch { repo.resumeDownload(slug) }
     }
 
     /** Deletes downloaded chapters for a novel. Leaves it in the Library. */
