@@ -583,7 +583,7 @@ private fun SearchFab(active: Boolean, onClick: () -> Unit) {
     val isPressed by interactionSource.collectIsPressedAsState()
     val scale by animateFloatAsState(
         targetValue   = if (isPressed) 0.90f else 1f,
-        animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumHigh),
+        animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium),
         label         = "searchFabPress"
     )
 
