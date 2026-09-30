@@ -12,10 +12,14 @@ import com.noven.ncrawler.data.scraper.NovelSource
 import com.noven.ncrawler.data.scraper.SourcePreferences
 import com.noven.ncrawler.data.scraper.SourceRegistry
 import com.noven.ncrawler.data.worker.ChapterDownloadWorker
+import com.noven.ncrawler.data.worker.TxtExportWorker
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * CHANGE (multi-source): every novel is now identified by a composite slug,
@@ -227,7 +231,17 @@ class NovelRepository(
     }
 
     // ── Chapter download ──────────────────────────────────────────────────────
+    //
+    // CHANGE (download fix): two things.
+    //  1) ensurePlaceholdersPurged() — one-time removal of chapters an older
+    //     build saved from an error/paywall placeholder string.
+    //  2) ChapterFetchGuard.check() — sources catch their own errors and
+    //     RETURN fake chapter text ("Failed to load chapter: ..."). That used
+    //     to be saved as a real chapter and never retried. Now it throws
+    //     before anything is written, so the worker/reader sees a real
+    //     failure and the chapter stays missing (= retryable).
     suspend fun downloadChapter(slug: String, chapterNum: Int): ChapterEntity {
+        ensurePlaceholdersPurged()
         val chapterId = "$slug::$chapterNum"
         chapterDao.getById(chapterId)?.let { return it }
 
@@ -235,6 +249,7 @@ class NovelRepository(
         val url = resolveChapterUrl(slug, chapterNum)
             ?: source.buildChapterUrl(realSlug, chapterNum)
         val (title, content) = source.fetchChapterByUrl(url)
+        ChapterFetchGuard.check(content)
         val entity = ChapterEntity(
             id = chapterId, novelSlug = slug,
             chapterNum = chapterNum, title = title,
@@ -242,6 +257,51 @@ class NovelRepository(
         )
         chapterDao.upsert(entity)
         return entity
+    }
+
+    // ── One-time cleanup of poisoned chapters ────────────────────────────────
+    private val purgeMutex = Mutex()
+    @Volatile private var purgeChecked = false
+
+    // Deletes chapters saved from a placeholder string (see ChapterFetchGuard)
+    // and repairs the progress rows that counted them as downloaded: a novel
+    // that said COMPLETE but is now missing chapters flips to ERROR, so the
+    // Downloads screen offers Retry. Runs once per install (prefs flag);
+    // afterwards this is just a boolean check.
+    private suspend fun ensurePlaceholdersPurged() {
+        if (purgeChecked) return
+        purgeMutex.withLock {
+            if (purgeChecked) return
+            if (!downloadPrefs.isPlaceholderPurgeDone()) {
+                val removed = chapterDao.purgePlaceholderChapters()
+                Log.d(TAG, "Placeholder cleanup: removed $removed poisoned chapter(s)")
+                if (removed > 0) {
+                    for (row in downloadProgressDao.observeAll().first()) {
+                        val real = chapterDao.downloadedCount(row.novelSlug)
+                        val status = if (row.status == DownloadStatus.COMPLETE && real < row.totalChapters)
+                            DownloadStatus.ERROR else row.status
+                        downloadProgressDao.updateProgress(row.novelSlug, real, status)
+                    }
+                }
+                downloadPrefs.setPlaceholderPurgeDone()
+            }
+            purgeChecked = true
+        }
+    }
+
+    // ── TXT export (see TxtExportWorker) ──────────────────────────────────────
+    fun hasExportFolder(): Boolean = downloadPrefs.getExportTreeUri() != null
+
+    fun setExportFolder(treeUri: String) = downloadPrefs.setExportTreeUri(treeUri)
+
+    // KEEP: tapping Export twice while one is running must not restart it.
+    // A finished export doesn't block a new one.
+    fun enqueueTxtExport(slug: String) {
+        workManager.enqueueUniqueWork(
+            "export_$slug",
+            ExistingWorkPolicy.KEEP,
+            TxtExportWorker.buildRequest(slug)
+        )
     }
 
     // ── Download queue (background) ───────────────────────────────────────────

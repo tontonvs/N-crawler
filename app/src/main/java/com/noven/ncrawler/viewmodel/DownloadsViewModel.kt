@@ -1,10 +1,13 @@
 package com.noven.ncrawler.viewmodel
 
 import android.app.Application
+import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.net.Uri
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.noven.ncrawler.NCrawlerApp
@@ -106,4 +109,30 @@ class DownloadsViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     suspend fun sizeBytesFor(slug: String): Long = repo.downloadedSizeBytes(slug)
+
+    // ── TXT export ────────────────────────────────────────────────────────────
+    // CHANGE (TXT export): the folder is chosen once with the system folder
+    // picker and remembered. takePersistableUriPermission() is what makes the
+    // grant survive an app restart — without it the export would work once and
+    // then fail with a SecurityException next launch.
+
+    fun hasExportFolder(): Boolean = repo.hasExportFolder()
+
+    /** Saves the picked folder. Returns false if access couldn't be persisted. */
+    fun onExportFolderChosen(uri: Uri): Boolean {
+        return try {
+            getApplication<Application>().contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+            repo.setExportFolder(uri.toString())
+            true
+        } catch (e: SecurityException) {
+            Log.e("NCrawler_Downloads", "Couldn't persist export folder access: ${e.message}")
+            false
+        }
+    }
+
+    /** Starts (or, if already running, leaves running) a TXT export for a novel. */
+    fun exportTxt(slug: String) = repo.enqueueTxtExport(slug)
 }

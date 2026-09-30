@@ -1,5 +1,8 @@
 package com.noven.ncrawler.ui.screens.downloads
 
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -15,6 +18,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -63,6 +67,45 @@ fun DownloadsScreen(
     }
 
     var pendingDelete by remember { mutableStateOf<DownloadItem?>(null) }
+
+    // CHANGE (TXT export): folder picker + export entry point. First Export tap
+    // (no folder saved yet) opens the system folder picker, remembers the
+    // choice, then starts the export for the novel that was tapped. The folder
+    // icon on each card re-opens the picker any time (slug stays null → it only
+    // changes the folder).
+    val context = LocalContext.current
+    var pendingExportSlug by remember { mutableStateOf<String?>(null) }
+    val folderPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        val slug = pendingExportSlug
+        pendingExportSlug = null
+        if (uri != null) {
+            if (vm.onExportFolderChosen(uri)) {
+                if (slug != null) {
+                    vm.exportTxt(slug)
+                    Toast.makeText(context, "Exporting TXT files — progress is in the notification", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(context, "Export folder saved", Toast.LENGTH_SHORT).show()
+                }
+            } else {
+                Toast.makeText(context, "Couldn't use that folder — pick another", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+    val requestExport: (String) -> Unit = { slug ->
+        if (vm.hasExportFolder()) {
+            vm.exportTxt(slug)
+            Toast.makeText(context, "Exporting TXT files — progress is in the notification", Toast.LENGTH_SHORT).show()
+        } else {
+            pendingExportSlug = slug
+            folderPicker.launch(null)
+        }
+    }
+    val requestPickFolder: () -> Unit = {
+        pendingExportSlug = null
+        folderPicker.launch(null)
+    }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -125,6 +168,8 @@ fun DownloadsScreen(
                             blockedByNetwork = blockedByNetwork,
                             onClick          = { onNovelClick(entry.novel.slug) },
                             onPrimary        = { vm.pause(entry.novel.slug) },
+                            onExport         = { requestExport(entry.novel.slug) },
+                            onPickFolder     = requestPickFolder,
                             onDelete         = { pendingDelete = entry }
                         )
                     }
@@ -140,6 +185,8 @@ fun DownloadsScreen(
                             blockedByNetwork = blockedByNetwork,
                             onClick          = { onNovelClick(entry.novel.slug) },
                             onPrimary        = { vm.resume(entry.novel.slug) },
+                            onExport         = { requestExport(entry.novel.slug) },
+                            onPickFolder     = requestPickFolder,
                             onDelete         = { pendingDelete = entry }
                         )
                     }
@@ -155,6 +202,8 @@ fun DownloadsScreen(
                             blockedByNetwork = blockedByNetwork,
                             onClick          = { onNovelClick(entry.novel.slug) },
                             onPrimary        = null,
+                            onExport         = { requestExport(entry.novel.slug) },
+                            onPickFolder     = requestPickFolder,
                             onDelete         = { pendingDelete = entry }
                         )
                     }
@@ -204,6 +253,8 @@ private fun DownloadCard(
     blockedByNetwork: Boolean,
     onClick: () -> Unit,
     onPrimary: (() -> Unit)?,
+    onExport: () -> Unit,
+    onPickFolder: () -> Unit,
     onDelete: () -> Unit
 ) {
     val progress = item.progress
@@ -310,6 +361,26 @@ private fun DownloadCard(
                 if (onPrimary != null) {
                     TextButton(onClick = onPrimary) {
                         Text(primaryLabel(progress.status))
+                    }
+                }
+                // CHANGE (TXT export): only offered when there is something on
+                // disk to export, and not mid-queue (nothing downloaded yet).
+                if (progress.downloadedChapters > 0 && progress.status != DownloadStatus.QUEUED) {
+                    TextButton(onClick = onExport) {
+                        Icon(
+                            Icons.Default.Description,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text("Export TXT")
+                    }
+                    IconButton(onClick = onPickFolder) {
+                        Icon(
+                            Icons.Default.FolderOpen,
+                            contentDescription = "Choose export folder",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
                 IconButton(onClick = onDelete) {

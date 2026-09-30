@@ -41,4 +41,26 @@ interface ChapterDao {
     // meant for precise storage accounting.
     @Query("SELECT SUM(LENGTH(content)) FROM chapters WHERE novelSlug = :slug")
     suspend fun totalContentBytes(slug: String): Long?
+
+    // CHANGE (download fix): fetches a handful of chapters (with their full
+    // text) by primary key. The TXT exporter walks a novel in small batches
+    // of ids instead of loading every chapter body at once — chaptersForNovel()
+    // above emits ALL bodies in one list, which on a 2,700-chapter novel is
+    // tens of MB. id is the primary key, so this is an index lookup, and the
+    // caller keeps batches small (well under SQLite's 999-variable limit).
+    @Query("SELECT * FROM chapters WHERE id IN (:ids)")
+    suspend fun chaptersByIds(ids: List<String>): List<ChapterEntity>
+
+    // CHANGE (download fix): one-time cleanup of chapters saved from the
+    // placeholder strings the scrapers return on failure/paywall (see
+    // ChapterFetchGuard). Returns how many rows were removed. Same prefix
+    // list as ChapterFetchGuard — keep the two in sync.
+    @Query(
+        "DELETE FROM chapters WHERE title = 'Error' " +
+        "OR content LIKE 'Failed to load chapter%' " +
+        "OR content LIKE 'Could not load chapter content%' " +
+        "OR content LIKE 'This chapter requires purchase%' " +
+        "OR content LIKE 'This chapter is locked on%'"
+    )
+    suspend fun purgePlaceholderChapters(): Int
 }

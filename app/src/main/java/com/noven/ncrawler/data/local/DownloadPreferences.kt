@@ -64,9 +64,33 @@ class DownloadPreferences(context: Context) {
 
     private fun rangeKey(slug: String) = "range_$slug"
 
+    /**
+     * CHANGE (TXT export): the folder the user picked (Storage Access
+     * Framework tree URI, stored as a string). Access is persisted by
+     * DownloadsViewModel.onExportFolderChosen(), so this survives restarts.
+     */
+    fun getExportTreeUri(): String? = prefs.getString(KEY_EXPORT_TREE, null)
+
+    fun setExportTreeUri(uri: String) {
+        prefs.edit().putString(KEY_EXPORT_TREE, uri).apply()
+    }
+
+    /**
+     * CHANGE (download fix): true once the one-time cleanup of placeholder
+     * chapters (see ChapterFetchGuard) has run, so the full-table LIKE scan
+     * never repeats.
+     */
+    fun isPlaceholderPurgeDone(): Boolean = prefs.getBoolean(KEY_PURGE_DONE, false)
+
+    fun setPlaceholderPurgeDone() {
+        prefs.edit().putBoolean(KEY_PURGE_DONE, true).apply()
+    }
+
     companion object {
         private const val PREFS_NAME = "ncrawler_downloads"
         const val KEY_WIFI_ONLY = "wifi_only"
         const val KEY_CONCURRENT_LIMIT = "concurrent_limit"
+        private const val KEY_EXPORT_TREE = "export_tree_uri"
+        private const val KEY_PURGE_DONE = "placeholder_purge_done_v1"
     }
 }
