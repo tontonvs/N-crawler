@@ -13,6 +13,7 @@ import androidx.lifecycle.viewModelScope
 import com.noven.ncrawler.NCrawlerApp
 import com.noven.ncrawler.data.db.DownloadProgress
 import com.noven.ncrawler.data.db.NovelEntity
+import com.noven.ncrawler.data.local.DownloadNetwork
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -26,6 +27,15 @@ data class DownloadItem(
     val novel: NovelEntity,
     val progress: DownloadProgress
 )
+
+// CHANGE (network choice): why a QUEUED download isn't moving. Replaces the old
+// Wi-Fi-only Boolean so the label can name the network the user actually asked for.
+enum class NetworkWait(val label: String) {
+    NONE(""),
+    WIFI("Waiting for Wi-Fi"),
+    CELLULAR("Waiting for mobile data"),
+    OFFLINE("Waiting for a connection")
+}
 
 class DownloadsViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -49,24 +59,31 @@ class DownloadsViewModel(app: Application) : AndroidViewModel(app) {
         initialValue = emptyList()
     )
 
-    // CHANGE (reliability fix): true when "Wi-Fi only" downloads is on and
-    // the device isn't currently on an unmetered network. This is the
-    // silent-block bug found in logcat — WorkManager just holds a QUEUED
-    // download forever with no error surfaced anywhere, if this condition
-    // is true. DownloadsScreen uses it to swap the generic "Queued..."
-    // label for "Waiting for Wi-Fi…" on affected items.
-    val downloadsBlockedByNetwork: StateFlow<Boolean> = callbackFlow {
+    // CHANGE (reliability fix, generalised for the network choice): what, if
+    // anything, a QUEUED download is currently waiting for. WorkManager holds a
+    // download whose network constraint isn't met with no error and no feedback
+    // (the silent block found in logcat), so the Downloads screen uses this to
+    // say "Waiting for Wi-Fi / mobile data / a connection" instead of an
+    // ambiguous "Queued".
+    //   ANY           -> waits only when there is no connection at all
+    //   WIFI_ONLY     -> waits unless on an unmetered network
+    //   CELLULAR_ONLY -> waits unless on a metered network
+    // Re-evaluated on every network change AND when the user changes the mode
+    // in Settings (previously the setting change alone never updated the label).
+    val networkWait: StateFlow<NetworkWait> = callbackFlow {
         val cm = getApplication<Application>().getSystemService(ConnectivityManager::class.java)
+        val prefs = repo.downloadPreferences()
 
         fun emitCurrent() {
-            val wifiOnly = repo.downloadPreferences().isWifiOnly()
-            if (!wifiOnly) {
-                trySend(false)
-                return
-            }
             val caps = cm.getNetworkCapabilities(cm.activeNetwork)
+            val hasNet = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
             val unmetered = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) == true
-            trySend(!unmetered)
+            val wait = when (prefs.getNetworkMode()) {
+                DownloadNetwork.ANY           -> if (hasNet) NetworkWait.NONE else NetworkWait.OFFLINE
+                DownloadNetwork.WIFI_ONLY     -> if (hasNet && unmetered) NetworkWait.NONE else NetworkWait.WIFI
+                DownloadNetwork.CELLULAR_ONLY -> if (hasNet && !unmetered) NetworkWait.NONE else NetworkWait.CELLULAR
+            }
+            trySend(wait)
         }
 
         emitCurrent()
@@ -80,12 +97,16 @@ class DownloadsViewModel(app: Application) : AndroidViewModel(app) {
             .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
             .build()
         cm.registerNetworkCallback(request, callback)
+        val modeWatcher = prefs.observeNetworkMode { emitCurrent() }
 
-        awaitClose { cm.unregisterNetworkCallback(callback) }
+        awaitClose {
+            cm.unregisterNetworkCallback(callback)
+            modeWatcher.close()
+        }
     }.stateIn(
         scope        = viewModelScope,
         started      = SharingStarted.WhileSubscribed(5000),
-        initialValue = false
+        initialValue = NetworkWait.NONE
     )
 
     /** Pauses an active or queued download. */

@@ -1,12 +1,15 @@
 package com.noven.ncrawler
 
+import android.app.Activity
 import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.os.Build
+import android.os.Bundle
 import android.util.Log
 import androidx.work.Configuration
 import com.noven.ncrawler.data.db.AppDatabase
+import com.noven.ncrawler.data.local.ForegroundBudget
 import com.noven.ncrawler.data.repository.NovelRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -33,6 +36,22 @@ class NCrawlerApp : Application(), Configuration.Provider {
     override fun onCreate() {
         super.onCreate()
         createDownloadNotificationChannel()
+
+        // CHANGE (Android 15): the system restarts its 6-hour dataSync timer when
+        // the user brings the app to the foreground, so our own ledger does too.
+        // Counts started activities: 0 -> 1 means the app just became visible.
+        registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
+            private var started = 0
+            override fun onActivityStarted(activity: Activity) {
+                if (started++ == 0) ForegroundBudget(this@NCrawlerApp).reset()
+            }
+            override fun onActivityStopped(activity: Activity) { if (started > 0) started-- }
+            override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {}
+            override fun onActivityResumed(activity: Activity) {}
+            override fun onActivityPaused(activity: Activity) {}
+            override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {}
+            override fun onActivityDestroyed(activity: Activity) {}
+        })
 
         // CHANGE (download fix): a download row left as DOWNLOADING after the
         // process died (or the worker failed) counted against the concurrent

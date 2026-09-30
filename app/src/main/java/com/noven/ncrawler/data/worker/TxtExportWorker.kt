@@ -11,6 +11,7 @@ import androidx.core.app.NotificationCompat
 import androidx.work.*
 import com.noven.ncrawler.NCrawlerApp
 import com.noven.ncrawler.data.local.DownloadPreferences
+import com.noven.ncrawler.data.local.ForegroundBudget
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -75,15 +76,34 @@ class TxtExportWorker(
     // start must not fail the export — it just runs as a normal background job.
     private var foregroundOk = true
 
+    // CHANGE (Android 15): counts against the same 6-hour dataSync budget as
+    // downloads (see ForegroundBudget). An export is short, so it never yields —
+    // it just doesn't start a foreground service when the budget is used up.
+    private val budget by lazy { ForegroundBudget(applicationContext) }
+    private var sessionId = -1L
+
     private suspend fun promote(info: ForegroundInfo) {
         if (!foregroundOk) return
         try {
             setForeground(info)
+            if (sessionId < 0) sessionId = budget.beginSession()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             foregroundOk = false
             Log.w(TAG, "Couldn't start foreground service (${e.javaClass.simpleName}: ${e.message}) — continuing in background")
+        }
+    }
+
+    override suspend fun doWork(): Result {
+        if (!budget.canStartForeground()) {
+            foregroundOk = false
+            Log.w(TAG, "Foreground time budget used up — exporting as a background job")
+        }
+        return try {
+            doExport()
+        } finally {
+            if (sessionId >= 0) budget.touch(sessionId)
         }
     }
 
@@ -116,7 +136,7 @@ class TxtExportWorker(
             .notify(DONE_NOTIFICATION_ID, n)
     }
 
-    override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
+    private suspend fun doExport(): Result = withContext(Dispatchers.IO) {
         val slug = inputData.getString(SLUG) ?: return@withContext Result.failure()
         val treeString = DownloadPreferences(applicationContext).getExportTreeUri()
         if (treeString == null) {

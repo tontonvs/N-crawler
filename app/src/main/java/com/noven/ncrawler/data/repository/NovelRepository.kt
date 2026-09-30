@@ -462,7 +462,7 @@ class NovelRepository(
             slug         = slug,
             startChapter = startChapter,
             endChapter   = endChapter,
-            wifiOnly     = downloadPrefs.isWifiOnly()
+            network      = downloadPrefs.getNetworkMode()
         )
         workManager.enqueueUniqueWork(
             "download_$slug",

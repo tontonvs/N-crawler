@@ -7,6 +7,9 @@ import androidx.core.app.NotificationCompat
 import androidx.work.*
 import com.noven.ncrawler.NCrawlerApp
 import com.noven.ncrawler.data.db.DownloadStatus
+import com.noven.ncrawler.data.local.DownloadNetwork
+import com.noven.ncrawler.data.local.DownloadPreferences
+import com.noven.ncrawler.data.local.ForegroundBudget
 import com.noven.ncrawler.data.repository.ChapterUnavailableException
 import com.noven.ncrawler.data.repository.NovelRepository
 import kotlinx.coroutines.CancellationException
@@ -58,6 +61,20 @@ import kotlinx.coroutines.withContext
  *    cool-down before the next one — gentler on the site's rate limit and on
  *    a low-end phone than one unbroken stream.
  *
+ * CHANGE (Android 15 foreground limit + network choice, 2026-09-30):
+ *
+ * 8. Android 15 lets a dataSync foreground service run only 6 hours in any 24
+ *    (while the app is in the background); at the limit the system kills the
+ *    app if the service doesn't stop in time. ForegroundBudget keeps a rolling
+ *    ledger of our foreground time. Near the limit this worker hands the rest
+ *    of the range to a fresh BACKGROUND job (ALLOW_FOREGROUND=false) and
+ *    finishes cleanly, so the foreground service ends before the system has to
+ *    end it. A worker that starts with too little budget left simply runs as a
+ *    background job from the start. Opening the app resets the budget.
+ *
+ * 9. The network constraint now follows DownloadNetwork (any / Wi-Fi only /
+ *    mobile data only) instead of a Wi-Fi-only boolean.
+ *
  * Input data keys:
  *   SLUG          — novel slug
  *   START_CHAPTER — first chapter to download
@@ -74,6 +91,7 @@ class ChapterDownloadWorker(
         const val SLUG          = "slug"
         const val START_CHAPTER = "start_chapter"
         const val END_CHAPTER   = "end_chapter"
+        const val ALLOW_FOREGROUND = "allow_foreground"
         const val PROGRESS_SLUG = "progress_slug"
         const val PROGRESS_DONE = "progress_done"
         const val PROGRESS_TOTAL= "progress_total"
@@ -93,23 +111,33 @@ class ChapterDownloadWorker(
         private const val MAX_ATTEMPTS = 3
         private const val RETRY_BASE_DELAY_MS = 3_000L
 
-        // CHANGE (Downloads overhaul): wifiOnly now decides the network
-        // constraint instead of always allowing any connection.
-        // NovelRepository reads DownloadPreferences and passes the result
-        // in here — the worker itself stays free of any Context/
-        // SharedPreferences access, same separation of concerns as before.
+        // The network constraint comes from the user's DownloadNetwork choice.
+        // NovelRepository reads DownloadPreferences and passes the result in
+        // here — buildRequest itself stays free of any Context/SharedPreferences
+        // access, same separation of concerns as before.
+        //   ANY           -> CONNECTED   (any working network)
+        //   WIFI_ONLY     -> UNMETERED   (Wi-Fi)
+        //   CELLULAR_ONLY -> METERED     (mobile data)
+        // allowForeground=false is used for the hand-over to a background job
+        // (see note 8) and skips the foreground service entirely.
         fun buildRequest(
             slug: String,
             startChapter: Int,
             endChapter: Int,
-            wifiOnly: Boolean
+            network: DownloadNetwork,
+            allowForeground: Boolean = true
         ): OneTimeWorkRequest {
             val data = workDataOf(
-                SLUG          to slug,
-                START_CHAPTER to startChapter,
-                END_CHAPTER   to endChapter
+                SLUG             to slug,
+                START_CHAPTER    to startChapter,
+                END_CHAPTER      to endChapter,
+                ALLOW_FOREGROUND to allowForeground
             )
-            val networkType = if (wifiOnly) NetworkType.UNMETERED else NetworkType.CONNECTED
+            val networkType = when (network) {
+                DownloadNetwork.ANY           -> NetworkType.CONNECTED
+                DownloadNetwork.WIFI_ONLY     -> NetworkType.UNMETERED
+                DownloadNetwork.CELLULAR_ONLY -> NetworkType.METERED
+            }
             return OneTimeWorkRequestBuilder<ChapterDownloadWorker>()
                 .setInputData(data)
                 .setConstraints(
@@ -156,16 +184,60 @@ class ChapterDownloadWorker(
     // progress and never wedges the queue.
     private var foregroundOk = true
 
+    // CHANGE (Android 15): ledger of our own foreground time. sessionId >= 0
+    // means "a foreground session is open and being tracked".
+    private val budget by lazy { ForegroundBudget(applicationContext) }
+    private var sessionId = -1L
+    private var lastTouch = 0L
+
     private suspend fun promote(info: ForegroundInfo) {
         if (!foregroundOk) return
         try {
             setForeground(info)
+            if (sessionId < 0) {
+                val now = System.currentTimeMillis()
+                sessionId = budget.beginSession(now)
+                lastTouch = now
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             foregroundOk = false
             Log.w(TAG, "Couldn't start foreground service (${e.javaClass.simpleName}: ${e.message}) — continuing in background")
         }
+    }
+
+    // Records elapsed foreground time; throttled so it isn't a disk write per chapter.
+    private fun touchBudget(force: Boolean = false) {
+        if (sessionId < 0) return
+        val now = System.currentTimeMillis()
+        if (force || now - lastTouch >= 30_000L) {
+            budget.touch(sessionId, now)
+            lastTouch = now
+        }
+    }
+
+    private fun endBudgetSession() {
+        touchBudget(force = true)
+        sessionId = -1L
+    }
+
+    // CHANGE (Android 15): the rest of the range continues as a plain background
+    // job, so this foreground service ends on our terms before the system's
+    // 6-hour limit ends it for us. APPEND_OR_REPLACE queues the new job to start
+    // when this one finishes (REPLACE would cancel the job we're running).
+    private fun handOverToBackground(slug: String, startChapter: Int, endChapter: Int): Result {
+        Log.w(TAG, "Foreground time budget nearly used — continuing $slug as a background job")
+        val next = buildRequest(
+            slug            = slug,
+            startChapter    = startChapter,
+            endChapter      = endChapter,
+            network         = DownloadPreferences(applicationContext).getNetworkMode(),
+            allowForeground = false
+        )
+        WorkManager.getInstance(applicationContext)
+            .enqueueUniqueWork("download_$slug", ExistingWorkPolicy.APPEND_OR_REPLACE, next)
+        return Result.success()
     }
 
     // Retries a chapter in place. Cancellation and locked chapters are never
@@ -213,6 +285,8 @@ class ChapterDownloadWorker(
                 }
             }
             Result.failure()
+        } finally {
+            endBudgetSession()
         }
     }
 
@@ -233,6 +307,15 @@ class ChapterDownloadWorker(
         // CHANGE (reliability fix): promote to a foreground service before
         // doing any work. This is what exempts the job from the ~10-minute
         // background execution budget.
+        // CHANGE (Android 15): no foreground service when this is the background
+        // continuation, or when the 6-hour budget is (almost) used up.
+        val allowForeground = inputData.getBoolean(ALLOW_FOREGROUND, true)
+        if (!allowForeground) {
+            foregroundOk = false
+        } else if (!budget.canStartForeground()) {
+            foregroundOk = false
+            Log.w(TAG, "Foreground time budget used up — running $slug as a background job")
+        }
         promote(foregroundInfo(novelTitle, 0, total))
 
         // Mark as downloading
@@ -256,6 +339,13 @@ class ChapterDownloadWorker(
                 if (isStopped) {
                     Log.d(TAG, "Worker stopped at chapter $chapterNum")
                     break
+                }
+
+                // CHANGE (Android 15): hand over before the system's limit hits.
+                touchBudget()
+                if (sessionId >= 0 && budget.mustYield()) {
+                    dao.updateProgress(slug, chapterDao.downloadedCount(slug), DownloadStatus.DOWNLOADING)
+                    return handOverToBackground(slug, startChapter, endChapter)
                 }
 
                 var fetchedFromNetwork = false

@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.noven.ncrawler.NCrawlerApp
+import com.noven.ncrawler.data.local.DownloadNetwork
 import com.noven.ncrawler.data.scraper.SourcePreferences
 import com.noven.ncrawler.data.scraper.SourceRegistry
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -22,7 +23,7 @@ data class SourceUiItem(
 data class SourceSettingsUiState(
     val items: List<SourceUiItem> = emptyList(),
     val message: String? = null,  // transient — e.g. "Can't disable your only source"
-    val wifiOnly: Boolean = true  // downloads on unmetered networks only (default matches DownloadPreferences)
+    val networkMode: DownloadNetwork = DownloadNetwork.ANY  // which network downloads may use (default matches DownloadPreferences)
 )
 
 class SourceSettingsViewModel(app: Application) : AndroidViewModel(app) {
@@ -54,15 +55,15 @@ class SourceSettingsViewModel(app: Application) : AndroidViewModel(app) {
                 isDefault   = order.firstOrNull() == source.id
             )
         }
-        _uiState.value = _uiState.value.copy(items = items, wifiOnly = repo.downloadPreferences().isWifiOnly())
+        _uiState.value = _uiState.value.copy(items = items, networkMode = repo.downloadPreferences().getNetworkMode())
     }
 
-    // Wi-Fi-only defaults to ON but had no toggle anywhere, so on mobile data
-    // downloads just sat on "Waiting for Wi-Fi…". Re-kicks the queue so a
-    // waiting download picks up the new constraint straight away.
-    fun setWifiOnly(enabled: Boolean) {
-        repo.downloadPreferences().setWifiOnly(enabled)
-        _uiState.value = _uiState.value.copy(wifiOnly = enabled)
+    // CHANGE (network choice): replaces the Wi-Fi-only switch with a three-way
+    // choice (any / Wi-Fi only / mobile data only). Re-kicks the queue so a
+    // waiting download is re-queued with the new network constraint straight away.
+    fun setNetworkMode(mode: DownloadNetwork) {
+        repo.downloadPreferences().setNetworkMode(mode)
+        _uiState.value = _uiState.value.copy(networkMode = mode)
         viewModelScope.launch {
             try { repo.startNextQueued() } catch (e: Exception) { /* best effort */ }
         }

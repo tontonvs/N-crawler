@@ -1,10 +1,25 @@
 package com.noven.ncrawler.data.local
 
 import android.content.Context
+import android.content.SharedPreferences
 
 /**
- * Download-behavior settings: whether downloading requires Wi-Fi/unmetered
- * network, and how many novels are allowed to download at once.
+ * CHANGE (network choice): which network downloads are allowed to use. Replaces
+ * the old Wi-Fi-only on/off switch.
+ *   ANY           - Wi-Fi or mobile data, whichever is available (default)
+ *   WIFI_ONLY     - only unmetered networks (Wi-Fi)
+ *   CELLULAR_ONLY - only metered networks (mobile data; a metered Wi-Fi
+ *                   hotspot also counts, that is how Android defines it)
+ */
+enum class DownloadNetwork(val label: String, val hint: String) {
+    ANY("Any network", "Wi-Fi or mobile data, whichever is available."),
+    WIFI_ONLY("Wi-Fi only", "Downloads wait for Wi-Fi. No mobile data."),
+    CELLULAR_ONLY("Mobile data only", "Downloads wait for mobile data, even if Wi-Fi is on.")
+}
+
+/**
+ * Download-behavior settings: which network downloads may use, and how many
+ * novels are allowed to download at once.
  *
  * SharedPreferences rather than a Room table, same reasoning as
  * SourcePreferences — a couple of small scalar settings, not queryable
@@ -19,14 +34,38 @@ class DownloadPreferences(context: Context) {
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     /**
-     * true = only download over Wi-Fi/unmetered connections. Defaults to
-     * true — this is a background job the user isn't necessarily watching
-     * start, so it shouldn't burn mobile data without being asked to.
+     * Which network downloads may use. Defaults to ANY.
+     *
+     * Migration: the old "Wi-Fi only" switch was stored as a boolean. If the
+     * user ever touched it, that choice is honoured (true -> WIFI_ONLY,
+     * false -> ANY). If they never did, they get the new default (ANY) rather
+     * than the old built-in "Wi-Fi only".
      */
-    fun isWifiOnly(): Boolean = prefs.getBoolean(KEY_WIFI_ONLY, true)
+    fun getNetworkMode(): DownloadNetwork {
+        prefs.getString(KEY_NETWORK_MODE, null)?.let { saved ->
+            return DownloadNetwork.values().firstOrNull { it.name == saved } ?: DownloadNetwork.ANY
+        }
+        if (prefs.contains(KEY_WIFI_ONLY)) {
+            return if (prefs.getBoolean(KEY_WIFI_ONLY, false)) DownloadNetwork.WIFI_ONLY else DownloadNetwork.ANY
+        }
+        return DownloadNetwork.ANY
+    }
 
-    fun setWifiOnly(enabled: Boolean) {
-        prefs.edit().putBoolean(KEY_WIFI_ONLY, enabled).apply()
+    fun setNetworkMode(mode: DownloadNetwork) {
+        prefs.edit().putString(KEY_NETWORK_MODE, mode.name).apply()
+    }
+
+    /**
+     * Calls [onChange] whenever the network mode is changed. Close the returned
+     * handle to stop listening. (SharedPreferences only keeps listeners weakly,
+     * so the handle also keeps the listener alive - hold on to it.)
+     */
+    fun observeNetworkMode(onChange: () -> Unit): AutoCloseable {
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == KEY_NETWORK_MODE) onChange()
+        }
+        prefs.registerOnSharedPreferenceChangeListener(listener)
+        return AutoCloseable { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
     }
 
     /**
@@ -88,7 +127,8 @@ class DownloadPreferences(context: Context) {
 
     companion object {
         private const val PREFS_NAME = "ncrawler_downloads"
-        const val KEY_WIFI_ONLY = "wifi_only"
+        const val KEY_WIFI_ONLY = "wifi_only"   // legacy boolean, read once for migration
+        private const val KEY_NETWORK_MODE = "network_mode"
         const val KEY_CONCURRENT_LIMIT = "concurrent_limit"
         private const val KEY_EXPORT_TREE = "export_tree_uri"
         private const val KEY_PURGE_DONE = "placeholder_purge_done_v1"
