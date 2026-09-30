@@ -112,6 +112,10 @@ import com.noven.ncrawler.data.local.DominantColorStore
 import com.noven.ncrawler.data.scraper.ChapterLink
 import com.noven.ncrawler.ui.components.Motion
 import com.noven.ncrawler.ui.components.errorShake
+import com.noven.ncrawler.ui.theme.GlassSurfaceDark
+import com.noven.ncrawler.ui.theme.GlassSpec
+import com.noven.ncrawler.ui.theme.GlassBase
+import com.noven.ncrawler.ui.components.glassFill
 import com.noven.ncrawler.ui.components.pressScale
 import com.noven.ncrawler.ui.components.pressable
 import com.noven.ncrawler.ui.theme.MontserratFamily
@@ -214,9 +218,9 @@ private fun ReaderCircleBtn(
         modifier         = Modifier
             .size(size)
             .pressScale(source, 0.92f)
+            // CHANGE: tv3 glass (12% grey @ 44%, no border) — one fill, was two.
             .clip(CircleShape)
-            .background(Color.Black.copy(alpha = 0.40f))
-            .background(Color.White.copy(alpha = 0.13f))
+            .background(GlassSurfaceDark)
             .combinedClickable(
                 interactionSource = source,
                 indication        = null,
@@ -498,9 +502,7 @@ private fun DownloadOptionsSheet(
 private fun PresetChip(label: String, accent: Color, onClick: () -> Unit) {
     Box(
         modifier = Modifier
-            .clip(RoundedCornerShape(20.dp))
-            .background(Color.White.copy(alpha = 0.08f))
-            .border(1.dp, accent.copy(alpha = 0.5f), RoundedCornerShape(20.dp))
+            .glassFill(RoundedCornerShape(20.dp), dark = true)
             .clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 9.dp),
     ) {
@@ -779,8 +781,7 @@ fun DetailScreen(
                         // Reader-style pill: soft filled, no border
                         Box(
                             modifier         = Modifier
-                                .clip(RoundedCornerShape(24.dp))
-                                .background(Color.White.copy(alpha = 0.13f))
+                                .glassFill(RoundedCornerShape(24.dp), dark = true)
                                 .clickable { vm.load(slug) }
                                 .padding(horizontal = 28.dp, vertical = 12.dp),
                         ) {
@@ -1157,13 +1158,9 @@ private fun CinematicDetail(
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
+                            // CHANGE: tv3 glass container — nav-strength fill (51%), no border.
                             .clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
-                            .background(Color.Black.copy(alpha = 0.50f))
-                            .border(
-                                width  = 1.dp,
-                                color  = Color.White.copy(alpha = 0.08f),
-                                shape  = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
-                            ),
+                            .background(GlassBase.copy(alpha = GlassSpec.NAV_FILL)),
                     ) {
                         // Header
                         Row(
@@ -1256,8 +1253,7 @@ private fun CinematicDetail(
                                 Box(
                                     modifier = Modifier
                                         .padding(bottom = 14.dp)
-                                        .clip(RoundedCornerShape(24.dp))
-                                        .background(Color.White.copy(alpha = 0.13f))
+                                        .glassFill(RoundedCornerShape(24.dp), dark = true)
                                         .clickable { showAllChapters = true }
                                         .padding(horizontal = 22.dp, vertical = 10.dp),
                                 ) {

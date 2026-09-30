@@ -76,6 +76,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.noven.ncrawler.data.db.ChapterEntity
 import com.noven.ncrawler.data.scraper.ChapterLink
 import com.noven.ncrawler.ui.components.errorShake
+import com.noven.ncrawler.ui.components.glassTint
 import com.noven.ncrawler.ui.theme.MontserratFamily
 import com.noven.ncrawler.viewmodel.ReaderSettings
 import com.noven.ncrawler.viewmodel.ReaderSwatch
@@ -602,8 +603,7 @@ private fun PullNextIndicator(
     Row(
         modifier = modifier
             .graphicsLayer { alpha = (pull() / threshold).coerceIn(0f, 1f) }
-            .clip(RoundedCornerShape(24.dp))
-            .background(fg.copy(alpha = 0.10f))
+            .glassTint(fg, RoundedCornerShape(24.dp))
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -850,8 +850,7 @@ private fun ReaderIconButton(
     Box(
         modifier = Modifier
             .size(48.dp)
-            .clip(CircleShape)
-            .background(fg.copy(alpha = 0.13f))
+            .glassTint(fg, CircleShape)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center
     ) { content() }
@@ -870,8 +869,7 @@ private fun SegmentedPill(
         modifier = Modifier
             .width(172.dp)
             .height(44.dp)
-            .clip(RoundedCornerShape(50))
-            .background(fg.copy(alpha = 0.13f))
+            .glassTint(fg, RoundedCornerShape(50))
             .padding(4.dp)
     ) {
         Row(Modifier.fillMaxSize()) {
@@ -936,8 +934,7 @@ private fun ChapterNavBar(
             Box(
                 modifier = Modifier
                     .size(48.dp)
-                    .clip(CircleShape)
-                    .background(if (canGoPrev) fg.copy(alpha = 0.13f) else fg.copy(alpha = 0.05f))
+                    .glassTint(fg, CircleShape, strength = if (canGoPrev) 0.33f else 0.12f)
                     .clickable(enabled = canGoPrev, onClick = onPrev),
                 contentAlignment = Alignment.Center
             ) {
@@ -954,8 +951,7 @@ private fun ChapterNavBar(
                 modifier = Modifier
                     .weight(1f)
                     .padding(horizontal = 10.dp)
-                    .clip(RoundedCornerShape(24.dp))
-                    .background(fg.copy(alpha = 0.10f))
+                    .glassTint(fg, RoundedCornerShape(24.dp))
                     .clickable(onClick = onOpenToc)
                     .padding(horizontal = 14.dp, vertical = 10.dp)
             ) {
@@ -1007,8 +1003,7 @@ private fun ChapterNavBar(
             Box(
                 modifier = Modifier
                     .size(48.dp)
-                    .clip(CircleShape)
-                    .background(fg.copy(alpha = 0.13f))
+                    .glassTint(fg, CircleShape)
                     .clickable(onClick = onNext),
                 contentAlignment = Alignment.Center
             ) {

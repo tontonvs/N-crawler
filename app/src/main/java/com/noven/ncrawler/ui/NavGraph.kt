@@ -34,6 +34,8 @@ import androidx.navigation.NavType
 import androidx.navigation.compose.*
 import androidx.navigation.navArgument
 import com.noven.ncrawler.ui.components.Motion
+import com.noven.ncrawler.ui.theme.GlassBase
+import com.noven.ncrawler.ui.theme.GlassSpec
 import com.noven.ncrawler.ui.components.NavIcons
 import com.noven.ncrawler.ui.screens.browse.BrowseScreen
 import com.noven.ncrawler.ui.screens.browse.SearchOverlay
@@ -407,14 +409,14 @@ private val navTabs = listOf(
 private val NavItemSize = 44.dp
 private val NavItemGap  = 4.dp
 private val NavIconSize = 22.dp     // a tiny bit bigger (was 20dp)
-// 13% transparent: the pill and the search FAB are 87% opaque
-private const val NavOpacity = 0.87f
+// CHANGE: tv3 glass — the pill and the search FAB use the nav fill (51%).
+private const val NavOpacity = GlassSpec.NAV_FILL
 private val NavPadH     = 6.dp
 private val NavPadV     = 5.dp
 
-// Light vs dark. The HTML pill is dark ink on a light page. On a dark app
-// background a dark pill would nearly vanish, so dark mode inverts it: light
-// pill, dark selector, dark outline icons, white solid icon.
+// CHANGE: one look for light AND dark — the tv3 nav is dark glass with white
+// icons and a white selector, so it no longer inverts per theme (fewer branches,
+// no theme read on every recomposition).
 private class NavPalette(
     val pill: Color,
     val selector: Color,
@@ -425,21 +427,15 @@ private class NavPalette(
 
 private val NavInk = Color(0xFF1E232D)
 
-@Composable
-private fun navPalette(): NavPalette =
-    if (isSystemInDarkTheme()) NavPalette(
-        pill         = Color(0xFFE6EAF2),
-        selector     = NavInk,
-        inactiveIcon = NavInk,
-        activeIcon   = Color.White,
-        edge         = Color.Black.copy(alpha = 0.08f)
-    ) else NavPalette(
-        pill         = NavInk,
-        selector     = Color.White,
-        inactiveIcon = Color.White,
-        activeIcon   = NavInk,
-        edge         = Color.White.copy(alpha = 0.12f)   // the HTML's inset highlight
-    )
+private val NavGlassPalette = NavPalette(
+    pill         = GlassBase,
+    selector     = Color.White,
+    inactiveIcon = Color.White.copy(alpha = 0.60f),
+    activeIcon   = Color.Black,
+    edge         = Color.Transparent                    // border 0%
+)
+
+private fun navPalette(): NavPalette = NavGlassPalette
 
 @Composable
 private fun PillNav(selectedIndex: Int, onTab: (String) -> Unit) {
@@ -465,12 +461,11 @@ private fun PillNav(selectedIndex: Int, onTab: (String) -> Unit) {
             .shadow(
                 elevation    = 14.dp,
                 shape        = shape,
-                ambientColor = Color(0x330F172A),
-                spotColor    = Color(0x660F172A)
+                ambientColor = Color(0x33000000),
+                spotColor    = Color(0x99000000)     // tv3: 0 8 32 rgba(0,0,0,.6)
             )
             .clip(shape)
             .background(palette.pill.copy(alpha = NavOpacity))
-            .border(1.dp, palette.edge, shape)
             .padding(horizontal = NavPadH, vertical = NavPadV)
     ) {
         // Sliding selector circle
@@ -562,17 +557,15 @@ private fun PillNavItem(
 // icon) to show it's active — the same inversion as the pill's selector.
 @Composable
 private fun SearchFab(active: Boolean, onClick: () -> Unit) {
-    val scheme = MaterialTheme.colorScheme
-    val fg     = scheme.onSurface
-    val idleBg = fg.copy(alpha = 0.13f).compositeOver(scheme.surface)
-
+    // CHANGE: same glass as the pill (dark 51% fill, white icon); while search is
+    // open it inverts to solid white + black icon, like the pill's selector.
     val bg by animateColorAsState(
-        targetValue   = if (active) fg else idleBg,
+        targetValue   = if (active) Color.White else GlassBase.copy(alpha = NavOpacity),
         animationSpec = tween(200),
         label         = "searchFabBg"
     )
     val iconTint by animateColorAsState(
-        targetValue   = if (active) scheme.surface else fg,
+        targetValue   = if (active) Color.Black else Color.White,
         animationSpec = tween(200),
         label         = "searchFabIcon"
     )
@@ -594,11 +587,11 @@ private fun SearchFab(active: Boolean, onClick: () -> Unit) {
             .shadow(
                 elevation    = 10.dp,
                 shape        = CircleShape,
-                ambientColor = Color(0x260F172A),
-                spotColor    = Color(0x480F172A)
+                ambientColor = Color(0x26000000),
+                spotColor    = Color(0x80000000)
             )
             .clip(CircleShape)
-            .background(bg.copy(alpha = NavOpacity))
+            .background(bg)
             .clickable(
                 interactionSource = interactionSource,
                 indication        = null,

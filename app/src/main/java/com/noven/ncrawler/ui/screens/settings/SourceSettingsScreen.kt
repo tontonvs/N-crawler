@@ -5,7 +5,6 @@ import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -14,7 +13,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.*
@@ -36,8 +34,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.noven.ncrawler.data.local.DownloadNetwork
 import com.noven.ncrawler.ui.components.errorShake
+import com.noven.ncrawler.ui.components.glassCard
 import com.noven.ncrawler.ui.components.staggerIn
 import com.noven.ncrawler.ui.theme.MontserratFamily
 import com.noven.ncrawler.ui.theme.glassBorder
@@ -175,7 +173,7 @@ fun SourceSettingsScreen(
                 Spacer(Modifier.height(8.dp))
                 SectionLabel("Downloads")
             }
-            item { NetworkCard(mode = state.networkMode, onChange = vm::setNetworkMode) }
+            item { WifiOnlyCard(wifiOnly = state.wifiOnly, onChange = vm::setWifiOnly) }
         }
     }
 }
@@ -192,102 +190,49 @@ private fun SectionLabel(text: String) {
     )
 }
 
-// CHANGE (network choice): a dropdown instead of the Wi-Fi-only switch —
-// Any network (default) / Wi-Fi only / Mobile data only. Built from the stable
-// DropdownMenu (not ExposedDropdownMenuBox, whose API changed between Material3
-// versions) so it compiles on whatever version the project is on.
 @Composable
-private fun NetworkCard(mode: DownloadNetwork, onChange: (DownloadNetwork) -> Unit) {
+private fun WifiOnlyCard(wifiOnly: Boolean, onChange: (Boolean) -> Unit) {
     val colors = MaterialTheme.colorScheme
     val dark   = isSystemInDarkTheme()
     val accent = colors.primary
     val shape  = RoundedCornerShape(16.dp)
-    val fieldShape = RoundedCornerShape(12.dp)
-    val cardFill   = if (dark) colors.surfaceVariant else glassSurface()
-    val cardBorder = if (dark) colors.outline else glassBorder()
-    var expanded by remember { mutableStateOf(false) }
-
-    Column(
+    // CHANGE: tv3 glass (44% fill, no border) — same in light and dark.
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(shape)
-            .background(cardFill)
-            .border(1.dp, cardBorder, shape)
-            .padding(horizontal = 14.dp, vertical = 12.dp)
+            .glassCard(shape)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(
-            "Download network",
-            fontFamily = MontserratFamily,
-            fontWeight = FontWeight.Bold,
-            fontSize   = 15.sp,
-            color      = colors.onSurface
-        )
-        Text(
-            mode.hint,
-            fontFamily = MontserratFamily,
-            fontSize   = 12.sp,
-            lineHeight = 17.sp,
-            color      = colors.onSurfaceVariant
-        )
-        Spacer(Modifier.height(10.dp))
-
-        Box {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(fieldShape)
-                    .border(1.dp, colors.outline, fieldShape)
-                    .clickable { expanded = true }
-                    .padding(horizontal = 14.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    mode.label,
-                    modifier   = Modifier.weight(1f),
-                    fontFamily = MontserratFamily,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize   = 14.sp,
-                    color      = colors.onSurface
-                )
-                Icon(
-                    Icons.Default.KeyboardArrowDown,
-                    contentDescription = "Choose download network",
-                    tint = colors.onSurfaceVariant
-                )
-            }
-            DropdownMenu(
-                expanded         = expanded,
-                onDismissRequest = { expanded = false }
-            ) {
-                DownloadNetwork.values().forEach { option ->
-                    DropdownMenuItem(
-                        text = {
-                            Column {
-                                Text(
-                                    option.label,
-                                    fontFamily = MontserratFamily,
-                                    fontWeight = if (option == mode) FontWeight.Bold else FontWeight.Medium,
-                                    fontSize   = 14.sp
-                                )
-                                Text(
-                                    option.hint,
-                                    fontFamily = MontserratFamily,
-                                    fontSize   = 11.sp,
-                                    color      = colors.onSurfaceVariant
-                                )
-                            }
-                        },
-                        trailingIcon = if (option == mode) {
-                            { Icon(Icons.Default.Check, contentDescription = "Selected", tint = accent) }
-                        } else null,
-                        onClick = {
-                            expanded = false
-                            if (option != mode) onChange(option)
-                        }
-                    )
-                }
-            }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                "Download on Wi-Fi only",
+                fontFamily = MontserratFamily,
+                fontWeight = FontWeight.Bold,
+                fontSize   = 15.sp,
+                color      = colors.onSurface
+            )
+            Text(
+                "Downloads wait for Wi-Fi. No mobile data.",
+                fontFamily = MontserratFamily,
+                fontSize   = 12.sp,
+                lineHeight = 17.sp,
+                color      = colors.onSurfaceVariant
+            )
         }
+        Spacer(Modifier.width(12.dp))
+        Switch(
+            checked = wifiOnly,
+            onCheckedChange = onChange,
+            colors = SwitchDefaults.colors(
+                checkedThumbColor    = Color.White,
+                checkedTrackColor    = accent,
+                checkedBorderColor   = accent,
+                uncheckedThumbColor  = colors.onSurfaceVariant,
+                uncheckedTrackColor  = colors.background,
+                uncheckedBorderColor = colors.outline
+            )
+        )
     }
 }
 
@@ -306,10 +251,8 @@ private fun SourceRow(
     val accent = colors.primary                 // brighter blue in dark mode
     val shape  = RoundedCornerShape(16.dp)
 
-    // Light: the frosted white card. Dark: glassSurface() is ~the page colour, so
-    // the card would vanish — lift it to surfaceVariant and outline it instead.
-    val cardFill   = if (dark) colors.surfaceVariant else glassSurface()
-    val cardBorder = if (dark) colors.outline else glassBorder()
+    // CHANGE: tv3 glass (44% fill, no border) — replaces the per-theme fill +
+    // outline; the same surface as every other card in the app.
 
     // ── Reorder animation ────────────────────────────────────────────────
     // Rows are keyed, so when the list reorders each row keeps its state and
@@ -356,9 +299,7 @@ private fun SourceRow(
             }
             .onSizeChanged { rowHeightPx = it.height }
             .fillMaxWidth()
-            .clip(shape)
-            .background(cardFill)
-            .border(1.dp, cardBorder, shape)
+            .glassCard(shape, elevation = 3.dp)
             // Accent glow on the row you moved: a soft tint under the content and
             // an outline over it, both fading with [glow].
             .drawWithContent {

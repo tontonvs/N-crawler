@@ -36,6 +36,9 @@ import com.noven.ncrawler.ui.theme.AntonFamily
 import com.noven.ncrawler.ui.theme.CinzelFamily
 import com.noven.ncrawler.ui.theme.MontserratFamily
 import com.noven.ncrawler.ui.theme.PacificoFamily
+import com.noven.ncrawler.ui.theme.GlassSpec
+import com.noven.ncrawler.ui.theme.GlassSurfaceDark
+import com.noven.ncrawler.ui.theme.GlassSurfaceLight
 import com.noven.ncrawler.ui.theme.glassSurface
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -64,33 +67,43 @@ import com.noven.ncrawler.ui.theme.glassSurface
 
 val GlassCardRadius = 16.dp
 
-// Frosted-glass surface: shadow → clip → translucent fill → sheen → rim light.
-// Built with composed{} (not a @Composable modifier factory) so it stays
-// lint-clean while still reading the current system theme.
-fun Modifier.glassCard(shape: Shape = RoundedCornerShape(GlassCardRadius)): Modifier = composed {
+// Frosted-glass surface, tv3 recipe: translucent fill (44%), NO border (0%),
+// soft shadow. CHANGE (perf): the diagonal sheen brush and the gradient rim
+// border are gone — one clip + one solid fill per card instead of four
+// draw passes — and dark mode skips the shadow entirely (it can't be seen on a
+// dark page, so it was pure cost across every card in every list).
+// Built with composed{} so it still reads the current system theme.
+fun Modifier.glassCard(
+    shape: Shape = RoundedCornerShape(GlassCardRadius),
+    elevation: Dp = 4.dp
+): Modifier = composed {
     val dark = isSystemInDarkTheme()
     val fill = glassSurface()
-    val sheen = remember(dark) {
-        if (dark) Brush.linearGradient(listOf(Color.White.copy(alpha = 0.10f), Color.Transparent))
-        else      Brush.linearGradient(listOf(Color.White, AccentBlue.copy(alpha = 0.06f)))
-    }
-    val rim = remember(dark) {
-        if (dark) Brush.linearGradient(listOf(Color.White.copy(alpha = 0.30f), Color.White.copy(alpha = 0.06f)))
-        else      Brush.linearGradient(listOf(Color.White, AccentBlue.copy(alpha = 0.18f)))
-    }
-    this
-        .shadow(
-            elevation    = 6.dp,
-            shape        = shape,
-            clip         = false,
-            ambientColor = Color(0x1A0D1117),
-            spotColor    = Color(0x330D1117)
-        )
+    (if (dark) this else this.shadow(
+        elevation    = elevation,
+        shape        = shape,
+        clip         = false,
+        ambientColor = Color(0x140D1117),
+        spotColor    = Color(0x260D1117)
+    ))
         .clip(shape)
         .background(fill)
-        .background(sheen)
-        .border(1.dp, rim, shape)
 }
+
+// Same fill, no shadow — for small controls / pills that sit inside another
+// surface (a shadow under every little pill costs more than it shows).
+fun Modifier.glassFill(shape: Shape, dark: Boolean? = null): Modifier = composed {
+    // dark = true/false forces a theme (the Detail screen is always dark);
+    // null follows the system.
+    val d = dark ?: isSystemInDarkTheme()
+    clip(shape).background(if (d) GlassSurfaceDark else GlassSurfaceLight)
+}
+
+// Glass tinted by a caller colour (the reader's text colour), for surfaces
+// that must follow the reader theme. Same 44% glass fill logic, scaled so the
+// tint reads on a solid page: fg @ 13%.
+fun Modifier.glassTint(tint: Color, shape: Shape, strength: Float = 0.33f): Modifier =
+    clip(shape).background(tint.copy(alpha = GlassSpec.CARD_FILL * strength))
 
 // Cover ratio (width / height) shared by every novel card — homepage rows and
 // Discover's genre grid — so a card is the same size on both screens.

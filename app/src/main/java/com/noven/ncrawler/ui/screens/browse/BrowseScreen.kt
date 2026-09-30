@@ -1256,7 +1256,6 @@ private fun GenreChip(name: String, isActive: Boolean, onClick: () -> Unit) {
             .height(50.dp)
             .clip(RoundedCornerShape(25.dp))
             .background(bg)
-            .border(1.dp, border, RoundedCornerShape(25.dp))
             .clickable(onClick = onClick)
             .padding(horizontal = 18.dp),
         contentAlignment = Alignment.Center

@@ -9,6 +9,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.googlefonts.GoogleFont
 import androidx.compose.ui.text.googlefonts.Font as GoogleFontRef
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.noven.ncrawler.R
 
@@ -25,11 +26,24 @@ val StarGold       = Color(0xFFFFB300)   // star rating only
 // available, so "glass" here is done the compatible way: a semi-opaque fill +
 // a soft light border + a diffuse shadow, which reads as frosted glass on both
 // the sky-blue top bar and white content areas without needing a blur pass.
-val GlassSurfaceLight  = Color(0xF2FFFFFF)  // ~95% white — cards over content
-val GlassSurfaceMuted  = Color(0xCCFFFFFF)  // ~80% white — bars over imagery
-val GlassBorderLight   = Color(0x59FFFFFF)  // hairline highlight, light mode
-val GlassSurfaceDark   = Color(0xE6111827)  // dark-mode glass fill
-val GlassBorderDark    = Color(0x33FFFFFF)  // dark-mode hairline highlight
+// CHANGE: values now copy the tv3 glass (tuned in the preview):
+//   blur 30 · card fill 44% · nav fill 51% · border 0%
+// Fill = tv3's neutral 12% grey (dark) / white (light) at that opacity; no
+// border; soft shadow instead. True backdrop blur isn't drawn yet (see
+// GlassSpec.BLUR) — one place to switch it on later.
+object GlassSpec {
+    const val CARD_FILL = 0.44f
+    const val NAV_FILL  = 0.51f
+    const val BORDER    = 0f               // 0% — no edge line anywhere
+    val BLUR            = 30.dp            // reserved for real backdrop blur
+}
+val GlassBase          = Color(0xFF1F1F1F)  // tv3 --secondary (12% grey)
+
+val GlassSurfaceLight  = Color(0x70FFFFFF)  // white @ 44%
+val GlassSurfaceMuted  = Color(0x82FFFFFF)  // white @ 51%
+val GlassBorderLight   = Color.Transparent  // border 0%
+val GlassSurfaceDark   = Color(0x701F1F1F)  // 12% grey @ 44%
+val GlassBorderDark    = Color.Transparent  // border 0%
 
 // These two existed but nothing actually read them — every glass surface on
 // Home was hardcoded to the light variant regardless of system theme. Use
