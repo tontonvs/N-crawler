@@ -37,8 +37,11 @@ import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.noven.ncrawler.data.local.DownloadNetwork
+import com.noven.ncrawler.ui.components.GlassModeCard
 import com.noven.ncrawler.ui.components.errorShake
+import com.noven.ncrawler.ui.components.glassCard
 import com.noven.ncrawler.ui.components.staggerIn
+import com.noven.ncrawler.ui.theme.GlassMode
 import com.noven.ncrawler.ui.theme.MontserratFamily
 import com.noven.ncrawler.ui.theme.glassBorder
 import com.noven.ncrawler.ui.theme.glassSurface
@@ -176,6 +179,12 @@ fun SourceSettingsScreen(
                 SectionLabel("Downloads")
             }
             item { NetworkCard(mode = state.networkMode, onChange = vm::setNetworkMode) }
+
+            item {
+                Spacer(Modifier.height(8.dp))
+                SectionLabel("Look")
+            }
+            item { GlassModeCard() }
         }
     }
 }
@@ -210,9 +219,14 @@ private fun NetworkCard(mode: DownloadNetwork, onChange: (DownloadNetwork) -> Un
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(shape)
-            .background(cardFill)
-            .border(1.dp, cardBorder, shape)
+            .then(
+                // Glass mode: the shared glass card. Classic: the original fill + outline.
+                if (GlassMode.enabled) Modifier.glassCard(shape, elevation = 3.dp)
+                else Modifier
+                    .clip(shape)
+                    .background(cardFill)
+                    .border(1.dp, cardBorder, shape)
+            )
             .padding(horizontal = 14.dp, vertical = 12.dp)
     ) {
         Text(
@@ -356,9 +370,13 @@ private fun SourceRow(
             }
             .onSizeChanged { rowHeightPx = it.height }
             .fillMaxWidth()
-            .clip(shape)
-            .background(cardFill)
-            .border(1.dp, cardBorder, shape)
+            .then(
+                if (GlassMode.enabled) Modifier.glassCard(shape, elevation = 3.dp)
+                else Modifier
+                    .clip(shape)
+                    .background(cardFill)
+                    .border(1.dp, cardBorder, shape)
+            )
             // Accent glow on the row you moved: a soft tint under the content and
             // an outline over it, both fading with [glow].
             .drawWithContent {
