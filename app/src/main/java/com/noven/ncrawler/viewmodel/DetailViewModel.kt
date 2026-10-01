@@ -7,6 +7,7 @@ import com.noven.ncrawler.NCrawlerApp
 import com.noven.ncrawler.data.db.DownloadProgress
 import com.noven.ncrawler.data.db.NovelEntity
 import com.noven.ncrawler.data.scraper.ChapterLink
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
@@ -37,6 +38,15 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
     // Drives the bookmark button (Detail had no way to add/remove a library entry).
     private val _inLibrary = MutableStateFlow(false)
     val inLibrary: StateFlow<Boolean> = _inLibrary.asStateFlow()
+
+    // Chapter numbers saved on this device — drives the downloaded ticks in the
+    // chapter list and the "Missing only" option in the download sheet.
+    private val _downloadedNums = MutableStateFlow<Set<Int>>(emptySet())
+    val downloadedNums: StateFlow<Set<Int>> = _downloadedNums.asStateFlow()
+
+    // True while the refresh button's re-fetch is running (button shows a spinner).
+    private val _isRefreshing = MutableStateFlow(false)
+    val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
 
     private val _updateMessage = MutableStateFlow<String?>(null)
     val updateMessage: StateFlow<String?> = _updateMessage.asStateFlow()
@@ -105,7 +115,19 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             repo.isInLibraryFlow(slug).collect { _inLibrary.value = it }
         }
+
+        // The table changes on every saved chapter (several a second while
+        // downloading). conflate() + a short pause keeps the UI to ~1 refresh
+        // a second instead of re-drawing the chapter list for each one.
+        viewModelScope.launch {
+            repo.downloadedNumsFlow(slug).conflate().collect {
+                _downloadedNums.value = it.toHashSet()
+                delay(750)
+            }
+        }
     }
+
+    fun showMessage(message: String) { _updateMessage.value = message }
 
     fun toggleLibrary() {
         viewModelScope.launch {
@@ -157,6 +179,34 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun downloadFirst(count: Int) {
+        viewModelScope.launch {
+            try { repo.queueDownloadFirst(currentSlug, count) }
+            catch (e: Exception) { _updateMessage.value = "Couldn't start download" }
+        }
+    }
+
+    fun downloadMissing() {
+        viewModelScope.launch {
+            try {
+                if (repo.queueDownloadMissing(currentSlug) == 0) {
+                    _updateMessage.value = "Every chapter is already downloaded"
+                }
+            } catch (e: Exception) { _updateMessage.value = "Couldn't start download" }
+        }
+    }
+
+    // Multi-select in the chapter list: any set of chapters, adjacent or not.
+    fun downloadChapters(nums: Set<Int>) {
+        if (nums.isEmpty()) return
+        viewModelScope.launch {
+            try {
+                repo.queueDownloadChapters(currentSlug, nums)
+                _updateMessage.value = "Queued ${nums.size} chapter${if (nums.size == 1) "" else "s"}"
+            } catch (e: Exception) { _updateMessage.value = "Couldn't start download" }
+        }
+    }
+
     fun cancelDownload() {
         viewModelScope.launch {
             repo.cancelDownload(currentSlug)
@@ -181,6 +231,46 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
                 }
             } catch (e: Exception) {
                 _updateMessage.value = "Couldn't check updates"
+            }
+        }
+    }
+
+    // Refresh button: re-fetch the novel's info AND chapter list from the
+    // source, update everything on screen (status, rating, latest chapter,
+    // chapter list), and report what changed. The old button only counted new
+    // chapters and changed nothing else on the page. If the page failed to load
+    // in the first place, this simply loads it again.
+    fun refresh() {
+        val slug = currentSlug
+        if (slug.isBlank() || _isRefreshing.value) return
+        if (_state.value !is DetailUiState.Success) { load(slug); return }
+
+        viewModelScope.launch {
+            _isRefreshing.value = true
+            try {
+                // Re-fetches from the source and saves; also queues new chapters
+                // when this novel already has a download.
+                val newCount = repo.checkForUpdates(slug)
+                val novel    = repo.getCachedNovel(slug)
+                val chapters = repo.getChapterList(slug)   // just saved — served from the DB
+                if (currentSlug == slug) {
+                    (_state.value as? DetailUiState.Success)?.let { cur ->
+                        _state.value = cur.copy(
+                            novel           = novel ?: cur.novel,
+                            chapters        = chapters.ifEmpty { cur.chapters },
+                            chaptersLoading = false
+                        )
+                    }
+                }
+                _updateMessage.value = when {
+                    newCount <= 0                   -> "Up to date"
+                    _downloadProgress.value != null -> "$newCount new · downloading"
+                    else                            -> "$newCount new chapter${if (newCount == 1) "" else "s"}"
+                }
+            } catch (e: Exception) {
+                _updateMessage.value = "Couldn't refresh — check your connection"
+            } finally {
+                _isRefreshing.value = false
             }
         }
     }

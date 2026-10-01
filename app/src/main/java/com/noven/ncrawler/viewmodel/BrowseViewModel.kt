@@ -75,6 +75,14 @@ class BrowseViewModel(app: Application) : AndroidViewModel(app) {
             }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    // Pull-to-refresh: true while a silent reload (content stays on screen) runs.
+    private val _isRefreshing = MutableStateFlow(false)
+    val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
+
+    // One-shot "refresh failed" signal for a toast (state stays Success).
+    private val _refreshFailed = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val refreshFailed: SharedFlow<Unit> = _refreshFailed.asSharedFlow()
+
     private var searchJob: Job? = null
     private var homepageJobs: List<Job> = emptyList()
 
@@ -85,15 +93,24 @@ class BrowseViewModel(app: Application) : AndroidViewModel(app) {
         observeSourceChanges()
     }
 
-    // FIX: Home only loaded once per app session, so changing the top-priority
-    // source in Settings left the old source's feed on screen until a restart.
+    // Auto-refresh after switching source. Home is fed by the top source only,
+    // so it reloads (with the skeleton — it's a different feed) when that
+    // changes; search spans every enabled source, so ANY change re-runs an
+    // active search instead of leaving the old source's results on screen.
     private fun observeSourceChanges() {
         viewModelScope.launch {
+            var lastTop = repo.sourcePreferences().getPriorityOrder().firstOrNull()
             repo.sourcePreferences().orderFlow()
-                .map { it.firstOrNull() }        // Home is fed by the top source only
                 .distinctUntilChanged()
                 .drop(1)                         // the initial value is loaded by init
-                .collect { loadHomepage() }
+                .collect { order ->
+                    if (order.firstOrNull() != lastTop) {
+                        lastTop = order.firstOrNull()
+                        loadHomepage()
+                    }
+                    val q = _query.value
+                    if (q.isNotBlank()) onQueryChange(q)
+                }
         }
     }
 
@@ -110,13 +127,19 @@ class BrowseViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun loadHomepage() {
+    fun loadHomepage() = load(silent = false)
+
+    // Pull-to-refresh: reload both rows but keep what's on screen meanwhile.
+    fun refresh() = load(silent = true)
+
+    private fun load(silent: Boolean) {
         // A newer load supersedes any still-running one, so a slow response from
         // the previous source can't overwrite the new source's feed.
         homepageJobs.forEach { it.cancel() }
+        if (!silent) _isRefreshing.value = false
         val latestJob = viewModelScope.launch {
-            Log.d(TAG, "loadHomepage() started")
-            _browseState.value = BrowseUiState.Loading
+            Log.d(TAG, "loadHomepage(silent=$silent) started")
+            if (!silent) _browseState.value = BrowseUiState.Loading
             try {
                 Log.d(TAG, "Calling repo.fetchHomepage()...")
                 val novels = repo.fetchHomepage()
@@ -131,12 +154,13 @@ class BrowseViewModel(app: Application) : AndroidViewModel(app) {
                 throw e   // superseded by a newer load — must not surface as an error
             } catch (e: Exception) {
                 Log.e(TAG, "fetchHomepage() FAILED: ${e::class.simpleName}: ${e.message}", e)
-                _browseState.value = BrowseUiState.Error(friendlyError(e, "Couldn't load"))
+                if (silent && _browseState.value is BrowseUiState.Success) _refreshFailed.tryEmit(Unit)
+                else _browseState.value = BrowseUiState.Error(friendlyError(e, "Couldn't load"))
             }
         }
         val popularJob = viewModelScope.launch {
             Log.d(TAG, "loadPopular() started")
-            _popularState.value = BrowseUiState.Loading
+            if (!silent) _popularState.value = BrowseUiState.Loading
             try {
                 val novels = repo.fetchPopular()
                 Log.d(TAG, "fetchPopular() returned ${novels.size} novels")
@@ -146,10 +170,22 @@ class BrowseViewModel(app: Application) : AndroidViewModel(app) {
                 throw e
             } catch (e: Exception) {
                 Log.e(TAG, "fetchPopular() FAILED: ${e.message}", e)
-                _popularState.value = BrowseUiState.Error(friendlyError(e, "Couldn't load"))
+                if (!(silent && _popularState.value is BrowseUiState.Success)) {
+                    _popularState.value = BrowseUiState.Error(friendlyError(e, "Couldn't load"))
+                }
             }
         }
-        homepageJobs = listOf(latestJob, popularJob)
+        val jobs = listOf(latestJob, popularJob)
+        homepageJobs = jobs
+
+        if (silent) {
+            _isRefreshing.value = true
+            viewModelScope.launch {
+                jobs.joinAll()
+                // Only the newest load may switch the indicator off.
+                if (homepageJobs === jobs) _isRefreshing.value = false
+            }
+        }
     }
 
     fun onQueryChange(q: String) {

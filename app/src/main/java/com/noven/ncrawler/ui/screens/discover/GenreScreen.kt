@@ -43,6 +43,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.noven.ncrawler.ui.components.AppPullToRefresh
 import com.noven.ncrawler.ui.components.GlassCardRadius
 import com.noven.ncrawler.ui.components.Motion
 import com.noven.ncrawler.ui.components.NovelCardCoverAspect
@@ -124,6 +125,13 @@ fun GenreScreen(
             else                                     -> GenrePhase.CONTENT
         }
 
+        // Pull down to reload page 1 (the list stays visible while it loads).
+        AppPullToRefresh(
+            isRefreshing = state.isRefreshing,
+            onRefresh    = vm::refresh,
+            failures     = vm.refreshFailed,
+            modifier     = Modifier.fillMaxSize()
+        ) {
         Crossfade(
             targetState   = phase,
             modifier      = Modifier.fillMaxSize(),
@@ -193,6 +201,7 @@ fun GenreScreen(
                     }
                 }
             }
+        }
         }
     }
 }

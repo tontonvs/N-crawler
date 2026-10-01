@@ -1,13 +1,9 @@
 package com.noven.ncrawler.ui.screens.detail
 
-import androidx.compose.runtime.compositionLocalOf
-import androidx.compose.runtime.CompositionLocalProvider
-import dev.chrisbanes.haze.HazeState
-import com.noven.ncrawler.ui.theme.GlassMode
-import com.noven.ncrawler.ui.components.glassSource
-import com.noven.ncrawler.ui.components.glassBlur
 import android.graphics.drawable.BitmapDrawable
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
@@ -20,6 +16,8 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -36,6 +34,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -47,11 +46,17 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.DownloadForOffline
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.PauseCircle
@@ -91,6 +96,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
@@ -101,6 +107,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -118,10 +125,6 @@ import com.noven.ncrawler.data.local.DominantColorStore
 import com.noven.ncrawler.data.scraper.ChapterLink
 import com.noven.ncrawler.ui.components.Motion
 import com.noven.ncrawler.ui.components.errorShake
-import com.noven.ncrawler.ui.theme.GlassSurfaceDark
-import com.noven.ncrawler.ui.theme.GlassSpec
-import com.noven.ncrawler.ui.theme.GlassBase
-import com.noven.ncrawler.ui.components.glassFill
 import com.noven.ncrawler.ui.components.pressScale
 import com.noven.ncrawler.ui.components.pressable
 import com.noven.ncrawler.ui.theme.MontserratFamily
@@ -203,10 +206,6 @@ private fun StarRating(
 // reader's solid page, so a dark base tint sits under the 13% white to keep it
 // visible on bright covers.
 
-// Blur layer for the top-row circle buttons (Glass mode). Provided only to the
-// top row, which is a sibling of the cover layer — never to its descendants.
-private val LocalDetailHaze = compositionLocalOf<HazeState?> { null }
-
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ReaderCircleBtn(
@@ -222,27 +221,15 @@ private fun ReaderCircleBtn(
     // CHANGE (motion): press-in scale (90ms, no bounce) instead of a ripple —
     // same feel as the floating nav. The scale sits outside the clip so the
     // whole circle shrinks.
-    // Glass mode: real 30dp blur over the cover (when a blur layer is provided
-    // by the top row) tinted with the 44% glass fill; otherwise just the fill.
-    // Classic: the original dark scrim (black 40% + white 13%).
     val source = remember { MutableInteractionSource() }
-    val haze   = LocalDetailHaze.current
-    val glass  = GlassMode.enabled
     Box(
         contentAlignment = Alignment.Center,
         modifier         = Modifier
             .size(size)
             .pressScale(source, 0.92f)
             .clip(CircleShape)
-            .then(
-                when {
-                    !glass        -> Modifier
-                        .background(Color.Black.copy(alpha = 0.40f))
-                        .background(Color.White.copy(alpha = 0.13f))
-                    haze != null  -> Modifier.glassBlur(haze, CircleShape, GlassSurfaceDark)
-                    else          -> Modifier.background(GlassSurfaceDark)
-                }
-            )
+            .background(Color.Black.copy(alpha = 0.40f))
+            .background(Color.White.copy(alpha = 0.13f))
             .combinedClickable(
                 interactionSource = source,
                 indication        = null,
@@ -296,14 +283,18 @@ private fun DownloadCircleBtn(
     onStart: () -> Unit,
     onPause: () -> Unit,
     onManage: () -> Unit,
-    // CHANGE (partial downloads): long-press opens the download-options
-    // sheet (all / last N / by volume / custom range) regardless of the
-    // current status — lets you top up an already-partial download too.
+    // CHANGE (chapter picker): tapping while nothing is downloaded or queued
+    // now opens the options sheet straight away — it used to be reachable only
+    // by long-pressing, which nobody found.
+    onOpenOptions: () -> Unit,
+    // Long-press opens the same sheet in every state — lets you top up an
+    // already-partial download too.
     onLongPress: () -> Unit,
 ) {
     val status = progress?.status
     val action = when (status) {
-        null, DownloadStatus.PAUSED, DownloadStatus.ERROR -> onStart
+        null -> onOpenOptions
+        DownloadStatus.PAUSED, DownloadStatus.ERROR -> onStart
         DownloadStatus.QUEUED, DownloadStatus.DOWNLOADING  -> onPause
         DownloadStatus.COMPLETE                            -> onManage
     }
@@ -365,7 +356,7 @@ private fun DownloadCircleBtn(
                 null -> {
                     Icon(
                         Icons.Filled.DownloadForOffline,
-                        contentDescription = "Download chapters — hold for options",
+                        contentDescription = "Download chapters",
                         tint               = Color.White.copy(alpha = 0.9f),
                         modifier           = Modifier.size(24.dp),
                     )
@@ -376,7 +367,7 @@ private fun DownloadCircleBtn(
 }
 
 // ── Download options sheet (partial downloads) ──────────────────────────────
-// CHANGE (partial downloads): opened by long-pressing the download button.
+// CHANGE (partial downloads): opened by tapping (or long-pressing) the download button.
 // Offers "All", a few "Last N" presets, synthetic volume chips (see note
 // below — the sources here don't publish real volume boundaries, so these
 // are fixed 100-chapter blocks, not scraped structure), and a custom range
@@ -389,16 +380,20 @@ private const val SYNTHETIC_VOLUME_SIZE = 100
 @Composable
 private fun DownloadOptionsSheet(
     chapters: List<ChapterLink>,
+    downloaded: Set<Int>,
     accent: Color,
     onDismiss: () -> Unit,
     onDownloadAll: () -> Unit,
+    onDownloadFirst: (count: Int) -> Unit,
     onDownloadLast: (count: Int) -> Unit,
+    onDownloadMissing: () -> Unit,
     onDownloadRange: (start: Int, end: Int) -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val minNum = chapters.minOfOrNull { it.num } ?: 1
     val maxNum = chapters.maxOfOrNull { it.num } ?: 1
     val total  = chapters.size
+    val missing = remember(chapters, downloaded) { chapters.count { it.num !in downloaded } }
 
     val volumes = remember(minNum, maxNum) {
         (minNum..maxNum step SYNTHETIC_VOLUME_SIZE).mapIndexed { i, start ->
@@ -407,9 +402,16 @@ private fun DownloadOptionsSheet(
         }
     }
 
-    var rangeSelection by remember(minNum, maxNum) {
-        mutableStateOf(minNum.toFloat()..maxNum.toFloat())
+    // Custom range: typed From / To boxes, mirrored by the slider (either can
+    // drive the other). Text state, so half-typed numbers don't fight the user.
+    var fromText by remember(minNum, maxNum) { mutableStateOf(minNum.toString()) }
+    var toText   by remember(minNum, maxNum) { mutableStateOf(maxNum.toString()) }
+    val from = fromText.toIntOrNull()
+    val to   = toText.toIntOrNull()
+    val inRange = remember(chapters, from, to) {
+        if (from != null && to != null && from <= to) chapters.count { it.num in from..to } else 0
     }
+    val canDownloadRange = inRange > 0
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -420,6 +422,8 @@ private fun DownloadOptionsSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .imePadding()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 28.dp),
         ) {
@@ -432,17 +436,23 @@ private fun DownloadOptionsSheet(
             )
             Spacer(Modifier.height(2.dp))
             Text(
-                "$total chapters",
+                if (downloaded.isEmpty()) "$total chapters" else "$total chapters · ${downloaded.size} downloaded",
                 color      = Color.White.copy(alpha = 0.55f),
                 fontFamily = MontserratFamily,
                 fontSize   = 13.sp,
             )
             Spacer(Modifier.height(18.dp))
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                PresetChip("All ($total)", accent) { onDownloadAll(); onDismiss() }
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                item { PresetChip("All ($total)", accent) { onDownloadAll(); onDismiss() } }
+                if (missing in 1 until total) {
+                    item { PresetChip("Missing ($missing)", accent) { onDownloadMissing(); onDismiss() } }
+                }
                 listOf(50, 100, 200).filter { it < total }.forEach { n ->
-                    PresetChip("Last $n", accent) { onDownloadLast(n); onDismiss() }
+                    item { PresetChip("First $n", accent) { onDownloadFirst(n); onDismiss() } }
+                }
+                listOf(50, 100, 200).filter { it < total }.forEach { n ->
+                    item { PresetChip("Last $n", accent) { onDownloadLast(n); onDismiss() } }
                 }
             }
 
@@ -473,50 +483,100 @@ private fun DownloadOptionsSheet(
                 fontSize   = 11.sp,
                 fontWeight = FontWeight.SemiBold,
             )
-            Spacer(Modifier.height(4.dp))
-            val rangeChapterCount = rangeSelection.endInclusive.roundToInt() - rangeSelection.start.roundToInt() + 1
-            Text(
-                "Ch. ${rangeSelection.start.roundToInt()}–${rangeSelection.endInclusive.roundToInt()} · $rangeChapterCount",
-                color      = Color.White,
-                fontFamily = MontserratFamily,
-                fontSize   = 14.sp,
-                fontWeight = FontWeight.SemiBold,
-            )
-            RangeSlider(
-                value         = rangeSelection,
-                onValueChange = { rangeSelection = it },
-                valueRange    = minNum.toFloat()..maxNum.toFloat(),
-                colors = SliderDefaults.colors(
-                    thumbColor         = accent,
-                    activeTrackColor   = accent,
-                    inactiveTrackColor = Color.White.copy(alpha = 0.15f),
-                ),
-            )
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                NumberField("FROM", fromText, { fromText = it }, accent, Modifier.weight(1f))
+                NumberField("TO",   toText,   { toText = it },   accent, Modifier.weight(1f))
+            }
+            if (maxNum > minNum) {
+                val sliderStart = (from ?: minNum).coerceIn(minNum, maxNum).toFloat()
+                val sliderEnd   = (to ?: maxNum).coerceIn(minNum, maxNum).toFloat().coerceAtLeast(sliderStart)
+                RangeSlider(
+                    value         = sliderStart..sliderEnd,
+                    onValueChange = {
+                        fromText = it.start.roundToInt().toString()
+                        toText   = it.endInclusive.roundToInt().toString()
+                    },
+                    valueRange    = minNum.toFloat()..maxNum.toFloat(),
+                    colors = SliderDefaults.colors(
+                        thumbColor         = accent,
+                        activeTrackColor   = accent,
+                        inactiveTrackColor = Color.White.copy(alpha = 0.15f),
+                    ),
+                )
+            } else {
+                Spacer(Modifier.height(12.dp))
+            }
             Spacer(Modifier.height(6.dp))
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(24.dp))
-                    .background(accent.copy(alpha = 0.9f))
-                    .clickable {
-                        onDownloadRange(
-                            rangeSelection.start.roundToInt(),
-                            rangeSelection.endInclusive.roundToInt(),
-                        )
+                    .background(accent.copy(alpha = if (canDownloadRange) 0.9f else 0.25f))
+                    .clickable(enabled = canDownloadRange) {
+                        onDownloadRange(from ?: minNum, to ?: maxNum)
                         onDismiss()
                     }
                     .padding(vertical = 14.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    "Download selected",
+                    if (canDownloadRange) "Download $inRange chapter${if (inRange == 1) "" else "s"}" else "Enter a valid range",
                     color      = Color.White,
                     fontFamily = MontserratFamily,
                     fontWeight = FontWeight.SemiBold,
                     fontSize   = 15.sp,
                 )
             }
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "Tip: long-press a chapter in the list to pick specific chapters.",
+                color      = Color.White.copy(alpha = 0.45f),
+                fontFamily = MontserratFamily,
+                fontSize   = 12.sp,
+            )
         }
+    }
+}
+
+// Digits-only box for the custom range (BasicTextField, so it doesn't depend
+// on which Material 3 text-field APIs this project's version has).
+@Composable
+private fun NumberField(
+    label: String,
+    value: String,
+    onChange: (String) -> Unit,
+    accent: Color,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier) {
+        Text(
+            label,
+            color      = Color.White.copy(alpha = 0.5f),
+            fontFamily = MontserratFamily,
+            fontSize   = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Spacer(Modifier.height(4.dp))
+        BasicTextField(
+            value           = value,
+            onValueChange   = { new -> if (new.length <= 6 && new.all { it.isDigit() }) onChange(new) },
+            singleLine      = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            textStyle       = TextStyle(
+                color      = Color.White,
+                fontFamily = MontserratFamily,
+                fontSize   = 16.sp,
+                fontWeight = FontWeight.SemiBold,
+            ),
+            cursorBrush     = SolidColor(accent),
+            modifier        = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(Color.White.copy(alpha = 0.08f))
+                .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(12.dp))
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+        )
     }
 }
 
@@ -524,13 +584,9 @@ private fun DownloadOptionsSheet(
 private fun PresetChip(label: String, accent: Color, onClick: () -> Unit) {
     Box(
         modifier = Modifier
-            .then(
-                if (GlassMode.enabled) Modifier.glassFill(RoundedCornerShape(20.dp), dark = true)
-                else Modifier
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(Color.White.copy(alpha = 0.08f))
-                    .border(1.dp, accent.copy(alpha = 0.5f), RoundedCornerShape(20.dp))
-            )
+            .clip(RoundedCornerShape(20.dp))
+            .background(Color.White.copy(alpha = 0.08f))
+            .border(1.dp, accent.copy(alpha = 0.5f), RoundedCornerShape(20.dp))
             .clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 9.dp),
     ) {
@@ -588,22 +644,56 @@ private fun MetaSeparator() {
 
 // ── Chapter row ───────────────────────────────────────────────────────────────
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ChapterRow(chapter: ChapterLink, accent: Color, onClick: () -> Unit) {
+private fun ChapterRow(
+    chapter: ChapterLink,
+    accent: Color,
+    downloaded: Boolean,
+    selected: Boolean,
+    selecting: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+) {
     Row(
         modifier          = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .background(if (selected) accent.copy(alpha = 0.16f) else Color.Transparent)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(vertical = 14.dp, horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
-            modifier = Modifier
-                .size(7.dp)
-                .clip(CircleShape)
-                .background(accent.copy(alpha = 0.75f)),
-        )
-        Spacer(Modifier.width(12.dp))
+        // Leading marker: check when selected, empty ring while picking,
+        // a tick when the chapter is saved on this device, else the usual dot.
+        Box(modifier = Modifier.size(20.dp), contentAlignment = Alignment.Center) {
+            when {
+                selected  -> Icon(
+                    Icons.Filled.CheckCircle,
+                    contentDescription = "Selected",
+                    tint     = accent,
+                    modifier = Modifier.size(20.dp),
+                )
+                selecting -> Box(
+                    modifier = Modifier
+                        .size(16.dp)
+                        .clip(CircleShape)
+                        .border(1.5.dp, Color.White.copy(alpha = 0.40f), CircleShape),
+                )
+                downloaded -> Icon(
+                    Icons.Filled.DownloadDone,
+                    contentDescription = "Downloaded",
+                    tint     = accent,
+                    modifier = Modifier.size(16.dp),
+                )
+                else -> Box(
+                    modifier = Modifier
+                        .size(7.dp)
+                        .clip(CircleShape)
+                        .background(accent.copy(alpha = 0.75f)),
+                )
+            }
+        }
+        Spacer(Modifier.width(10.dp))
         Text(
             text       = chapter.title.ifBlank { "Chapter ${chapter.num}" },
             color      = Color.White.copy(alpha = 0.90f),
@@ -626,6 +716,79 @@ private fun ChapterRow(chapter: ChapterLink, accent: Color, onClick: () -> Unit)
         color     = Color.White.copy(alpha = 0.07f),
         thickness = 0.5.dp,
     )
+}
+
+// Bottom bar shown while chapters are selected.
+@Composable
+private fun SelectionBar(
+    count: Int,
+    allSelected: Boolean,
+    accent: Color,
+    onClear: () -> Unit,
+    onSelectAll: () -> Unit,
+    onDownload: () -> Unit,
+) {
+    val shape = RoundedCornerShape(20.dp)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 10.dp)
+            .clip(shape)
+            .background(Color(0xFF10141F).copy(alpha = 0.96f))
+            .border(1.dp, Color.White.copy(alpha = 0.10f), shape)
+            .padding(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier.size(40.dp).clip(CircleShape).clickable(onClick = onClear),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                Icons.Filled.Close,
+                contentDescription = "Clear selection",
+                tint     = Color.White.copy(alpha = 0.9f),
+                modifier = Modifier.size(22.dp),
+            )
+        }
+        Spacer(Modifier.width(6.dp))
+        Text(
+            "$count selected",
+            color      = Color.White,
+            fontFamily = MontserratFamily,
+            fontSize   = 15.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier   = Modifier.weight(1f),
+        )
+        if (!allSelected) {
+            Text(
+                "Select all",
+                color      = accent,
+                fontFamily = MontserratFamily,
+                fontSize   = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier   = Modifier
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable(onClick = onSelectAll)
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+            )
+        }
+        Spacer(Modifier.width(4.dp))
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(16.dp))
+                .background(accent.copy(alpha = 0.9f))
+                .clickable(onClick = onDownload)
+                .padding(horizontal = 18.dp, vertical = 11.dp),
+        ) {
+            Text(
+                "Download",
+                color      = Color.White,
+                fontFamily = MontserratFamily,
+                fontSize   = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+    }
 }
 
 // ── Reveal on scroll ──────────────────────────────────────────────────────────
@@ -740,6 +903,7 @@ fun DetailScreen(
     val state           by vm.state.collectAsStateWithLifecycle()
     val downloadProgress by vm.downloadProgress.collectAsStateWithLifecycle()
     val inLibrary       by vm.inLibrary.collectAsStateWithLifecycle()
+    val refreshing      by vm.isRefreshing.collectAsStateWithLifecycle()
     val updateMessage   by vm.updateMessage.collectAsStateWithLifecycle()
 
     // CHANGE (partial downloads): only non-null once the novel and its
@@ -747,6 +911,34 @@ fun DetailScreen(
     // the chapter list (for volume/range bounds) so it can only open then.
     val successState = state as? DetailUiState.Success
     var showDownloadSheet by remember { mutableStateOf(false) }
+    val downloadedNums by vm.downloadedNums.collectAsStateWithLifecycle()
+
+    // Multi-select in the chapter list. Long-press a chapter to start; tap to
+    // toggle; long-press another to select everything between the two.
+    var selected by remember { mutableStateOf(setOf<Int>()) }
+    var anchor   by remember { mutableStateOf<Int?>(null) }
+    val selecting = selected.isNotEmpty()
+    BackHandler(enabled = selecting) { selected = emptySet(); anchor = null }
+
+    fun toggleChapter(num: Int) {
+        selected = if (num in selected) selected - num else selected + num
+        anchor   = if (selected.isEmpty()) null else num
+    }
+    fun longPressChapter(num: Int) {
+        val a = anchor
+        selected = if (selected.isEmpty() || a == null) {
+            setOf(num)
+        } else {
+            val lo = minOf(a, num)
+            val hi = maxOf(a, num)
+            selected + successState?.chapters.orEmpty().filter { it.num in lo..hi }.map { it.num }
+        }
+        anchor = num
+    }
+    val openDownloadSheet: () -> Unit = {
+        if (successState != null && !successState.chaptersLoading) showDownloadSheet = true
+        else vm.showMessage("Still loading chapters")
+    }
 
     val context = LocalContext.current
     val snackbarHost = remember { SnackbarHostState() }
@@ -761,8 +953,6 @@ fun DetailScreen(
     val bgTop  = dominantColor ?: FallbackTop
     val accent = vibrantColor  ?: FallbackAccent
 
-    val detailHaze = remember { HazeState() }
-
     Box(modifier = Modifier.fillMaxSize()) {
 
         // CHANGE (motion): Loading -> Error / Content cross-fades (240ms) instead of
@@ -775,7 +965,7 @@ fun DetailScreen(
         }
         Crossfade(
             targetState   = phase,
-            modifier      = Modifier.fillMaxSize().glassSource(detailHaze),   // Glass mode: the layer the top buttons blur
+            modifier      = Modifier.fillMaxSize(),
             animationSpec = tween(Motion.BASE_MS)
         ) { p ->
         when (p) {
@@ -811,10 +1001,8 @@ fun DetailScreen(
                         // Reader-style pill: soft filled, no border
                         Box(
                             modifier         = Modifier
-                                .then(
-                                    if (GlassMode.enabled) Modifier.glassFill(RoundedCornerShape(24.dp), dark = true)
-                                    else Modifier.clip(RoundedCornerShape(24.dp)).background(Color.White.copy(alpha = 0.13f))
-                                )
+                                .clip(RoundedCornerShape(24.dp))
+                                .background(Color.White.copy(alpha = 0.13f))
                                 .clickable { vm.load(slug) }
                                 .padding(horizontal = 28.dp, vertical = 12.dp),
                         ) {
@@ -839,6 +1027,11 @@ fun DetailScreen(
                     bgTop          = bgTop,
                     accent         = accent,
                     onReadChapter  = onReadChapter,
+                    downloaded         = downloadedNums,
+                    selected           = selected,
+                    selecting          = selecting,
+                    onChapterClick     = { num -> if (selecting) toggleChapter(num) else onReadChapter(num) },
+                    onChapterLongClick = { num -> longPressChapter(num) },
                     onCoverLoaded  = { drawable ->
                         val bmp = (drawable as? BitmapDrawable)?.bitmap ?: return@CinematicDetail
                         // Extract palette off main thread — guarded: a bad
@@ -871,7 +1064,6 @@ fun DetailScreen(
 
         // ── Floating top row: back + download + refresh — always on top ──
         // Reader-style 48dp circles with 24dp icons (same as the reader header).
-        CompositionLocalProvider(LocalDetailHaze provides detailHaze) {
         Row(
             modifier              = Modifier
                 .fillMaxWidth()
@@ -898,9 +1090,8 @@ fun DetailScreen(
                     // metadata loads, before chapters have — also require
                     // !chaptersLoading so this can't open the range-slider
                     // sheet against an empty list during that window.
-                    onLongPress = {
-                        if (successState != null && !successState.chaptersLoading) showDownloadSheet = true
-                    },
+                    onOpenOptions = openDownloadSheet,
+                    onLongPress   = openDownloadSheet,
                 )
                 // Library membership — there was no way to add/remove a novel from here.
                 ReaderCircleBtn(onClick = vm::toggleLibrary) {
@@ -911,22 +1102,54 @@ fun DetailScreen(
                         modifier           = Modifier.size(24.dp),
                     )
                 }
-                ReaderCircleBtn(onClick = vm::checkForUpdates) {
-                    Icon(
-                        Icons.Filled.Refresh,
-                        contentDescription = "Check updates",
-                        tint               = Color.White.copy(alpha = 0.9f),
-                        modifier           = Modifier.size(24.dp),
-                    )
+                // Refresh: re-fetches the info and chapter list from the source and
+                // updates the whole page (spinner while it runs).
+                ReaderCircleBtn(onClick = vm::refresh) {
+                    if (refreshing) {
+                        CircularProgressIndicator(
+                            modifier    = Modifier.size(20.dp),
+                            strokeWidth = 2.dp,
+                            color       = Color.White.copy(alpha = 0.9f),
+                        )
+                    } else {
+                        Icon(
+                            Icons.Filled.Refresh,
+                            contentDescription = "Refresh",
+                            tint               = Color.White.copy(alpha = 0.9f),
+                            modifier           = Modifier.size(24.dp),
+                        )
+                    }
                 }
             }
         }
+
+        AnimatedVisibility(
+            visible  = selecting,
+            enter    = slideInVertically(tween(200)) { it } + fadeIn(tween(200)),
+            exit     = slideOutVertically(tween(150)) { it } + fadeOut(tween(150)),
+            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding(),
+        ) {
+            SelectionBar(
+                count       = selected.size,
+                allSelected = successState != null && selected.size >= successState.chapters.size,
+                accent      = accent,
+                onClear     = { selected = emptySet(); anchor = null },
+                onSelectAll = { selected = successState?.chapters.orEmpty().map { it.num }.toSet() },
+                onDownload  = {
+                    vm.downloadChapters(selected)
+                    selected = emptySet()
+                    anchor   = null
+                },
+            )
         }
 
         // Snackbar — custom content so its text is Montserrat too
         SnackbarHost(
             hostState = snackbarHost,
-            modifier  = Modifier.align(Alignment.BottomCenter).navigationBarsPadding(),
+            modifier  = Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(bottom = if (selecting) 76.dp else 0.dp),   // keep clear of the selection bar
         ) { data ->
             Snackbar(modifier = Modifier.padding(12.dp)) {
                 Text(
@@ -942,12 +1165,15 @@ fun DetailScreen(
         // be requested before the chapter list has actually loaded.
         if (showDownloadSheet && successState != null && !successState.chaptersLoading) {
             DownloadOptionsSheet(
-                chapters        = successState.chapters,
-                accent          = accent,
-                onDismiss       = { showDownloadSheet = false },
-                onDownloadAll   = { vm.downloadAll() },
-                onDownloadLast  = { count -> vm.downloadLast(count) },
-                onDownloadRange = { start, end -> vm.downloadRange(start, end) },
+                chapters          = successState.chapters,
+                downloaded        = downloadedNums,
+                accent            = accent,
+                onDismiss         = { showDownloadSheet = false },
+                onDownloadAll     = { vm.downloadAll() },
+                onDownloadFirst   = { count -> vm.downloadFirst(count) },
+                onDownloadLast    = { count -> vm.downloadLast(count) },
+                onDownloadMissing = { vm.downloadMissing() },
+                onDownloadRange   = { start, end -> vm.downloadRange(start, end) },
             )
         }
     }
@@ -964,10 +1190,17 @@ private fun CinematicDetail(
     bgTop: Color,
     accent: Color,
     onReadChapter: (Int) -> Unit,
+    downloaded: Set<Int>,
+    selected: Set<Int>,
+    selecting: Boolean,
+    onChapterClick: (Int) -> Unit,
+    onChapterLongClick: (Int) -> Unit,
     onCoverLoaded: (android.graphics.drawable.Drawable) -> Unit,
 ) {
     val listState = rememberLazyListState()
     var showAllChapters by remember { mutableStateOf(false) }
+    // Picking chapters needs the whole list, not the 10-row preview.
+    LaunchedEffect(selecting) { if (selecting) showAllChapters = true }
     val PREVIEW_COUNT = 10
 
     // Scroll hint: visible for 2s, then it fades away — or sooner, the moment
@@ -1193,18 +1426,12 @@ private fun CinematicDetail(
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            // Glass mode: nav-strength fill (51%), no border.
-                            // Classic: black 50% + hairline.
                             .clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
-                            .then(
-                                if (GlassMode.enabled) Modifier.background(GlassBase.copy(alpha = GlassSpec.NAV_FILL))
-                                else Modifier
-                                    .background(Color.Black.copy(alpha = 0.50f))
-                                    .border(
-                                        width = 1.dp,
-                                        color = Color.White.copy(alpha = 0.08f),
-                                        shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
-                                    )
+                            .background(Color.Black.copy(alpha = 0.50f))
+                            .border(
+                                width  = 1.dp,
+                                color  = Color.White.copy(alpha = 0.08f),
+                                shape  = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
                             ),
                     ) {
                         // Header
@@ -1273,7 +1500,11 @@ private fun CinematicDetail(
                             ChapterRow(
                                 chapter     = chapter,
                                 accent      = accent,
-                                onClick     = { onReadChapter(chapter.num) },
+                                downloaded  = chapter.num in downloaded,
+                                selected    = chapter.num in selected,
+                                selecting   = selecting,
+                                onClick     = { onChapterClick(chapter.num) },
+                                onLongClick = { onChapterLongClick(chapter.num) },
                             )
                         }
 
@@ -1298,10 +1529,8 @@ private fun CinematicDetail(
                                 Box(
                                     modifier = Modifier
                                         .padding(bottom = 14.dp)
-                                        .then(
-                                            if (GlassMode.enabled) Modifier.glassFill(RoundedCornerShape(24.dp), dark = true)
-                                            else Modifier.clip(RoundedCornerShape(24.dp)).background(Color.White.copy(alpha = 0.13f))
-                                        )
+                                        .clip(RoundedCornerShape(24.dp))
+                                        .background(Color.White.copy(alpha = 0.13f))
                                         .clickable { showAllChapters = true }
                                         .padding(horizontal = 22.dp, vertical = 10.dp),
                                 ) {
@@ -1321,7 +1550,7 @@ private fun CinematicDetail(
                 }
             }
 
-            item { Spacer(Modifier.height(48.dp)) }
+            item { Spacer(Modifier.height(if (selecting) 120.dp else 48.dp)) }
         }
 
         // Scroll hint — bottom centre, over the content

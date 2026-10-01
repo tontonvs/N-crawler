@@ -54,6 +54,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.noven.ncrawler.data.db.NovelEntity
 import androidx.core.graphics.ColorUtils
 import com.noven.ncrawler.data.local.DominantColorStore
+import com.noven.ncrawler.ui.components.AppPullToRefresh
 import com.noven.ncrawler.ui.components.CoverImage
 import com.noven.ncrawler.ui.components.GenreGlassTile
 import com.noven.ncrawler.ui.components.Motion
@@ -95,6 +96,7 @@ fun BrowseScreen(
     val popularState      by vm.popularState.collectAsStateWithLifecycle()
     val continueReading  by vm.continueReading.collectAsStateWithLifecycle()
     val recentlyReading  by vm.recentlyReading.collectAsStateWithLifecycle()
+    val isRefreshing     by vm.isRefreshing.collectAsStateWithLifecycle()
 
     // Light background fills the entire screen
     Box(
@@ -117,17 +119,27 @@ fun BrowseScreen(
 
             // Search lives exclusively in the SearchOverlay (opened from the
             // search FAB in the floating nav) — the homepage itself is browse-only, no inline bar.
-            BrowseContent(
-                state             = browseState,
-                popularState      = popularState,
-                onNovelClick      = onNovelClick,
-                onRetry           = vm::loadHomepage,
-                onGenreClick      = onGenreClick ?: {},
-                onDiscoverClick   = onDiscoverClick,
-                continueReading   = continueReading,
-                onContinueReading = onContinueReading,
-                recentlyReading   = recentlyReading
-            )
+            // Pull down to reload the feed. The current rows stay on screen while
+            // it loads (a silent refresh), unlike Retry / a source switch, which
+            // show the skeleton.
+            AppPullToRefresh(
+                isRefreshing = isRefreshing,
+                onRefresh    = vm::refresh,
+                failures     = vm.refreshFailed,
+                modifier     = Modifier.weight(1f)
+            ) {
+                BrowseContent(
+                    state             = browseState,
+                    popularState      = popularState,
+                    onNovelClick      = onNovelClick,
+                    onRetry           = vm::loadHomepage,
+                    onGenreClick      = onGenreClick ?: {},
+                    onDiscoverClick   = onDiscoverClick,
+                    continueReading   = continueReading,
+                    onContinueReading = onContinueReading,
+                    recentlyReading   = recentlyReading
+                )
+            }
         }
     }
 }
@@ -1256,7 +1268,7 @@ private fun GenreChip(name: String, isActive: Boolean, onClick: () -> Unit) {
             .height(50.dp)
             .clip(RoundedCornerShape(25.dp))
             .background(bg)
-            .border(1.dp, border, RoundedCornerShape(25.dp))   // transparent in Glass mode
+            .border(1.dp, border, RoundedCornerShape(25.dp))
             .clickable(onClick = onClick)
             .padding(horizontal = 18.dp),
         contentAlignment = Alignment.Center

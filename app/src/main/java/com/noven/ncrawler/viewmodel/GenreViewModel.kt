@@ -6,9 +6,15 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.noven.ncrawler.NCrawlerApp
 import com.noven.ncrawler.data.db.NovelEntity
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 
 data class GenreUiState(
@@ -17,6 +23,7 @@ data class GenreUiState(
     val page: Int = 1,
     val isLoading: Boolean = false,
     val isLoadingMore: Boolean = false,
+    val isRefreshing: Boolean = false,   // pull-to-refresh — list stays on screen
     val hasMore: Boolean = true,
     val error: String? = null
 )
@@ -35,6 +42,51 @@ class GenreViewModel(app: Application) : AndroidViewModel(app) {
     val state: StateFlow<GenreUiState> = _state.asStateFlow()
 
     private var currentGenre = ""
+
+    private val _refreshFailed = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val refreshFailed: SharedFlow<Unit> = _refreshFailed.asSharedFlow()
+
+    init {
+        // Auto-refresh after switching source: a genre list belongs to one
+        // source, so reload it when the source order changes.
+        viewModelScope.launch {
+            repo.sourcePreferences().orderFlow()
+                .distinctUntilChanged()
+                .drop(1)
+                .collect {
+                    val genre = currentGenre
+                    if (genre.isNotBlank()) {
+                        currentGenre = ""     // defeat load()'s "already loaded" early-return
+                        load(genre)
+                    }
+                }
+        }
+    }
+
+    // Pull-to-refresh: re-fetch page 1 but keep the current list visible.
+    fun refresh() {
+        val genre = currentGenre
+        if (genre.isBlank() || _state.value.isLoading || _state.value.isRefreshing) return
+        viewModelScope.launch {
+            _state.value = _state.value.copy(isRefreshing = true)
+            try {
+                val novels = repo.fetchGenre(genre, page = 1)
+                _state.value = _state.value.copy(
+                    novels       = novels,
+                    page         = 1,
+                    isRefreshing = false,
+                    hasMore      = novels.isNotEmpty(),
+                    error        = null
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "refresh('$genre') failed: ${e.message}", e)
+                _state.value = _state.value.copy(isRefreshing = false)
+                _refreshFailed.tryEmit(Unit)
+            }
+        }
+    }
 
     fun load(genre: String) {
         if (genre == currentGenre && _state.value.novels.isNotEmpty()) return
