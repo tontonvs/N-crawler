@@ -44,10 +44,6 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
     private val _downloadedNums = MutableStateFlow<Set<Int>>(emptySet())
     val downloadedNums: StateFlow<Set<Int>> = _downloadedNums.asStateFlow()
 
-    // True while the refresh button's re-fetch is running (button shows a spinner).
-    private val _isRefreshing = MutableStateFlow(false)
-    val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
-
     private val _updateMessage = MutableStateFlow<String?>(null)
     val updateMessage: StateFlow<String?> = _updateMessage.asStateFlow()
 
@@ -231,46 +227,6 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
                 }
             } catch (e: Exception) {
                 _updateMessage.value = "Couldn't check updates"
-            }
-        }
-    }
-
-    // Refresh button: re-fetch the novel's info AND chapter list from the
-    // source, update everything on screen (status, rating, latest chapter,
-    // chapter list), and report what changed. The old button only counted new
-    // chapters and changed nothing else on the page. If the page failed to load
-    // in the first place, this simply loads it again.
-    fun refresh() {
-        val slug = currentSlug
-        if (slug.isBlank() || _isRefreshing.value) return
-        if (_state.value !is DetailUiState.Success) { load(slug); return }
-
-        viewModelScope.launch {
-            _isRefreshing.value = true
-            try {
-                // Re-fetches from the source and saves; also queues new chapters
-                // when this novel already has a download.
-                val newCount = repo.checkForUpdates(slug)
-                val novel    = repo.getCachedNovel(slug)
-                val chapters = repo.getChapterList(slug)   // just saved — served from the DB
-                if (currentSlug == slug) {
-                    (_state.value as? DetailUiState.Success)?.let { cur ->
-                        _state.value = cur.copy(
-                            novel           = novel ?: cur.novel,
-                            chapters        = chapters.ifEmpty { cur.chapters },
-                            chaptersLoading = false
-                        )
-                    }
-                }
-                _updateMessage.value = when {
-                    newCount <= 0                   -> "Up to date"
-                    _downloadProgress.value != null -> "$newCount new · downloading"
-                    else                            -> "$newCount new chapter${if (newCount == 1) "" else "s"}"
-                }
-            } catch (e: Exception) {
-                _updateMessage.value = "Couldn't refresh — check your connection"
-            } finally {
-                _isRefreshing.value = false
             }
         }
     }

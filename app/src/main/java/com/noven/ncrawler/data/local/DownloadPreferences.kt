@@ -104,6 +104,45 @@ class DownloadPreferences(context: Context) {
     private fun rangeKey(slug: String) = "range_$slug"
 
     /**
+     * An arbitrary set of chapters (picked in the chapter list, "First N",
+     * "Missing only") as opposed to one contiguous range. Stored here rather
+     * than in the worker's input Data, which is capped at 10 KB — a few
+     * thousand chapter numbers wouldn't fit. Encoded as runs: "1-50,60,70-80".
+     * The worker reads it when it starts; null means "the whole saved range".
+     */
+    fun saveSelection(slug: String, nums: Collection<Int>) {
+        val sorted = nums.distinct().sorted()
+        val sb = StringBuilder()
+        var i = 0
+        while (i < sorted.size) {
+            var j = i
+            while (j + 1 < sorted.size && sorted[j + 1] == sorted[j] + 1) j++
+            if (sb.isNotEmpty()) sb.append(',')
+            if (j == i) sb.append(sorted[i]) else sb.append(sorted[i]).append('-').append(sorted[j])
+            i = j + 1
+        }
+        prefs.edit().putString(selectionKey(slug), sb.toString()).apply()
+    }
+
+    fun getSelection(slug: String): Set<Int>? {
+        val raw = prefs.getString(selectionKey(slug), null)?.takeIf { it.isNotBlank() } ?: return null
+        val out = HashSet<Int>()
+        for (part in raw.split(",")) {
+            val bits = part.split("-")
+            val a = bits.getOrNull(0)?.toIntOrNull() ?: continue
+            val b = bits.getOrNull(1)?.toIntOrNull() ?: a
+            if (b >= a && b - a < 100_000) for (n in a..b) out.add(n)
+        }
+        return out.ifEmpty { null }
+    }
+
+    fun clearSelection(slug: String) {
+        prefs.edit().remove(selectionKey(slug)).apply()
+    }
+
+    private fun selectionKey(slug: String) = "selection_$slug"
+
+    /**
      * CHANGE (TXT export): the folder the user picked (Storage Access
      * Framework tree URI, stored as a string). Access is persisted by
      * DownloadsViewModel.onExportFolderChosen(), so this survives restarts.

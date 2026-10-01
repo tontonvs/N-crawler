@@ -26,6 +26,12 @@ interface ChapterDao {
     @Query("SELECT chapterNum FROM chapters WHERE novelSlug = :slug")
     suspend fun downloadedChapterNums(slug: String): List<Int>
 
+    // Live version of the above for the Detail screen (downloaded ticks on the
+    // chapter list + the "Missing only" option). Selects just the numbers —
+    // NOT chaptersForNovel(), which would drag every chapter's full text along.
+    @Query("SELECT chapterNum FROM chapters WHERE novelSlug = :slug")
+    fun downloadedNumsFlow(slug: String): Flow<List<Int>>
+
     // CHANGE (Downloads overhaul): frees a novel's downloaded chapter text.
     // Deliberately does NOT touch the novels table — the novel stays in
     // the user's Library, it's just no longer downloaded for offline

@@ -385,6 +385,43 @@ class NovelRepository(
         val requestedNums = (startChapter..endChapter).filter { it in allNums }
         if (requestedNums.isEmpty()) return
 
+        queueDownloadInternal(slug, requestedNums, selection = null)
+    }
+
+    // First [count] chapters (lowest numbers first).
+    suspend fun queueDownloadFirst(slug: String, count: Int) {
+        val chapters = getChapterList(slug)
+        if (chapters.isEmpty()) return
+        queueDownloadChapters(slug, chapters.map { it.num }.sorted().take(count).toSet())
+    }
+
+    // Everything in the novel that isn't on disk yet. Returns how many chapters
+    // were queued (0 = nothing missing) so the UI can say so.
+    suspend fun queueDownloadMissing(slug: String): Int {
+        val chapters = getChapterList(slug)
+        if (chapters.isEmpty()) return 0
+        val have    = chapterDao.downloadedChapterNums(slug).toSet()
+        val missing = chapters.map { it.num }.filter { it !in have }
+        if (missing.isEmpty()) return 0
+        queueDownloadChapters(slug, missing.toSet())
+        return missing.size
+    }
+
+    // Any set of chapters — the multi-select in the chapter list, "First N",
+    // "Missing only". Unlike a range these can be non-adjacent; the exact set
+    // is kept in DownloadPreferences (see saveSelection) for the worker.
+    suspend fun queueDownloadChapters(slug: String, nums: Set<Int>) {
+        val chapters = getChapterList(slug)
+        if (chapters.isEmpty()) return
+        val allNums   = chapters.map { it.num }.toSet()
+        val requested = nums.filter { it in allNums }.sorted()
+        if (requested.isEmpty()) return
+        queueDownloadInternal(slug, requested, selection = requested)
+    }
+
+    // Shared body for range and selection downloads: progress row, saved
+    // range/selection (for Resume + queued starts), concurrency guard, enqueue.
+    private suspend fun queueDownloadInternal(slug: String, requestedNums: List<Int>, selection: List<Int>?) {
         val existingNums = chapterDao.downloadedChapterNums(slug).toSet()
         val unionSize     = (existingNums + requestedNums).size
         val existingRow   = downloadProgressDao.get(slug)   // read BEFORE the upsert below
@@ -392,10 +429,12 @@ class NovelRepository(
         // Remember what was asked for so a queued download can start later
         // and Resume/Retry re-downloads this range, not the whole novel.
         downloadPrefs.saveRange(slug, requestedNums.min(), requestedNums.max())
+        if (selection != null) downloadPrefs.saveSelection(slug, selection)
+        else downloadPrefs.clearSelection(slug)
 
         Log.d(
             TAG,
-            "Queuing download: $slug — chapters $startChapter..$endChapter " +
+            "Queuing download: $slug — chapters ${requestedNums.min()}..${requestedNums.max()} " +
             "(${requestedNums.size} requested, ${existingNums.size} already done, $unionSize total once complete)"
         )
 
@@ -429,9 +468,13 @@ class NovelRepository(
     // to call queueDownloadAll, so resuming a "Last 50" download pulled the
     // entire novel.
     suspend fun resumeDownload(slug: String) {
-        val range = downloadPrefs.getRange(slug)
-        if (range != null) queueDownloadRange(slug, range.first, range.second)
-        else queueDownloadAll(slug)
+        val selection = downloadPrefs.getSelection(slug)
+        val range     = downloadPrefs.getRange(slug)
+        when {
+            selection != null -> queueDownloadChapters(slug, selection)
+            range != null     -> queueDownloadRange(slug, range.first, range.second)
+            else              -> queueDownloadAll(slug)
+        }
     }
 
     // Called whenever a download slot frees up (finished, paused, deleted, or
@@ -490,6 +533,7 @@ class NovelRepository(
         chapterDao.deleteForNovel(slug)
         downloadProgressDao.delete(slug)
         downloadPrefs.clearRange(slug)
+        downloadPrefs.clearSelection(slug)
         startNextQueued()
     }
 
@@ -535,6 +579,7 @@ class NovelRepository(
     fun libraryFlow(): Flow<List<NovelEntity>> = novelDao.libraryFlow()
     fun isInLibraryFlow(slug: String): Flow<Boolean> = novelDao.isInLibraryFlow(slug).map { it ?: false }
     fun downloadedNovelsFlow(): Flow<List<NovelEntity>> = novelDao.downloadedNovelsFlow()
+    fun downloadedNumsFlow(slug: String): Flow<List<Int>> = chapterDao.downloadedNumsFlow(slug)
     suspend fun setLibrary(slug: String, inLibrary: Boolean) =
         novelDao.setLibrary(slug, inLibrary)
 
@@ -577,11 +622,24 @@ class NovelRepository(
             } else null
         }.sortedByDescending { it.num }
 
+    // Speed: resolveChapterUrl() used to split + sort the novel's whole chapter
+    // list string for EVERY chapter (thousands of entries x thousands of
+    // chapters). The parsed number->url map is now kept per novel and rebuilt
+    // only when the stored list actually changes (compared by content hash).
+    private val chapterUrlCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Int, Map<Int, String>>>()
+
+    private fun cachedChapterUrl(slug: String, raw: String, chapterNum: Int): String? {
+        val hash   = raw.hashCode()
+        val cached = chapterUrlCache[slug]
+        val map = if (cached != null && cached.first == hash) cached.second
+        else parseChapterUrls(raw).associate { it.num to it.url }.also { chapterUrlCache[slug] = hash to it }
+        return map[chapterNum]
+    }
+
     private suspend fun resolveChapterUrl(slug: String, chapterNum: Int): String? {
         val novel = novelDao.getBySlug(slug)
         if (novel != null && novel.chapterUrls.isNotBlank()) {
-            parseChapterUrls(novel.chapterUrls)
-                .find { it.num == chapterNum }?.url?.let { return it }
+            cachedChapterUrl(slug, novel.chapterUrls, chapterNum)?.let { return it }
         }
         val (source, realSlug) = sourceFor(slug)
         val result = source.fetchDetail(realSlug) ?: return null

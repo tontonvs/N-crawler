@@ -903,7 +903,6 @@ fun DetailScreen(
     val state           by vm.state.collectAsStateWithLifecycle()
     val downloadProgress by vm.downloadProgress.collectAsStateWithLifecycle()
     val inLibrary       by vm.inLibrary.collectAsStateWithLifecycle()
-    val refreshing      by vm.isRefreshing.collectAsStateWithLifecycle()
     val updateMessage   by vm.updateMessage.collectAsStateWithLifecycle()
 
     // CHANGE (partial downloads): only non-null once the novel and its
@@ -1102,23 +1101,13 @@ fun DetailScreen(
                         modifier           = Modifier.size(24.dp),
                     )
                 }
-                // Refresh: re-fetches the info and chapter list from the source and
-                // updates the whole page (spinner while it runs).
-                ReaderCircleBtn(onClick = vm::refresh) {
-                    if (refreshing) {
-                        CircularProgressIndicator(
-                            modifier    = Modifier.size(20.dp),
-                            strokeWidth = 2.dp,
-                            color       = Color.White.copy(alpha = 0.9f),
-                        )
-                    } else {
-                        Icon(
-                            Icons.Filled.Refresh,
-                            contentDescription = "Refresh",
-                            tint               = Color.White.copy(alpha = 0.9f),
-                            modifier           = Modifier.size(24.dp),
-                        )
-                    }
+                ReaderCircleBtn(onClick = vm::checkForUpdates) {
+                    Icon(
+                        Icons.Filled.Refresh,
+                        contentDescription = "Check updates",
+                        tint               = Color.White.copy(alpha = 0.9f),
+                        modifier           = Modifier.size(24.dp),
+                    )
                 }
             }
         }

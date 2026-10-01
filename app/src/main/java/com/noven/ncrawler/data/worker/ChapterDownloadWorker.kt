@@ -2,6 +2,7 @@ package com.noven.ncrawler.data.worker
 
 import android.content.Context
 import android.content.pm.ServiceInfo
+import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.work.*
@@ -15,11 +16,18 @@ import com.noven.ncrawler.data.repository.NovelRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * WorkManager worker that downloads chapters for a novel one at a time.
+ * WorkManager worker that downloads a novel's chapters, several at a time.
  *
  * CHANGE (Downloads overhaul — reliability fix, 2026-09-23):
  * Two real bugs were found via logcat, not just theorised:
@@ -56,7 +64,8 @@ import kotlinx.coroutines.withContext
  *    failed. Retrying can never help, and counting them as failures meant a
  *    novel with even one locked chapter could never reach COMPLETE.
  *
- * 7. Work is grouped in small batches (BATCH_SIZE chapters). After each batch:
+ * 7. (Superseded by note 10 — the batches and cool-downs were replaced by
+ *    rate-gated parallel fetching.) Work was grouped in small batches. After each batch:
  *    a progress checkpoint is written to the DB and there is a short
  *    cool-down before the next one — gentler on the site's rate limit and on
  *    a low-end phone than one unbroken stream.
@@ -74,6 +83,23 @@ import kotlinx.coroutines.withContext
  *
  * 9. The network constraint now follows DownloadNetwork (any / Wi-Fi only /
  *    mobile data only) instead of a Wi-Fi-only boolean.
+ *
+ * CHANGE (download speed + chapter selection):
+ *
+ * 10. Chapters used to download strictly one after another with a fixed 2s
+ *     sleep after each fetch plus a 4s cool-down every 20 chapters — about
+ *     3s per chapter, roughly an hour per 1,000. Now PARALLEL fetches run at
+ *     once, and a shared RequestGate spaces the START of requests (FAST_INTERVAL_MS
+ *     apart, ~2 per second overall) instead of sleeping after each one. If a
+ *     site pushes back (429/403/503 style errors), the worker drops to one
+ *     request at a time and a slower gate for SLOW_WINDOW_MS, then recovers.
+ *     Throughput is estimated, not measured — tune PARALLEL / FAST_INTERVAL_MS.
+ *
+ * 11. What gets downloaded is now a list of chapters ("targets"), not only a
+ *     start..end range: a saved selection (DownloadPreferences.getSelection —
+ *     multi-select, First N, Missing only) if there is one, otherwise the
+ *     range. Either way only chapter numbers the novel really has are kept, so
+ *     gaps in the numbering no longer count as failures.
  *
  * Input data keys:
  *   SLUG          — novel slug
@@ -102,12 +128,16 @@ class ChapterDownloadWorker(
         // so concurrent downloads don't stomp on each other's notification.
         private const val NOTIFICATION_ID = 4201
 
-        // Small batches, checkpointed. See note 7 above.
-        private const val BATCH_SIZE = 20
-        private const val BATCH_COOLDOWN_MS = 4_000L
+        // Parallel fetching. See note 10 above.
+        private const val PARALLEL = 3
+        private const val FAST_INTERVAL_MS = 500L      // min gap between request STARTS
+        private const val SLOW_INTERVAL_MS = 2_000L    // same, while the site is pushing back
+        private const val SLOW_WINDOW_MS   = 60_000L   // how long "slow mode" lasts after a push-back
 
-        // Per-chapter: 2s between real fetches (unchanged), up to 3 attempts.
-        private const val FETCH_DELAY_MS = 2_000L
+        // Progress (DB row, WorkManager progress, notification) is written at most this often.
+        private const val REPORT_INTERVAL_MS = 700L
+
+        // Per-chapter: up to 3 attempts, growing backoff.
         private const val MAX_ATTEMPTS = 3
         private const val RETRY_BASE_DELAY_MS = 3_000L
 
@@ -190,6 +220,16 @@ class ChapterDownloadWorker(
     private var sessionId = -1L
     private var lastTouch = 0L
 
+    // Slow mode: set when a request looks rate-limited (see looksRateLimited).
+    // Read by every fetch coroutine, hence @Volatile.
+    @Volatile private var slowUntil = 0L
+    private val slowLock = Mutex()
+
+    private fun looksRateLimited(e: Exception): Boolean {
+        val m = e.message.orEmpty().lowercase()
+        return "429" in m || "403" in m || "503" in m || "too many" in m || "rate limit" in m
+    }
+
     private suspend fun promote(info: ForegroundInfo) {
         if (!foregroundOk) return
         try {
@@ -253,6 +293,7 @@ class ChapterDownloadWorker(
             } catch (e: ChapterUnavailableException) {
                 throw e
             } catch (e: Exception) {
+                if (looksRateLimited(e)) slowUntil = SystemClock.elapsedRealtime() + SLOW_WINDOW_MS
                 if (attempt >= MAX_ATTEMPTS) throw e
                 Log.w(TAG, "Chapter $chapterNum attempt $attempt/$MAX_ATTEMPTS failed (${e.message}) — retrying")
                 delay(RETRY_BASE_DELAY_MS * attempt)
@@ -293,12 +334,26 @@ class ChapterDownloadWorker(
     private suspend fun runDownload(slug: String): Result {
         val startChapter = inputData.getInt(START_CHAPTER, 1)
         val endChapter   = inputData.getInt(END_CHAPTER, 1)
-        val total        = endChapter - startChapter + 1
 
         val app        = applicationContext as NCrawlerApp
         val repo       = app.repository
         val dao        = app.db.downloadProgressDao()
         val chapterDao = app.db.chapterDao()
+
+        // What to download: the saved selection when there is one, else the
+        // range — limited to chapter numbers the novel actually has.
+        val known = try {
+            repo.getChapterList(slug).map { it.num }.toHashSet()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null   // offline etc. — fall back to the unfiltered list
+        }
+        val selection = repo.downloadPreferences().getSelection(slug)
+        val base = if (selection != null) selection.filter { it in startChapter..endChapter }.sorted()
+                   else (startChapter..endChapter).toList()
+        val targets = if (known != null) base.filter { it in known } else base
+        val total   = targets.size
 
         Log.d(TAG, "Starting download: $slug chapters $startChapter-$endChapter")
 
@@ -323,77 +378,86 @@ class ChapterDownloadWorker(
             dao.upsert(it.copy(status = DownloadStatus.DOWNLOADING))
         }
 
-        // CHANGE (note 4): chapter numbers already on disk, loaded once.
+        // Chapter numbers already on disk, loaded once.
         val have = chapterDao.downloadedChapterNums(slug).toHashSet()
 
-        // Chapters of THIS range that are present after each step (existing +
+        // Chapters of THIS job that are present after each step (existing +
         // newly saved). Drives the progress bar/notification.
-        var present = (startChapter..endChapter).count { it in have }
-        var failed = 0
-        var lockedSkipped = 0
-        var processed = 0
+        var present = targets.count { it in have }
+        val pending = targets.filter { it !in have }
+
+        val failedCount  = AtomicInteger(0)
+        val lockedCount  = AtomicInteger(0)
+        val yielding     = AtomicBoolean(false)
+        val progressLock = Mutex()
+        var lastReportAt = 0L
+
+        // Must be called with progressLock held.
+        suspend fun reportProgress(force: Boolean) {
+            val now = SystemClock.elapsedRealtime()
+            if (!force && now - lastReportAt < REPORT_INTERVAL_MS) return
+            lastReportAt = now
+            dao.updateProgress(slug, chapterDao.downloadedCount(slug), DownloadStatus.DOWNLOADING)
+            setProgress(workDataOf(
+                PROGRESS_SLUG  to slug,
+                PROGRESS_DONE  to present,
+                PROGRESS_TOTAL to total
+            ))
+            promote(foregroundInfo(novelTitle, present, total))
+        }
+
+        val gate = RequestGate { if (SystemClock.elapsedRealtime() < slowUntil) SLOW_INTERVAL_MS else FAST_INTERVAL_MS }
+        val queue = Channel<Int>(Channel.UNLIMITED)
+        pending.forEach { queue.trySend(it) }
+        queue.close()
 
         try {
-            for (chapterNum in startChapter..endChapter) {
-                // Check if worker was cooperatively stopped
-                if (isStopped) {
-                    Log.d(TAG, "Worker stopped at chapter $chapterNum")
-                    break
-                }
+            coroutineScope {
+                repeat(PARALLEL) {
+                    launch {
+                        for (chapterNum in queue) {
+                            // Cooperative stop / hand-over: leave the rest of the
+                            // queue untouched — anything not on disk is picked up
+                            // by the next run.
+                            if (isStopped || yielding.get()) break
 
-                // CHANGE (Android 15): hand over before the system's limit hits.
-                touchBudget()
-                if (sessionId >= 0 && budget.mustYield()) {
-                    dao.updateProgress(slug, chapterDao.downloadedCount(slug), DownloadStatus.DOWNLOADING)
-                    return handOverToBackground(slug, startChapter, endChapter)
-                }
+                            // CHANGE (Android 15): hand over before the system's limit hits.
+                            touchBudget()
+                            if (sessionId >= 0 && budget.mustYield()) {
+                                yielding.set(true)
+                                break
+                            }
 
-                var fetchedFromNetwork = false
-                try {
-                    if (chapterNum !in have) {
-                        fetchedFromNetwork = true
-                        downloadWithRetry(repo, slug, chapterNum)
-                        have.add(chapterNum)
-                        present++
-                        Log.d(TAG, "Downloaded chapter $chapterNum of $slug")
-
-                        dao.updateProgress(slug, chapterDao.downloadedCount(slug), DownloadStatus.DOWNLOADING)
-                        setProgress(workDataOf(
-                            PROGRESS_SLUG  to slug,
-                            PROGRESS_DONE  to present,
-                            PROGRESS_TOTAL to total
-                        ))
-                        promote(foregroundInfo(novelTitle, present, total))
+                            gate.await()
+                            try {
+                                if (SystemClock.elapsedRealtime() < slowUntil) {
+                                    // The site pushed back recently: one request at a time.
+                                    slowLock.withLock { downloadWithRetry(repo, slug, chapterNum) }
+                                } else {
+                                    downloadWithRetry(repo, slug, chapterNum)
+                                }
+                                progressLock.withLock {
+                                    have.add(chapterNum)
+                                    present++
+                                    reportProgress(force = present >= total)
+                                }
+                                Log.d(TAG, "Downloaded chapter $chapterNum of $slug")
+                            } catch (e: CancellationException) {
+                                // Never treat a cancellation as a chapter failure — let it
+                                // propagate so the outer catch below can persist PAUSED.
+                                throw e
+                            } catch (e: ChapterUnavailableException) {
+                                // Paid/locked — skip, don't count as failure.
+                                lockedCount.incrementAndGet()
+                                Log.w(TAG, "Chapter $chapterNum skipped (locked): ${e.message}")
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Failed chapter $chapterNum after $MAX_ATTEMPTS attempts: ${e.message}")
+                                failedCount.incrementAndGet()
+                                // Don't fail the whole job — skip and continue. The missing
+                                // chapter surfaces as ERROR below so the user can retry.
+                            }
+                        }
                     }
-                } catch (e: CancellationException) {
-                    // Never treat a cancellation as a chapter failure — let it
-                    // propagate so the outer catch below can persist PAUSED.
-                    throw e
-                } catch (e: ChapterUnavailableException) {
-                    // CHANGE (note 6): paid/locked — skip, don't count as failure.
-                    lockedSkipped++
-                    Log.w(TAG, "Chapter $chapterNum skipped (locked): ${e.message}")
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed chapter $chapterNum after $MAX_ATTEMPTS attempts: ${e.message}")
-                    failed++
-                    // Don't fail the whole job — skip and continue. The missing
-                    // chapter surfaces as ERROR below so the user can retry.
-                }
-
-                processed++
-
-                // CHANGE (note 4): politeness delay only after a real network
-                // attempt, and never after the last chapter.
-                if (fetchedFromNetwork && chapterNum < endChapter) {
-                    delay(FETCH_DELAY_MS)
-                }
-
-                // CHANGE (note 7): batch checkpoint + cool-down.
-                if (processed % BATCH_SIZE == 0 && chapterNum < endChapter) {
-                    dao.updateProgress(slug, chapterDao.downloadedCount(slug), DownloadStatus.DOWNLOADING)
-                    promote(foregroundInfo(novelTitle, present, total))
-                    Log.d(TAG, "Batch of $BATCH_SIZE done at chapter $chapterNum ($present/$total present, $failed failed) — cooling down")
-                    if (fetchedFromNetwork) delay(BATCH_COOLDOWN_MS)
                 }
             }
         } catch (e: CancellationException) {
@@ -407,6 +471,15 @@ class ChapterDownloadWorker(
             }
             throw e
         }
+
+        // CHANGE (Android 15): the foreground time budget ran low mid-run.
+        if (yielding.get()) {
+            dao.updateProgress(slug, chapterDao.downloadedCount(slug), DownloadStatus.DOWNLOADING)
+            return handOverToBackground(slug, startChapter, endChapter)
+        }
+
+        val failed = failedCount.get()
+        val lockedSkipped = lockedCount.get()
 
         if (isStopped) {
             dao.updateProgress(slug, chapterDao.downloadedCount(slug), DownloadStatus.PAUSED)
@@ -443,5 +516,26 @@ class ChapterDownloadWorker(
             Log.w(TAG, "Couldn't start next queued download: ${e.message}")
         }
         return Result.success()
+    }
+}
+
+/**
+ * Spaces out the START of network requests across all parallel fetchers: each
+ * caller is handed the next free time slot, [intervalMs] after the previous
+ * one. That caps the overall request rate at 1/interval no matter how many
+ * fetchers are running, without making any of them sleep after finishing.
+ */
+private class RequestGate(private val intervalMs: () -> Long) {
+    private val lock = Mutex()
+    private var nextSlot = 0L
+
+    suspend fun await() {
+        val waitMs = lock.withLock {
+            val now  = SystemClock.elapsedRealtime()
+            val slot = maxOf(now, nextSlot)
+            nextSlot = slot + intervalMs()
+            slot - now
+        }
+        if (waitMs > 0) delay(waitMs)
     }
 }
