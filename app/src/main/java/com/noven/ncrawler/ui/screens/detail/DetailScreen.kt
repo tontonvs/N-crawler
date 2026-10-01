@@ -203,11 +203,11 @@ private fun StarRating(
 // reader's solid page, so a dark base tint sits under the 13% white to keep it
 // visible on bright covers.
 
-@OptIn(ExperimentalFoundationApi::class)
 // Blur layer for the top-row circle buttons (Glass mode). Provided only to the
 // top row, which is a sibling of the cover layer — never to its descendants.
 private val LocalDetailHaze = compositionLocalOf<HazeState?> { null }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ReaderCircleBtn(
     onClick: () -> Unit,
