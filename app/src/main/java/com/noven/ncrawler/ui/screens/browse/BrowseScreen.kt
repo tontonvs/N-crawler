@@ -1,5 +1,6 @@
 package com.noven.ncrawler.ui.screens.browse
 
+import android.os.Build
 import android.provider.Settings
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
@@ -22,6 +23,8 @@ import androidx.compose.ui.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -30,20 +33,27 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.focus.FocusRequester
@@ -51,6 +61,8 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.unit.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.noven.ncrawler.data.db.NovelEntity
 import androidx.core.graphics.ColorUtils
 import com.noven.ncrawler.data.local.DominantColorStore
@@ -64,11 +76,15 @@ import com.noven.ncrawler.ui.components.pressable
 import com.noven.ncrawler.ui.components.skeleton
 import com.noven.ncrawler.ui.components.staggerIn
 import com.noven.ncrawler.ui.components.NovelGlassCard
+import com.noven.ncrawler.ui.components.SolarArrows
+import com.noven.ncrawler.ui.components.glassBlur
+import com.noven.ncrawler.ui.components.rememberReducedMotion
 import com.noven.ncrawler.ui.components.novelCardWidthFor
 import com.noven.ncrawler.ui.theme.*
 import com.noven.ncrawler.viewmodel.BrowseUiState
 import com.noven.ncrawler.viewmodel.BrowseViewModel
 import com.noven.ncrawler.viewmodel.ContinueReadingInfo
+import dev.chrisbanes.haze.HazeState
 import kotlinx.coroutines.delay
 
 // ── Glass tokens — used throughout this screen ────────────────────────────────
@@ -79,6 +95,18 @@ import kotlinx.coroutines.delay
 private val OnImageGlassFill    = Color(0x1AFFFFFF)  // 10% white over image
 private val OnImageGlassBorder  = Color(0x33FFFFFF)  // 20% white hairline
 private val OnImageGlassFillMd  = Color(0x26FFFFFF)  // 15% white — slightly more opaque pills
+
+// CHANGE (UI polish): tokens for the collapsing top bar, the recent-read backdrop,
+// the curved content panel and the glass search overlay.
+private const val PILL_SHOW_AT     = 0.98f   // top bar this collapsed → "Browses" pill drops in
+private const val PILL_HIDE_BELOW  = 0.82f   // …and only leaves once it is clearly re-opening (no flicker at the edge)
+private val PanelRadius            = 28.dp   // curve of the content panel's top corners
+private const val BACKDROP_DECODE_W = 200    // backdrop cover is decoded this small, then scaled up
+private const val BACKDROP_DECODE_H = 300    // = the "very slight blur" (bigger = sharper, smaller = softer)
+private const val SEARCH_GLASS_ALPHA         = 0.60f  // overlay tint over the real blur (Android 12+)
+private const val SEARCH_GLASS_ALPHA_NO_BLUR = 0.90f  // older Androids can't blur: tint is stronger so text stays readable
+private val RECENT_CARD_W = 126.dp                    // was 140dp
+private val RECENT_CARD_H = 189.dp                    // was 210dp (same 2:3 ratio)
 
 @Composable
 fun BrowseScreen(
@@ -98,50 +126,143 @@ fun BrowseScreen(
     val recentlyReading  by vm.recentlyReading.collectAsStateWithLifecycle()
     val isRefreshing     by vm.isRefreshing.collectAsStateWithLifecycle()
 
+    // CHANGE (UI polish #1): the list's scroll state lives here (not inside
+    // BrowseContent) so the top bar can follow the scroll position and collapse
+    // with it.
+    val listState = rememberLazyListState()
+
+    // Cut-out colour = dominant colour of the novel last opened on the Detail
+    // screen (saved there); brand blue if there isn't one yet. Re-read whenever
+    // Browse is (re)composed, i.e. on every return from Detail.
+    val context   = LocalContext.current
+    val darkTheme = isSystemInDarkTheme()
+    val cutoutColor = remember(darkTheme) {
+        cutoutColorFor(DominantColorStore(context).getLast(), darkTheme)
+    }
+
+    val density     = LocalDensity.current
+    val statusBarDp = with(density) { WindowInsets.statusBars.getTop(density).toDp() }
+    val barHeight   = statusBarDp + BAR_CONTENT_HEIGHT
+    val barHeightPx = with(density) { barHeight.toPx() }
+    val pageBg      = MaterialTheme.colorScheme.background
+    val reducedMotion = rememberReducedMotion()
+
+    // "Browses" pill: shows once the top bar has scrolled fully away, hides again
+    // when it starts coming back. Two thresholds (hysteresis) so a finger
+    // hovering on the boundary doesn't make the pill flicker in and out.
+    var pillShown by remember { mutableStateOf(false) }
+    LaunchedEffect(listState, barHeightPx) {
+        snapshotFlow { collapseOf(listState, barHeightPx) }
+            .collect { c -> pillShown = if (pillShown) c > PILL_HIDE_BELOW else c >= PILL_SHOW_AT }
+    }
+
     // Light background fills the entire screen
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
+            .background(pageBg)
     ) {
-        Column(modifier = Modifier.fillMaxSize()) {
+        // Search lives exclusively in the SearchOverlay (opened from the
+        // search FAB in the floating nav) — the homepage itself is browse-only, no inline bar.
+        // Pull down to reload the feed. The current rows stay on screen while
+        // it loads (a silent refresh), unlike Retry / a source switch, which
+        // show the skeleton.
+        // CHANGE (UI polish #1): the list now fills the whole screen and scrolls UNDER
+        // the top bar (which is drawn on top, below). The list's top padding and the
+        // pull indicator's offset are the bar's height, so at rest it looks identical.
+        AppPullToRefresh(
+            isRefreshing       = isRefreshing,
+            onRefresh          = vm::refresh,
+            failures           = vm.refreshFailed,
+            indicatorTopOffset = barHeight,
+            modifier           = Modifier.fillMaxSize()
+        ) {
+            BrowseContent(
+                state             = browseState,
+                popularState      = popularState,
+                onNovelClick      = onNovelClick,
+                onRetry           = vm::loadHomepage,
+                onGenreClick      = onGenreClick ?: {},
+                onDiscoverClick   = onDiscoverClick,
+                continueReading   = continueReading,
+                onContinueReading = onContinueReading,
+                recentlyReading   = recentlyReading,
+                listState         = listState,
+                topInset          = barHeight
+            )
+        }
 
-            // ── Top bar — always logo/download, never swaps modes ──────────
-            // Cut-out colour = dominant colour of the novel last opened on the
-            // Detail screen (saved there); brand blue if there isn't one yet.
-            // Re-read whenever Browse is (re)composed, i.e. on every return from Detail.
-            val context = LocalContext.current
-            val darkTheme = isSystemInDarkTheme()
-            val cutoutColor = remember(darkTheme) {
-                cutoutColorFor(DominantColorStore(context).getLast(), darkTheme)
-            }
-            TopNavBar(onDownloadsClick = onDownloadsClick, cutoutColor = cutoutColor)
-
-            // Search lives exclusively in the SearchOverlay (opened from the
-            // search FAB in the floating nav) — the homepage itself is browse-only, no inline bar.
-            // Pull down to reload the feed. The current rows stay on screen while
-            // it loads (a silent refresh), unlike Retry / a source switch, which
-            // show the skeleton.
-            AppPullToRefresh(
-                isRefreshing = isRefreshing,
-                onRefresh    = vm::refresh,
-                failures     = vm.refreshFailed,
-                modifier     = Modifier.weight(1f)
-            ) {
-                BrowseContent(
-                    state             = browseState,
-                    popularState      = popularState,
-                    onNovelClick      = onNovelClick,
-                    onRetry           = vm::loadHomepage,
-                    onGenreClick      = onGenreClick ?: {},
-                    onDiscoverClick   = onDiscoverClick,
-                    continueReading   = continueReading,
-                    onContinueReading = onContinueReading,
-                    recentlyReading   = recentlyReading
+        // Status-bar scrim — once the bar has scrolled away, content would run
+        // straight under the system clock/battery icons; this fades the page colour
+        // in behind them (alpha follows the collapse, drawn without recomposing).
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth()
+                .height(statusBarDp + 16.dp)
+                .graphicsLayer { alpha = collapseOf(listState, barHeightPx) }
+                .background(
+                    Brush.verticalGradient(
+                        listOf(pageBg.copy(alpha = 0.92f), pageBg.copy(alpha = 0f))
+                    )
                 )
-            }
+        )
+
+        // ── Top bar — logo/download. Rides up with the page as you scroll and fades
+        // over the second half of the move; only transform + alpha are touched, both
+        // read in the draw phase, so scrolling never recomposes or re-measures it.
+        TopNavBar(
+            onDownloadsClick = onDownloadsClick,
+            cutoutColor      = cutoutColor,
+            modifier         = Modifier
+                .align(Alignment.TopCenter)
+                .graphicsLayer {
+                    val c = collapseOf(listState, barHeightPx)
+                    translationY = -c * barHeightPx
+                    alpha        = 1f - ((c - 0.45f) / 0.55f).coerceIn(0f, 1f)
+                }
+        )
+
+        // ── "Browses" pill + download button, centred under the status bar. Drops in
+        // from the bar that just left (fade + scale 0.88→1 + a short slide, one strong
+        // ease-out, 340ms) and leaves quicker and subtler (140ms). With system
+        // animations off it just appears/disappears. It's only in the tree while shown,
+        // so an invisible pill can never swallow taps meant for the list.
+        AnimatedVisibility(
+            visible  = pillShown,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = statusBarDp + BTN_MARGIN_TOP),
+            enter = if (reducedMotion) EnterTransition.None else
+                fadeIn(tween(Motion.BASE_MS, easing = Motion.EaseOut)) +
+                scaleIn(
+                    animationSpec   = tween(Motion.ENTER_MS, easing = Motion.EaseOut),
+                    initialScale    = 0.88f,
+                    transformOrigin = TransformOrigin(0.5f, 0f)
+                ) +
+                slideInVertically(tween(Motion.ENTER_MS, easing = Motion.EaseOut)) { -it / 2 },
+            exit = if (reducedMotion) ExitTransition.None else
+                fadeOut(tween(Motion.QUICK_MS, easing = LinearEasing)) +
+                scaleOut(
+                    animationSpec   = tween(Motion.QUICK_MS, easing = FastOutLinearInEasing),
+                    targetScale     = 0.94f,
+                    transformOrigin = TransformOrigin(0.5f, 0f)
+                ) +
+                slideOutVertically(tween(Motion.QUICK_MS, easing = FastOutLinearInEasing)) { -it / 4 }
+        ) {
+            CollapsedPill(onDownloadsClick = onDownloadsClick)
         }
     }
+}
+
+// How far the top bar has collapsed: 0 = fully open (list at rest), 1 = fully gone.
+// Only meaningful while the list is near its top; once the first item has scrolled
+// out it is simply 1. With no list on screen (skeleton / error) the state sits at 0,
+// so the bar stays open. Call it from a draw-phase lambda or snapshotFlow only.
+private fun collapseOf(state: LazyListState, barHeightPx: Float): Float {
+    if (barHeightPx <= 0f) return 0f
+    if (state.firstVisibleItemIndex > 0) return 1f
+    return (state.firstVisibleItemScrollOffset / barHeightPx).coerceIn(0f, 1f)
 }
 
 // ── Top Nav Bar ───────────────────────────────────────────────────────────────
@@ -170,13 +291,17 @@ private val CONVEX_RADIUS      = 10.dp      // fillets where the bay opens onto 
 private val BAR_BOTTOM_RADIUS  = 12.dp
 
 @Composable
-private fun TopNavBar(onDownloadsClick: (() -> Unit)?, cutoutColor: Color) {
+private fun TopNavBar(
+    onDownloadsClick: (() -> Unit)?,
+    cutoutColor: Color,
+    modifier: Modifier = Modifier
+) {
     val density = LocalDensity.current
     val statusBarDp = with(density) { WindowInsets.statusBars.getTop(density).toDp() }
     val surface = MaterialTheme.colorScheme.surface
 
     Box(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .height(statusBarDp + BAR_CONTENT_HEIGHT)
     ) {
@@ -252,31 +377,85 @@ private fun TopNavBar(onDownloadsClick: (() -> Unit)?, cutoutColor: Color) {
         // Download button — the tray icon on a translucent surface-coloured disc
         // (like the HTML's frosted button) so it reads on any bay colour. The 2dp
         // dark ring that used to circle it is gone.
-        val downloadInteraction = remember { MutableInteractionSource() }
-        val downloadPressed by downloadInteraction.collectIsPressedAsState()
-        val downloadAlpha = if (downloadPressed) 0.7f else 1f
-        val downloadTint = MaterialTheme.colorScheme.onSurface
-        Box(
+        DownloadButton(
+            onClick  = onDownloadsClick,
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .padding(top = statusBarDp + BTN_MARGIN_TOP, end = BTN_MARGIN_END)
-                .size(BTN_SIZE)
+        )
+    }
+}
+
+// The downloads button, shared by the open top bar (translucent disc inside the bay)
+// and the collapsed pill row (solid disc + soft shadow, because there it floats over
+// scrolling covers and has no bay behind it).
+@Composable
+private fun DownloadButton(
+    onClick: (() -> Unit)?,
+    modifier: Modifier = Modifier,
+    floating: Boolean = false
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val iconAlpha = if (pressed) 0.7f else 1f
+    val surface = MaterialTheme.colorScheme.surface
+    Box(
+        modifier = modifier
+            .size(BTN_SIZE)
+            .then(if (floating) Modifier.shadow(6.dp, CircleShape) else Modifier)
+            .clip(CircleShape)
+            .background(if (floating) surface else surface.copy(alpha = 0.88f))
+            .clickable(
+                enabled           = onClick != null,
+                interactionSource = interaction,
+                indication        = null,
+                role              = Role.Button,
+                onClickLabel      = "Downloads"
+            ) {
+                onClick?.invoke()
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        DownloadTrayIcon(
+            modifier = Modifier.size(26.dp),
+            tint     = MaterialTheme.colorScheme.onSurface.copy(alpha = iconAlpha)
+        )
+    }
+}
+
+// "Browses" pill + download button, shown once the top bar has scrolled away. The
+// pill is exactly centred on the screen: an invisible spacer the width of the
+// button + gap on its left balances the button on its right. Same font as the
+// "nCrawler" logo (Montserrat ExtraBold via titleLarge), 20sp instead of 28sp.
+@Composable
+private fun CollapsedPill(onDownloadsClick: (() -> Unit)?) {
+    val surface = MaterialTheme.colorScheme.surface
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Spacer(Modifier.width(BTN_SIZE + 8.dp))
+        Box(
+            modifier = Modifier
+                .height(BTN_SIZE)
+                .shadow(6.dp, CircleShape)
                 .clip(CircleShape)
-                .background(surface.copy(alpha = 0.88f))
-                .clickable(
-                    enabled           = onDownloadsClick != null,
-                    interactionSource = downloadInteraction,
-                    indication        = null
-                ) {
-                    onDownloadsClick?.invoke()
-                },
+                .background(surface)
+                .padding(horizontal = 20.dp),
             contentAlignment = Alignment.Center
         ) {
-            DownloadTrayIcon(
-                modifier = Modifier.size(26.dp),
-                tint     = downloadTint.copy(alpha = downloadAlpha)
+            Text(
+                "Browses",
+                style = MaterialTheme.typography.titleLarge.copy(
+                    fontWeight    = FontWeight.ExtraBold,
+                    fontSize      = 20.sp,
+                    lineHeight    = 24.sp,
+                    letterSpacing = (-0.3).sp
+                ),
+                color    = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                softWrap = false
             )
         }
+        Spacer(Modifier.width(8.dp))
+        DownloadButton(onClick = onDownloadsClick, floating = true)
     }
 }
 
@@ -320,12 +499,18 @@ private fun DownloadTrayIcon(modifier: Modifier = Modifier, tint: Color = Color.
 // Opened from the search FAB in the floating nav — full-screen, autofocused
 // field, recent searches (max 5, each a rounded rectangle with its own "x") when
 // empty, live results once typing, X to close. All text is Montserrat.
+// CHANGE (UI polish): the background is frosted glass (real Haze blur of the screen
+// behind it) instead of a solid page colour; the X clears the text first and only
+// closes the overlay when the field is already empty; the cursor always sits at the
+// end of the text (see the TextFieldValue below).
+// [hazeState] = the blur source from NavGraph; null → a plain translucent fallback.
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SearchOverlay(
     vm: BrowseViewModel,
     onNovelClick: (String) -> Unit,
-    onClose: () -> Unit
+    onClose: () -> Unit,
+    hazeState: HazeState? = null
 ) {
     val query          by vm.query.collectAsStateWithLifecycle()
     val searchState    by vm.searchState.collectAsStateWithLifecycle()
@@ -345,9 +530,43 @@ fun SearchOverlay(
         focusRequester.requestFocus()
     }
 
-    Surface(
-        modifier = Modifier.fillMaxSize(),
-        color    = MaterialTheme.colorScheme.background
+    // CHANGE (UI polish #7): the field holds a TextFieldValue (text + cursor) instead of
+    // a bare String. With a String, text that arrives from outside — tapping a recent
+    // search — left the cursor wherever it was (the start of an empty field). Now every
+    // programmatic change puts the cursor at the END of the text, and while you type or
+    // move the cursor yourself it is left alone. The effect re-syncs from the view
+    // model for any other external change; it compares against the LATEST value
+    // (vm.query.value), not the one captured at composition, so fast typing can never
+    // be rolled back by a stale emission.
+    var field by remember { mutableStateOf(TextFieldValue(query, TextRange(query.length))) }
+    LaunchedEffect(query) {
+        val latest = vm.query.value
+        if (field.text != latest) field = TextFieldValue(latest, TextRange(latest.length))
+    }
+    fun pickTerm(term: String) {
+        vm.onQueryChange(term)
+        field = TextFieldValue(term, TextRange(term.length))
+    }
+
+    // CHANGE (UI polish #5): glass background. Light = white glass, dark = the app's
+    // glass grey (GlassBase) — the same two fills the nav uses — over a real 30dp blur
+    // of whatever is behind (Android 12+). Older Androids can't blur, so there the tint
+    // is stronger and simply hides the screen enough to keep text readable.
+    val dark    = isSystemInDarkTheme()
+    val canBlur = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+    val glassTint = (if (dark) GlassBase else Color.White)
+        .copy(alpha = if (canBlur) SEARCH_GLASS_ALPHA else SEARCH_GLASS_ALPHA_NO_BLUR)
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .then(
+                if (hazeState != null) Modifier.glassBlur(hazeState, RectangleShape, glassTint)
+                else Modifier.background(MaterialTheme.colorScheme.background.copy(alpha = 0.94f))
+            )
+            // Swallows touches so nothing falls through to the screen behind the glass
+            // (the old opaque Surface did this implicitly).
+            .pointerInput(Unit) {}
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
             // ── Field + close (X) ───────────────────────────────────────────
@@ -368,8 +587,11 @@ fun SearchOverlay(
                         .border(2.5.dp, fieldInk, RoundedCornerShape(16.dp))
                 ) {
                     TextField(
-                        value         = query,
-                        onValueChange = vm::onQueryChange,
+                        value         = field,
+                        onValueChange = { v ->
+                            field = v
+                            if (v.text != vm.query.value) vm.onQueryChange(v.text)
+                        },
                         modifier      = Modifier
                             .fillMaxWidth()
                             .focusRequester(focusRequester),
@@ -403,20 +625,31 @@ fun SearchOverlay(
                         shape = RoundedCornerShape(16.dp),
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                         keyboardActions = KeyboardActions(onSearch = {
-                            vm.commitSearch(query)
+                            vm.commitSearch(field.text)
                             focusManager.clearFocus()
                             keyboard?.hide()
                         })
                     )
                 }
                 Spacer(Modifier.width(8.dp))
+                // CHANGE (UI polish #6): same "x", two jobs. Text in the field → clear it
+                // (and keep typing: focus + keyboard come back, since the IME's Search
+                // key may have hidden them). Field already empty → close the overlay.
+                val hasText = field.text.isNotEmpty()
                 IconButton(onClick = {
-                    vm.clearSearch()
-                    onClose()
+                    if (hasText) {
+                        vm.clearSearch()
+                        field = TextFieldValue("")
+                        focusRequester.requestFocus()
+                        keyboard?.show()
+                    } else {
+                        vm.clearSearch()
+                        onClose()
+                    }
                 }) {
                     Icon(
                         Icons.Filled.Close,
-                        contentDescription = "Close search",
+                        contentDescription = if (hasText) "Clear search" else "Close search",
                         tint = MaterialTheme.colorScheme.onSurface
                     )
                 }
@@ -452,7 +685,7 @@ fun SearchOverlay(
                                         .widthIn(max = 168.dp)
                                         .clip(RoundedCornerShape(12.dp))
                                         .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f))
-                                        .clickable { vm.onQueryChange(term) }
+                                        .clickable { pickTerm(term) }
                                         .padding(start = 12.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
@@ -523,7 +756,11 @@ private fun BrowseContent(
     onDiscoverClick: (() -> Unit)?,
     continueReading: ContinueReadingInfo?,
     onContinueReading: ((slug: String, chapterNum: Int) -> Unit)?,
-    recentlyReading: List<ContinueReadingInfo>
+    recentlyReading: List<ContinueReadingInfo>,
+    // CHANGE (UI polish #1): hoisted so the top bar can follow the scroll; topInset = the
+    // top bar's height — the list scrolls under the bar, so its content starts below it.
+    listState: LazyListState,
+    topInset: Dp
 ) {
     // CHANGE (motion): skeleton -> content is a short cross-fade (not a hard cut),
     // and inside the content the top blocks stack in one after another (once).
@@ -534,14 +771,17 @@ private fun BrowseContent(
         is BrowseUiState.Error, is BrowseUiState.Empty -> 1
         is BrowseUiState.Success -> 2
     }
+    // A reload that goes through the skeleton (source switch / Retry) must not come back
+    // scrolled to the old position now that the list state lives outside this screen.
+    LaunchedEffect(phase) { if (phase != 2) listState.scrollToItem(0) }
     Crossfade(
         targetState   = phase,
         modifier      = Modifier.fillMaxSize(),
         animationSpec = tween(Motion.QUICK_MS + 40)
     ) { p ->
     when (p) {
-        0 -> ShimmerScope { BrowseSkeleton() }
-        1 -> BrowseError((state as? BrowseUiState.Error)?.message ?: "No novels found", onRetry)
+        0 -> ShimmerScope { BrowseSkeleton(topInset) }
+        1 -> BrowseError((state as? BrowseUiState.Error)?.message ?: "No novels found", onRetry, topInset)
         else -> (state as? BrowseUiState.Success)?.let { success ->
             val novels = success.novels
             val hero   = novels.firstOrNull()
@@ -582,51 +822,80 @@ private fun BrowseContent(
             val genreOrder  = if (hasRecent) 2 else 1
             val latestOrder = genreOrder + (if (showcaseGenres.isNotEmpty()) 1 else 0)
 
-            LazyColumn(
-                modifier       = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(bottom = 120.dp)
-            ) {
+            // CHANGE (UI polish #2/#4): the novel whose cover is blurred behind the hero +
+            // Recently Read area = the most recently read one (the hero IS that novel when
+            // there is reading history). With no history it falls back to the featured
+            // novel in the hero, so the area never looks different from one launch to the next.
+            val resumeActive = continueReading != null && onContinueReading != null
+            val topNovel     = if (resumeActive) continueReading?.novel else hero
+            val panelColor   = MaterialTheme.colorScheme.background
 
-                // ── Hero — resumes the last-read novel at its exact chapter
-                // when there's reading history; otherwise features the top
-                // of the feed and opens its detail page like before.
-                if (continueReading != null && onContinueReading != null) {
-                    item {
-                        Box(Modifier.staggerIn(0, maxAnimated = 5)) {
-                            HeroBanner(
-                                novel      = continueReading.novel,
-                                resumeChapter = continueReading.progress.lastChapterNum,
-                                onClick    = {
-                                    onContinueReading(
-                                        continueReading.novel.slug,
-                                        continueReading.progress.lastChapterNum
-                                    )
-                                }
-                            )
-                        }
-                    }
-                } else if (hero != null) {
-                    item {
-                        Box(Modifier.staggerIn(0, maxAnimated = 5)) {
-                            HeroBanner(novel = hero, resumeChapter = null, onClick = { onNovelClick(hero.slug) })
-                        }
-                    }
+            LazyColumn(
+                state          = listState,
+                modifier       = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(top = topInset, bottom = 120.dp)
+            ) {
+                // Everything from the genre showcase down sits on ONE panel that has the
+                // page colour and a curved top. The first panel item gets the curve and
+                // is pulled up by the curve's radius so the backdrop shows through its
+                // corners; every item after it just continues the same colour.
+                // On the first item the panel (layout/clip/background) wraps the entrance
+                // stagger, not the other way round: a fading layer would clip the curved
+                // corners that overhang the item, so only the CONTENT fades and rises.
+                var panelOpen = false
+                fun panel(): Modifier {
+                    val m = if (panelOpen) Modifier.background(panelColor)
+                            else Modifier.sheetTop(PanelRadius, panelColor)
+                    panelOpen = true
+                    return m
                 }
 
-                // ── Recently Read — everything read EXCEPT the hero item
-                // above. Tapping a card opens the reader at the exact
-                // chapter; tapping the small "i" badge opens the detail
-                // page instead. No center play button — the whole card
-                // (minus the "i") is the tap target.
-                if (recentlyReading.isNotEmpty() && onContinueReading != null) {
-                    item {
-                        Column(Modifier.staggerIn(1, maxAnimated = 5)) {
-                            Spacer(Modifier.height(24.dp))
-                            RecentlyReadRow(
-                                items          = recentlyReading,
-                                onOpenReader   = onContinueReading,
-                                onOpenDetail   = onNovelClick
-                            )
+                // ── Hero + Recently Read, on the blurred backdrop. The hero resumes the
+                // last-read novel at its exact chapter when there's reading history;
+                // otherwise it features the top of the feed and opens its detail page.
+                // Recently Read = everything read EXCEPT the hero item. Tapping a card
+                // opens the reader at the exact chapter; the small "i" badge opens the
+                // detail page instead. No center play button — the whole card (minus
+                // the "i") is the tap target.
+                if (topNovel != null) {
+                    item(key = "sec_top") {
+                        Box(Modifier.fillMaxWidth()) {
+                            BlurredBackdrop(url = topNovel.coverUrl, modifier = Modifier.matchParentSize())
+                            Column {
+                                Spacer(Modifier.height(12.dp))
+                                Box(Modifier.staggerIn(0, maxAnimated = 5)) {
+                                    if (resumeActive && continueReading != null && onContinueReading != null) {
+                                        HeroBanner(
+                                            novel         = continueReading.novel,
+                                            resumeChapter = continueReading.progress.lastChapterNum,
+                                            onClick       = {
+                                                onContinueReading(
+                                                    continueReading.novel.slug,
+                                                    continueReading.progress.lastChapterNum
+                                                )
+                                            }
+                                        )
+                                    } else {
+                                        HeroBanner(
+                                            novel         = topNovel,
+                                            resumeChapter = null,
+                                            onClick       = { onNovelClick(topNovel.slug) }
+                                        )
+                                    }
+                                }
+                                if (hasRecent && onContinueReading != null) {
+                                    Column(Modifier.staggerIn(1, maxAnimated = 5)) {
+                                        Spacer(Modifier.height(24.dp))
+                                        RecentlyReadRow(
+                                            items          = recentlyReading,
+                                            onOpenReader   = onContinueReading,
+                                            onOpenDetail   = onNovelClick
+                                        )
+                                    }
+                                }
+                                // visible gap above the panel + the part the panel overlaps
+                                Spacer(Modifier.height(PanelRadius + 20.dp))
+                            }
                         }
                     }
                 }
@@ -636,8 +905,9 @@ private fun BrowseContent(
                 // decorative styles) ending in a "See More" card that opens
                 // the existing DiscoverScreen (every genre, full list).
                 if (showcaseGenres.isNotEmpty()) {
-                    item {
-                        Column(Modifier.staggerIn(genreOrder, maxAnimated = 5)) {
+                    val panelMod = panel()
+                    item(key = "sec_genre") {
+                        Column(panelMod.staggerIn(genreOrder, distance = 8.dp, maxAnimated = 5)) {
                             Spacer(Modifier.height(24.dp))
                             GenreShowcaseRow(
                                 genres          = showcaseGenres,
@@ -649,16 +919,17 @@ private fun BrowseContent(
                 }
 
                 // ── Latest Updates — up to 5 genre rows, horizontal samples,
-                // "See more" on each opens that genre's full list ─────────────
+                // a chevron on each opens that genre's full list ───────────────
                 if (latestGenreRows.isNotEmpty()) {
-                    item {
-                        Column(Modifier.staggerIn(latestOrder, maxAnimated = 5)) {
+                    val panelMod = panel()
+                    item(key = "sec_latest_header") {
+                        Column(panelMod.staggerIn(latestOrder, distance = 8.dp, maxAnimated = 5)) {
                             Spacer(Modifier.height(24.dp))
                             SectionHeader("Latest Updates")
                         }
                     }
                     itemsIndexed(latestGenreRows, key = { _, it -> "latest_${it.first}" }) { i, (genre, rowNovels) ->
-                        Column(Modifier.staggerIn(latestOrder + 1 + i, maxAnimated = 5)) {
+                        Column(Modifier.staggerIn(latestOrder + 1 + i, maxAnimated = 5).background(panelColor)) {
                             Spacer(Modifier.height(16.dp))
                             GenreRow(
                                 genre        = genre,
@@ -672,58 +943,134 @@ private fun BrowseContent(
                     // FIX: no genre data to group by (e.g. NovelArrow) —
                     // show everything fetched as one flat row instead of
                     // nothing at all.
-                    item {
-                        Spacer(Modifier.height(24.dp))
-                        SectionHeader("Latest Updates")
+                    val panelMod = panel()
+                    item(key = "sec_latest_flat_header") {
+                        Column(panelMod) {
+                            Spacer(Modifier.height(24.dp))
+                            SectionHeader("Latest Updates")
+                        }
                     }
-                    item {
-                        Spacer(Modifier.height(16.dp))
-                        GenreRow(
-                            genre        = "Latest",
-                            novels       = latestList,
-                            onNovelClick = onNovelClick,
-                            onSeeMore    = null
-                        )
+                    item(key = "sec_latest_flat_row") {
+                        Column(Modifier.background(panelColor)) {
+                            Spacer(Modifier.height(16.dp))
+                            GenreRow(
+                                genre        = "Latest",
+                                novels       = latestList,
+                                onNovelClick = onNovelClick,
+                                onSeeMore    = null
+                            )
+                        }
                     }
                 }
 
                 // ── Popular — same pattern, sourced from /sort/most-popular ──
                 if (popularGenreRows.isNotEmpty()) {
-                    item {
-                        Spacer(Modifier.height(28.dp))
-                        SectionHeader("Popular")
+                    val panelMod = panel()
+                    item(key = "sec_popular_header") {
+                        Column(panelMod) {
+                            Spacer(Modifier.height(28.dp))
+                            SectionHeader("Popular")
+                        }
                     }
                     items(popularGenreRows, key = { "popular_${it.first}" }) { (genre, rowNovels) ->
-                        Spacer(Modifier.height(16.dp))
-                        GenreRow(
-                            genre        = genre,
-                            novels       = rowNovels,
-                            onNovelClick = onNovelClick,
-                            onSeeMore    = { onGenreClick(genre) }
-                        )
+                        Column(Modifier.background(panelColor)) {
+                            Spacer(Modifier.height(16.dp))
+                            GenreRow(
+                                genre        = genre,
+                                novels       = rowNovels,
+                                onNovelClick = onNovelClick,
+                                onSeeMore    = { onGenreClick(genre) }
+                            )
+                        }
                     }
-                    item { Spacer(Modifier.height(20.dp)) }
+                    item(key = "sec_popular_end") { Spacer(Modifier.fillMaxWidth().height(20.dp).background(panelColor)) }
                 } else if (showFlatPopular) {
                     // FIX: same fallback as Latest — flat row when there's
                     // no genre data to group by.
-                    item {
-                        Spacer(Modifier.height(28.dp))
-                        SectionHeader("Popular")
+                    val panelMod = panel()
+                    item(key = "sec_popular_flat_header") {
+                        Column(panelMod) {
+                            Spacer(Modifier.height(28.dp))
+                            SectionHeader("Popular")
+                        }
                     }
-                    item {
-                        Spacer(Modifier.height(16.dp))
-                        GenreRow(
-                            genre        = "Popular",
-                            novels       = popularNovels,
-                            onNovelClick = onNovelClick,
-                            onSeeMore    = null
-                        )
+                    item(key = "sec_popular_flat_row") {
+                        Column(Modifier.background(panelColor)) {
+                            Spacer(Modifier.height(16.dp))
+                            GenreRow(
+                                genre        = "Popular",
+                                novels       = popularNovels,
+                                onNovelClick = onNovelClick,
+                                onSeeMore    = null
+                            )
+                        }
                     }
-                    item { Spacer(Modifier.height(20.dp)) }
+                    item(key = "sec_popular_flat_end") { Spacer(Modifier.fillMaxWidth().height(20.dp).background(panelColor)) }
                 }
             }
         }
     }
+    }
+}
+
+// ── Curved content panel ──────────────────────────────────────────────────────
+// CHANGE (UI polish #4): the panel behind the genre showcase / Latest Updates / Popular.
+// Its top corners are rounded (an "n"-shaped arch). It is pulled UP over the item above
+// by [radius]: the item reports a height that many dp shorter and draws that many dp
+// higher, so the blurred backdrop is what shows in the two cut-off corners and the
+// panel reads as a sheet sliding over the Recently Read area. Only the top [radius] dp
+// of the item is drawn outside its measured bounds, and that strip is plain spacing —
+// nothing tappable lives there.
+private fun Modifier.sheetTop(radius: Dp, color: Color): Modifier =
+    this
+        .layout { measurable, constraints ->
+            val r = radius.roundToPx()
+            val placeable = measurable.measure(constraints)
+            layout(placeable.width, (placeable.height - r).coerceAtLeast(0)) {
+                placeable.place(0, -r)
+            }
+        }
+        .clip(RoundedCornerShape(topStart = radius, topEnd = radius))
+        .background(color)
+
+// ── Blurred backdrop for the hero + Recently Read area ───────────────────────
+// CHANGE (UI polish #2): the most recently read novel's cover, softly blurred, behind
+// the hero banner and the Recently Read cards. The blur comes from decoding the cover
+// SMALL (BACKDROP_DECODE_W × BACKDROP_DECODE_H) and letting it scale up smoothly — not
+// from a RenderEffect — so it costs nothing per frame while scrolling and looks the
+// same on every Android version (RenderEffect blur only exists on 12+). A wash of the
+// page colour sits on top (55% light / 65% dark) so the "Recently Read" title and the
+// hero's edges stay readable in both themes. A new novel cross-fades in (500ms).
+@Composable
+private fun BlurredBackdrop(url: String?, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    val dark    = isSystemInDarkTheme()
+    val reduced = rememberReducedMotion()
+    val wash    = MaterialTheme.colorScheme.background.copy(alpha = if (dark) 0.65f else 0.55f)
+
+    Box(modifier.clipToBounds()) {
+        Crossfade(
+            targetState   = url,
+            modifier      = Modifier.fillMaxSize(),
+            animationSpec = if (reduced) snap() else tween(Motion.ENTER_MS + 160, easing = Motion.EaseOut)
+        ) { u ->
+            if (!u.isNullOrBlank()) {
+                val request = remember(u) {
+                    ImageRequest.Builder(context)
+                        .data(u)
+                        .size(BACKDROP_DECODE_W, BACKDROP_DECODE_H)
+                        .crossfade(false)
+                        .build()
+                }
+                AsyncImage(
+                    model              = request,
+                    contentDescription = null,
+                    contentScale       = ContentScale.Crop,
+                    modifier           = Modifier.fillMaxSize()
+                )
+            }
+        }
+        Box(Modifier.matchParentSize().background(wash))
     }
 }
 
@@ -757,7 +1104,7 @@ private fun groupByTopGenres(
 private fun novelCardWidth(): androidx.compose.ui.unit.Dp =
     novelCardWidthFor(LocalConfiguration.current.screenWidthDp)
 
-// ── Genre Row — a labeled horizontal sample with a "See more" that opens
+// ── Genre Row — a labeled horizontal sample with a ">" chevron that opens
 // the full infinite-scroll list for that genre (Discover's GenreScreen).
 // CHANGE: cards are now exactly the size of the cards on Discover's genre grid
 // (see novelCardWidth — same width, same 6:7 cover), longer than the old
@@ -789,16 +1136,9 @@ private fun GenreRow(
                 color = MaterialTheme.colorScheme.onBackground
             )
             if (onSeeMore != null) {
-                Text(
-                    "See more",
-                    style    = MaterialTheme.typography.labelMedium,
-                    color    = AccentBlue,
-                    // was a bare text-height tap target
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable(onClick = onSeeMore)
-                        .padding(horizontal = 8.dp, vertical = 10.dp)
-                )
+                // CHANGE (UI polish): the "See more" text link is now a thick, rounded ">"
+                // (Solar "Alt Arrow Right", see SolarArrows.kt) — 40dp touch target.
+                SeeMoreChevron(onClick = onSeeMore, label = "See more $genre")
             }
         }
         Spacer(Modifier.height(10.dp))
@@ -816,6 +1156,26 @@ private fun GenreRow(
                 )
             }
         }
+    }
+}
+
+// The ">" that replaced the "See more" text link. Tinted with the theme's primary (so
+// it brightens in dark mode, where AccentBlue is too dim), with the app's standard
+// press-in feedback (scale 0.86, 90ms in / soft release).
+@Composable
+private fun SeeMoreChevron(onClick: () -> Unit, label: String, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .size(40.dp)
+            .pressable(onClick = onClick, pressedScale = 0.86f),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            SolarArrows.ChevronRight,
+            contentDescription = label,
+            tint     = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(24.dp)
+        )
     }
 }
 
@@ -1017,7 +1377,8 @@ private fun RecentlyReadRow(
     }
 }
 
-// Recently Read card: 140×210dp portrait. CHANGE (kept): the frosted rectangle
+// Recently Read card: 126×189dp portrait (CHANGE: slightly smaller, was 140×210 — see
+// RECENT_CARD_W/H; title 12sp, padding 10dp, "i" badge 22dp to match). CHANGE (kept): the frosted rectangle
 // behind the info badge / progress bar is gone — badge, chapter label and
 // progress sit straight on the cover's dark scrim. Title uses the reader's
 // font (Montserrat).
@@ -1038,8 +1399,8 @@ private fun RecentCard(
 
     Box(
         modifier = Modifier
-            .width(140.dp)
-            .height(210.dp)
+            .width(RECENT_CARD_W)
+            .height(RECENT_CARD_H)
             .pressable(onClick = onOpenReader, pressedScale = 0.97f)   // CHANGE (motion)
             .clip(RoundedCornerShape(16.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
@@ -1068,7 +1429,7 @@ private fun RecentCard(
         Column(
             modifier            = Modifier
                 .fillMaxSize()
-                .padding(12.dp),
+                .padding(10.dp),
             verticalArrangement = Arrangement.SpaceBetween
         ) {
             // Title — top
@@ -1076,8 +1437,8 @@ private fun RecentCard(
                 novel.title,
                 fontFamily = MontserratFamily,
                 fontWeight = FontWeight.ExtraBold,
-                fontSize   = 13.sp,
-                lineHeight = 17.sp,
+                fontSize   = 12.sp,
+                lineHeight = 16.sp,
                 color      = Color.White,
                 maxLines   = 2,
                 overflow   = TextOverflow.Ellipsis,
@@ -1089,7 +1450,7 @@ private fun RecentCard(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         modifier = Modifier
-                            .size(24.dp)
+                            .size(22.dp)
                             .clip(CircleShape)
                             .background(Color.Black.copy(alpha = 0.55f))
                             // Nested clickable — consumes the tap here so the
@@ -1210,23 +1571,14 @@ private fun SeeMoreGenreCard(onClick: () -> Unit, modifier: Modifier = Modifier)
             .padding(6.dp),
         contentAlignment = Alignment.Center
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(
-                Icons.AutoMirrored.Rounded.ArrowForward,
-                contentDescription = "See more genres",
-                tint     = AccentBlue,
-                modifier = Modifier.size(16.dp)
-            )
-            Spacer(Modifier.height(4.dp))
-            Text(
-                "See More",
-                color      = AccentBlue,
-                fontSize   = 10.sp,
-                fontWeight = FontWeight.Bold,
-                textAlign  = TextAlign.Center,
-                lineHeight = 12.sp
-            )
-        }
+        // CHANGE (UI polish): the small arrow + "See More" label became a single big,
+        // thick, rounded ">" — same icon as the row headers.
+        Icon(
+            SolarArrows.ChevronRight,
+            contentDescription = "See more genres",
+            tint     = AccentBlue,
+            modifier = Modifier.size(32.dp)
+        )
     }
 }
 
@@ -1371,10 +1723,12 @@ private fun SearchRow(novel: NovelEntity, onClick: () -> Unit) {
 
 // ── Skeleton states ───────────────────────────────────────────────────────────
 @Composable
-private fun BrowseSkeleton() {
+private fun BrowseSkeleton(topInset: Dp) {
     val shimmer = MaterialTheme.colorScheme.surfaceVariant
 
-    Column(modifier = Modifier.fillMaxSize()) {
+    // topInset: the list now runs under the top bar, so the skeleton starts below it too.
+    Column(modifier = Modifier.fillMaxSize().padding(top = topInset)) {
+        Spacer(Modifier.height(12.dp))   // same breathing room as the real hero section
         // Hero skeleton — inset, rounded, 320dp (matches HeroBanner)
         Box(
             Modifier
@@ -1386,7 +1740,7 @@ private fun BrowseSkeleton() {
         )
         Spacer(Modifier.height(24.dp))
 
-        // Recently Read skeleton — label + row of 140x210dp portrait cards
+        // Recently Read skeleton — label + row of portrait cards (RECENT_CARD_W × RECENT_CARD_H)
         SkeletonLabel(shimmer, width = 130.dp)
         Spacer(Modifier.height(14.dp))
         Row(
@@ -1396,8 +1750,8 @@ private fun BrowseSkeleton() {
             repeat(2) {
                 Box(
                     Modifier
-                        .width(140.dp)
-                        .height(210.dp)
+                        .width(RECENT_CARD_W)
+                        .height(RECENT_CARD_H)
                         .clip(RoundedCornerShape(16.dp))
                         .skeleton(shimmer)
                 )
@@ -1535,8 +1889,9 @@ private fun SearchEmpty(query: String) {
 }
 
 @Composable
-private fun BrowseError(message: String, onRetry: () -> Unit) {
-    Box(Modifier.fillMaxSize(), Alignment.Center) {
+private fun BrowseError(message: String, onRetry: () -> Unit, topInset: Dp) {
+    // topInset keeps the message centred in the visible area, below the top bar
+    Box(Modifier.fillMaxSize().padding(top = topInset), Alignment.Center) {
         // CHANGE (motion): sharp quick shake when the error lands.
         Column(
             modifier            = Modifier.errorShake(trigger = message),

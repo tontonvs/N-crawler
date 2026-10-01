@@ -8,6 +8,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
@@ -33,6 +34,7 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
@@ -53,6 +55,10 @@ import kotlinx.coroutines.flow.Flow
  * the user releases after pulling past the threshold. [failures], if given,
  * shows a short toast each time it emits.
  *
+ * [indicatorTopOffset] pushes the pull indicator down from the top of this box. Use it
+ * when the box runs under a bar that is drawn on top of it (Browse's collapsing top
+ * bar) so the indicator lands below that bar instead of hidden behind it.
+ *
  * Only scrollable content can be pulled: while a screen shows a skeleton or an
  * error (nothing scrolls), pulling does nothing — those have their own Retry.
  */
@@ -62,6 +68,7 @@ fun AppPullToRefresh(
     onRefresh: () -> Unit,
     modifier: Modifier = Modifier,
     failures: Flow<Unit>? = null,
+    indicatorTopOffset: Dp = 0.dp,
     content: @Composable BoxScope.() -> Unit
 ) {
     val density      = LocalDensity.current
@@ -157,6 +164,7 @@ fun AppPullToRefresh(
         Box(
             modifier = Modifier
                 .align(Alignment.TopCenter)
+                .padding(top = indicatorTopOffset)
                 .graphicsLayer {
                     translationY = shown - indicatorPx
                     alpha        = if (shown > 1f) 1f else 0f
