@@ -1,5 +1,14 @@
 package com.noven.ncrawler.ui.screens.reader
 
+import dev.chrisbanes.haze.HazeState
+import com.noven.ncrawler.ui.theme.GlassSpec
+import com.noven.ncrawler.ui.theme.GlassMode
+import com.noven.ncrawler.ui.components.glassSource
+import com.noven.ncrawler.ui.components.glassBlur
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.composed
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.CompositionLocalProvider
 import android.provider.Settings
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
@@ -195,6 +204,7 @@ fun ReaderScreen(
     val bodyFg = if (darkBg) lerp(bg, fg, DARK_BODY_TEXT_STRENGTH) else fg
 
     val noRipple = remember { MutableInteractionSource() }
+    val readerHaze = remember { HazeState() }
 
     Box(
         modifier = Modifier
@@ -213,7 +223,7 @@ fun ReaderScreen(
         }
         Crossfade(
             targetState   = readerPhase,
-            modifier      = Modifier.fillMaxSize(),
+            modifier      = Modifier.fillMaxSize().glassSource(readerHaze),   // Glass mode: the layer the pills blur
             animationSpec = tween(180)
         ) { p ->
             when (p) {
@@ -267,16 +277,18 @@ fun ReaderScreen(
             exit     = fadeOut(tween(160)) + slideOutVertically(tween(160, easing = FastOutSlowInEasing)),
             modifier = Modifier.align(Alignment.TopCenter)
         ) {
-            ReaderHeader(
-                fg              = fg,
-                accent          = accent,
-                bg              = bg,
-                audioSelected   = audioSelected,
-                onBack          = onBack,
-                onAudioClick    = { audioSelected = true; showAudioOverlay = true },
-                onTextClick     = { audioSelected = false },
-                onSettingsClick = { showToc = false; showSettings = !showSettings }
-            )
+            CompositionLocalProvider(LocalReaderHaze provides readerHaze) {
+                ReaderHeader(
+                    fg              = fg,
+                    accent          = accent,
+                    bg              = bg,
+                    audioSelected   = audioSelected,
+                    onBack          = onBack,
+                    onAudioClick    = { audioSelected = true; showAudioOverlay = true },
+                    onTextClick     = { audioSelected = false },
+                    onSettingsClick = { showToc = false; showSettings = !showSettings }
+                )
+            }
         }
 
         // ── Bottom scrim (always present, behind nav bar) ─────────────────
@@ -305,17 +317,19 @@ fun ReaderScreen(
             exit     = fadeOut(tween(160)) + slideOutVertically(tween(160, easing = FastOutSlowInEasing)) { it },
             modifier = Modifier.align(Alignment.BottomCenter)
         ) {
-            ChapterNavBar(
-                fg        = fg,
-                accent    = accent,
-                title     = chapterTitle,
-                chapterNum = currentNum,
-                progress  = progress,
-                canGoPrev = currentNum > 1,
-                onPrev    = vm::loadPrev,
-                onNext    = vm::loadNext,
-                onOpenToc = { showSettings = false; showToc = !showToc }
-            )
+            CompositionLocalProvider(LocalReaderHaze provides readerHaze) {
+                ChapterNavBar(
+                    fg        = fg,
+                    accent    = accent,
+                    title     = chapterTitle,
+                    chapterNum = currentNum,
+                    progress  = progress,
+                    canGoPrev = currentNum > 1,
+                    onPrev    = vm::loadPrev,
+                    onNext    = vm::loadNext,
+                    onOpenToc = { showSettings = false; showToc = !showToc }
+                )
+            }
         }
 
         // ── Settings sheet (drag-to-dismiss) ──────────────────────────────
@@ -368,6 +382,27 @@ fun ReaderScreen(
                 onDismiss     = { showAudioOverlay = false; audioSelected = false }
             )
         }
+    }
+}
+
+// Blur layer for the reader's header / bottom bar pills (Glass mode). Provided
+// only to those two bars — siblings of the page layer — never to the page itself.
+private val LocalReaderHaze = compositionLocalOf<HazeState?> { null }
+
+// Pill / circle surface that follows the reader theme. Glass: real 30dp blur of
+// the page behind it, tinted with the text colour at the 44% glass strength.
+// Classic: the fixed see-through tint the reader always used.
+private fun Modifier.readerGlass(
+    fg: Color,
+    shape: Shape,
+    strength: Float = 0.33f,
+    classic: Float = 0.13f
+): Modifier = composed {
+    val haze = LocalReaderHaze.current
+    if (GlassMode.enabled && haze != null) {
+        this.clip(shape).glassBlur(haze, shape, fg.copy(alpha = GlassSpec.CARD_FILL * strength))
+    } else {
+        this.glassTint(fg, shape, strength, classic)
     }
 }
 
@@ -603,7 +638,7 @@ private fun PullNextIndicator(
     Row(
         modifier = modifier
             .graphicsLayer { alpha = (pull() / threshold).coerceIn(0f, 1f) }
-            .glassTint(fg, RoundedCornerShape(24.dp))
+            .glassTint(fg, RoundedCornerShape(24.dp), classic = 0.10f)
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -850,7 +885,7 @@ private fun ReaderIconButton(
     Box(
         modifier = Modifier
             .size(48.dp)
-            .glassTint(fg, CircleShape)
+            .readerGlass(fg, CircleShape)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center
     ) { content() }
@@ -869,7 +904,7 @@ private fun SegmentedPill(
         modifier = Modifier
             .width(172.dp)
             .height(44.dp)
-            .glassTint(fg, RoundedCornerShape(50))
+            .readerGlass(fg, RoundedCornerShape(50))
             .padding(4.dp)
     ) {
         Row(Modifier.fillMaxSize()) {
@@ -934,7 +969,7 @@ private fun ChapterNavBar(
             Box(
                 modifier = Modifier
                     .size(48.dp)
-                    .glassTint(fg, CircleShape, strength = if (canGoPrev) 0.33f else 0.12f)
+                    .readerGlass(fg, CircleShape, strength = if (canGoPrev) 0.33f else 0.12f, classic = if (canGoPrev) 0.13f else 0.05f)
                     .clickable(enabled = canGoPrev, onClick = onPrev),
                 contentAlignment = Alignment.Center
             ) {
@@ -951,7 +986,7 @@ private fun ChapterNavBar(
                 modifier = Modifier
                     .weight(1f)
                     .padding(horizontal = 10.dp)
-                    .glassTint(fg, RoundedCornerShape(24.dp))
+                    .readerGlass(fg, RoundedCornerShape(24.dp), classic = 0.10f)
                     .clickable(onClick = onOpenToc)
                     .padding(horizontal = 14.dp, vertical = 10.dp)
             ) {
@@ -1003,7 +1038,7 @@ private fun ChapterNavBar(
             Box(
                 modifier = Modifier
                     .size(48.dp)
-                    .glassTint(fg, CircleShape)
+                    .readerGlass(fg, CircleShape)
                     .clickable(onClick = onNext),
                 contentAlignment = Alignment.Center
             ) {

@@ -1,5 +1,11 @@
 package com.noven.ncrawler.ui.screens.detail
 
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.CompositionLocalProvider
+import dev.chrisbanes.haze.HazeState
+import com.noven.ncrawler.ui.theme.GlassMode
+import com.noven.ncrawler.ui.components.glassSource
+import com.noven.ncrawler.ui.components.glassBlur
 import android.graphics.drawable.BitmapDrawable
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.Crossfade
@@ -198,6 +204,10 @@ private fun StarRating(
 // visible on bright covers.
 
 @OptIn(ExperimentalFoundationApi::class)
+// Blur layer for the top-row circle buttons (Glass mode). Provided only to the
+// top row, which is a sibling of the cover layer — never to its descendants.
+private val LocalDetailHaze = compositionLocalOf<HazeState?> { null }
+
 @Composable
 private fun ReaderCircleBtn(
     onClick: () -> Unit,
@@ -212,15 +222,27 @@ private fun ReaderCircleBtn(
     // CHANGE (motion): press-in scale (90ms, no bounce) instead of a ripple —
     // same feel as the floating nav. The scale sits outside the clip so the
     // whole circle shrinks.
+    // Glass mode: real 30dp blur over the cover (when a blur layer is provided
+    // by the top row) tinted with the 44% glass fill; otherwise just the fill.
+    // Classic: the original dark scrim (black 40% + white 13%).
     val source = remember { MutableInteractionSource() }
+    val haze   = LocalDetailHaze.current
+    val glass  = GlassMode.enabled
     Box(
         contentAlignment = Alignment.Center,
         modifier         = Modifier
             .size(size)
             .pressScale(source, 0.92f)
-            // CHANGE: tv3 glass (12% grey @ 44%, no border) — one fill, was two.
             .clip(CircleShape)
-            .background(GlassSurfaceDark)
+            .then(
+                when {
+                    !glass        -> Modifier
+                        .background(Color.Black.copy(alpha = 0.40f))
+                        .background(Color.White.copy(alpha = 0.13f))
+                    haze != null  -> Modifier.glassBlur(haze, CircleShape, GlassSurfaceDark)
+                    else          -> Modifier.background(GlassSurfaceDark)
+                }
+            )
             .combinedClickable(
                 interactionSource = source,
                 indication        = null,
@@ -502,7 +524,13 @@ private fun DownloadOptionsSheet(
 private fun PresetChip(label: String, accent: Color, onClick: () -> Unit) {
     Box(
         modifier = Modifier
-            .glassFill(RoundedCornerShape(20.dp), dark = true)
+            .then(
+                if (GlassMode.enabled) Modifier.glassFill(RoundedCornerShape(20.dp), dark = true)
+                else Modifier
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(Color.White.copy(alpha = 0.08f))
+                    .border(1.dp, accent.copy(alpha = 0.5f), RoundedCornerShape(20.dp))
+            )
             .clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 9.dp),
     ) {
@@ -733,6 +761,8 @@ fun DetailScreen(
     val bgTop  = dominantColor ?: FallbackTop
     val accent = vibrantColor  ?: FallbackAccent
 
+    val detailHaze = remember { HazeState() }
+
     Box(modifier = Modifier.fillMaxSize()) {
 
         // CHANGE (motion): Loading -> Error / Content cross-fades (240ms) instead of
@@ -745,7 +775,7 @@ fun DetailScreen(
         }
         Crossfade(
             targetState   = phase,
-            modifier      = Modifier.fillMaxSize(),
+            modifier      = Modifier.fillMaxSize().glassSource(detailHaze),   // Glass mode: the layer the top buttons blur
             animationSpec = tween(Motion.BASE_MS)
         ) { p ->
         when (p) {
@@ -781,7 +811,10 @@ fun DetailScreen(
                         // Reader-style pill: soft filled, no border
                         Box(
                             modifier         = Modifier
-                                .glassFill(RoundedCornerShape(24.dp), dark = true)
+                                .then(
+                                    if (GlassMode.enabled) Modifier.glassFill(RoundedCornerShape(24.dp), dark = true)
+                                    else Modifier.clip(RoundedCornerShape(24.dp)).background(Color.White.copy(alpha = 0.13f))
+                                )
                                 .clickable { vm.load(slug) }
                                 .padding(horizontal = 28.dp, vertical = 12.dp),
                         ) {
@@ -838,6 +871,7 @@ fun DetailScreen(
 
         // ── Floating top row: back + download + refresh — always on top ──
         // Reader-style 48dp circles with 24dp icons (same as the reader header).
+        CompositionLocalProvider(LocalDetailHaze provides detailHaze) {
         Row(
             modifier              = Modifier
                 .fillMaxWidth()
@@ -886,6 +920,7 @@ fun DetailScreen(
                     )
                 }
             }
+        }
         }
 
         // Snackbar — custom content so its text is Montserrat too
@@ -1158,9 +1193,19 @@ private fun CinematicDetail(
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            // CHANGE: tv3 glass container — nav-strength fill (51%), no border.
+                            // Glass mode: nav-strength fill (51%), no border.
+                            // Classic: black 50% + hairline.
                             .clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
-                            .background(GlassBase.copy(alpha = GlassSpec.NAV_FILL)),
+                            .then(
+                                if (GlassMode.enabled) Modifier.background(GlassBase.copy(alpha = GlassSpec.NAV_FILL))
+                                else Modifier
+                                    .background(Color.Black.copy(alpha = 0.50f))
+                                    .border(
+                                        width = 1.dp,
+                                        color = Color.White.copy(alpha = 0.08f),
+                                        shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
+                                    )
+                            ),
                     ) {
                         // Header
                         Row(
@@ -1253,7 +1298,10 @@ private fun CinematicDetail(
                                 Box(
                                     modifier = Modifier
                                         .padding(bottom = 14.dp)
-                                        .glassFill(RoundedCornerShape(24.dp), dark = true)
+                                        .then(
+                                            if (GlassMode.enabled) Modifier.glassFill(RoundedCornerShape(24.dp), dark = true)
+                                            else Modifier.clip(RoundedCornerShape(24.dp)).background(Color.White.copy(alpha = 0.13f))
+                                        )
                                         .clickable { showAllChapters = true }
                                         .padding(horizontal = 22.dp, vertical = 10.dp),
                                 ) {

@@ -34,7 +34,11 @@ import androidx.navigation.NavType
 import androidx.navigation.compose.*
 import androidx.navigation.navArgument
 import com.noven.ncrawler.ui.components.Motion
+import com.noven.ncrawler.ui.components.glassBlur
+import com.noven.ncrawler.ui.components.glassSource
 import com.noven.ncrawler.ui.theme.GlassBase
+import com.noven.ncrawler.ui.theme.GlassMode
+import dev.chrisbanes.haze.HazeState
 import com.noven.ncrawler.ui.theme.GlassSpec
 import com.noven.ncrawler.ui.components.NavIcons
 import com.noven.ncrawler.ui.screens.browse.BrowseScreen
@@ -217,12 +221,16 @@ fun NCrawlerNavGraph() {
         else                                                   -> -1
     }
 
+    // Glass mode: the nav host is the layer the floating nav blurs. The nav
+    // itself is a SIBLING drawn above it (Haze can't blur its own parent).
+    val hazeState = remember { HazeState() }
+
     Box(modifier = Modifier.fillMaxSize()) {
         // Main nav host — no bottom padding, nav floats over content
         NavHost(
             navController    = nav,
             startDestination = Routes.BROWSE,
-            modifier         = Modifier.fillMaxSize(),
+            modifier         = Modifier.fillMaxSize().glassSource(hazeState),
             enterTransition    = { screenEnter() },
             exitTransition     = { screenExit() },
             popEnterTransition = { screenPopEnter() },
@@ -350,6 +358,7 @@ fun NCrawlerNavGraph() {
                 .padding(bottom = 16.dp)
         ) {
             FloatingNavBar(
+                hazeState     = hazeState,
                 selectedIndex = selectedIndex,
                 searchOpen    = showSearchOverlay,
                 onTab         = ::openTab,
@@ -374,6 +383,7 @@ fun NCrawlerNavGraph() {
 // profile avatar became the Settings gear.
 @Composable
 private fun FloatingNavBar(
+    hazeState: HazeState,
     selectedIndex: Int,
     searchOpen: Boolean,
     onTab: (String) -> Unit,
@@ -383,8 +393,8 @@ private fun FloatingNavBar(
         verticalAlignment     = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        PillNav(selectedIndex = selectedIndex, onTab = onTab)
-        SearchFab(active = searchOpen, onClick = onSearchClick)
+        PillNav(hazeState = hazeState, selectedIndex = selectedIndex, onTab = onTab)
+        SearchFab(hazeState = hazeState, active = searchOpen, onClick = onSearchClick)
     }
 }
 
@@ -409,14 +419,13 @@ private val navTabs = listOf(
 private val NavItemSize = 44.dp
 private val NavItemGap  = 4.dp
 private val NavIconSize = 22.dp     // a tiny bit bigger (was 20dp)
-// CHANGE: tv3 glass — the pill and the search FAB use the nav fill (51%).
-private const val NavOpacity = GlassSpec.NAV_FILL
+// Classic: the pill and the search FAB are 87% opaque. Glass mode: tv3's 51%.
+private const val NavOpacityClassic = 0.87f
 private val NavPadH     = 6.dp
 private val NavPadV     = 5.dp
 
-// CHANGE: one look for light AND dark — the tv3 nav is dark glass with white
-// icons and a white selector, so it no longer inverts per theme (fewer branches,
-// no theme read on every recomposition).
+// Glass mode: one look for light AND dark — the tv3 nav is dark glass with
+// white icons and a white selector. Classic mode keeps the per-theme inversion.
 private class NavPalette(
     val pill: Color,
     val selector: Color,
@@ -435,12 +444,30 @@ private val NavGlassPalette = NavPalette(
     edge         = Color.Transparent                    // border 0%
 )
 
-private fun navPalette(): NavPalette = NavGlassPalette
+@Composable
+private fun navPalette(): NavPalette = when {
+    GlassMode.enabled          -> NavGlassPalette
+    isSystemInDarkTheme()      -> NavPalette(          // classic: inverted on dark
+        pill         = Color(0xFFE6EAF2),
+        selector     = NavInk,
+        inactiveIcon = NavInk,
+        activeIcon   = Color.White,
+        edge         = Color.Black.copy(alpha = 0.08f)
+    )
+    else                       -> NavPalette(          // classic: dark ink on light
+        pill         = NavInk,
+        selector     = Color.White,
+        inactiveIcon = Color.White,
+        activeIcon   = NavInk,
+        edge         = Color.White.copy(alpha = 0.12f)
+    )
+}
 
 @Composable
-private fun PillNav(selectedIndex: Int, onTab: (String) -> Unit) {
+private fun PillNav(hazeState: HazeState, selectedIndex: Int, onTab: (String) -> Unit) {
     val palette = navPalette()
     val shape   = RoundedCornerShape(50)
+    val glass   = GlassMode.enabled
 
     // The HTML's cubic-bezier(0.34, 1.56, 0.64, 1), 0.4s — overshoots slightly
     // and settles. Clamped to 0 while nothing is selected so it doesn't slide
@@ -461,11 +488,20 @@ private fun PillNav(selectedIndex: Int, onTab: (String) -> Unit) {
             .shadow(
                 elevation    = 14.dp,
                 shape        = shape,
-                ambientColor = Color(0x33000000),
-                spotColor    = Color(0x99000000)     // tv3: 0 8 32 rgba(0,0,0,.6)
+                ambientColor = if (glass) Color(0x33000000) else Color(0x330F172A),
+                spotColor    = if (glass) Color(0x99000000) else Color(0x660F172A)  // glass = tv3: 0 8 32 rgba(0,0,0,.6)
             )
             .clip(shape)
-            .background(palette.pill.copy(alpha = NavOpacity))
+            .then(
+                if (glass) {
+                    // Real 30dp blur behind the pill, tinted with the 51% glass fill
+                    Modifier.glassBlur(hazeState, shape, palette.pill.copy(alpha = GlassSpec.NAV_FILL))
+                } else {
+                    Modifier
+                        .background(palette.pill.copy(alpha = NavOpacityClassic))
+                        .border(1.dp, palette.edge, shape)
+                }
+            )
             .padding(horizontal = NavPadH, vertical = NavPadV)
     ) {
         // Sliding selector circle
@@ -556,16 +592,27 @@ private fun PillNavItem(
 // While the search overlay is open the FAB inverts (solid fg, surface-coloured
 // icon) to show it's active — the same inversion as the pill's selector.
 @Composable
-private fun SearchFab(active: Boolean, onClick: () -> Unit) {
-    // CHANGE: same glass as the pill (dark 51% fill, white icon); while search is
-    // open it inverts to solid white + black icon, like the pill's selector.
+private fun SearchFab(hazeState: HazeState, active: Boolean, onClick: () -> Unit) {
+    val glass  = GlassMode.enabled
+    val scheme = MaterialTheme.colorScheme
+    val fg     = scheme.onSurface
+    val idleBg = fg.copy(alpha = 0.13f).compositeOver(scheme.surface)
+
+    // Glass: same as the pill (dark 51% fill, white icon), inverting to solid
+    // white + black icon while search is open. Classic: the scheme-coloured FAB.
     val bg by animateColorAsState(
-        targetValue   = if (active) Color.White else GlassBase.copy(alpha = NavOpacity),
+        targetValue   = when {
+            glass  -> if (active) Color.White else GlassBase.copy(alpha = GlassSpec.NAV_FILL)
+            else   -> if (active) fg else idleBg
+        },
         animationSpec = tween(200),
         label         = "searchFabBg"
     )
     val iconTint by animateColorAsState(
-        targetValue   = if (active) Color.Black else Color.White,
+        targetValue   = when {
+            glass  -> if (active) Color.Black else Color.White
+            else   -> if (active) scheme.surface else fg
+        },
         animationSpec = tween(200),
         label         = "searchFabIcon"
     )
@@ -587,11 +634,17 @@ private fun SearchFab(active: Boolean, onClick: () -> Unit) {
             .shadow(
                 elevation    = 10.dp,
                 shape        = CircleShape,
-                ambientColor = Color(0x26000000),
-                spotColor    = Color(0x80000000)
+                ambientColor = if (glass) Color(0x26000000) else Color(0x260F172A),
+                spotColor    = if (glass) Color(0x80000000) else Color(0x480F172A)
             )
             .clip(CircleShape)
-            .background(bg)
+            .then(
+                when {
+                    !glass -> Modifier.background(bg.copy(alpha = NavOpacityClassic))
+                    active -> Modifier.background(bg)           // solid white while search is open
+                    else   -> Modifier.glassBlur(hazeState, CircleShape, bg)
+                }
+            )
             .clickable(
                 interactionSource = interactionSource,
                 indication        = null,

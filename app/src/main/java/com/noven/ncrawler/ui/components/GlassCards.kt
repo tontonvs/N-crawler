@@ -31,11 +31,16 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.noven.ncrawler.data.db.NovelEntity
+import dev.chrisbanes.haze.HazeState
+import dev.chrisbanes.haze.HazeStyle
+import dev.chrisbanes.haze.haze
+import dev.chrisbanes.haze.hazeChild
 import com.noven.ncrawler.ui.theme.AccentBlue
 import com.noven.ncrawler.ui.theme.AntonFamily
 import com.noven.ncrawler.ui.theme.CinzelFamily
 import com.noven.ncrawler.ui.theme.MontserratFamily
 import com.noven.ncrawler.ui.theme.PacificoFamily
+import com.noven.ncrawler.ui.theme.GlassMode
 import com.noven.ncrawler.ui.theme.GlassSpec
 import com.noven.ncrawler.ui.theme.GlassSurfaceDark
 import com.noven.ncrawler.ui.theme.GlassSurfaceLight
@@ -67,43 +72,96 @@ import com.noven.ncrawler.ui.theme.glassSurface
 
 val GlassCardRadius = 16.dp
 
-// Frosted-glass surface, tv3 recipe: translucent fill (44%), NO border (0%),
-// soft shadow. CHANGE (perf): the diagonal sheen brush and the gradient rim
-// border are gone — one clip + one solid fill per card instead of four
-// draw passes — and dark mode skips the shadow entirely (it can't be seen on a
-// dark page, so it was pure cost across every card in every list).
-// Built with composed{} so it still reads the current system theme.
+// Frosted-glass surface. Two looks, picked by GlassMode (Settings):
+//  • CLASSIC (default): shadow → clip → near-opaque fill → sheen → rim light.
+//  • GLASS: tv3 recipe — translucent fill (44%), NO border, soft shadow.
+//    Perf: no sheen brush and no gradient rim (one clip + one fill instead of
+//    four draw passes), and dark mode skips the shadow (invisible on a dark
+//    page, pure cost across every card in a list).
+// Cards sit on a flat page, so there is nothing to blur behind them — real blur
+// is only used where content actually passes underneath (nav, Detail buttons,
+// Reader pills); cards stay a single cheap fill.
+// Built with composed{} so it still reads the system theme and the mode.
 fun Modifier.glassCard(
     shape: Shape = RoundedCornerShape(GlassCardRadius),
     elevation: Dp = 4.dp
 ): Modifier = composed {
     val dark = isSystemInDarkTheme()
     val fill = glassSurface()
-    (if (dark) this else this.shadow(
-        elevation    = elevation,
-        shape        = shape,
-        clip         = false,
-        ambientColor = Color(0x140D1117),
-        spotColor    = Color(0x260D1117)
-    ))
-        .clip(shape)
-        .background(fill)
+    if (GlassMode.enabled) {
+        (if (dark) this else this.shadow(
+            elevation    = elevation,
+            shape        = shape,
+            clip         = false,
+            ambientColor = Color(0x140D1117),
+            spotColor    = Color(0x260D1117)
+        ))
+            .clip(shape)
+            .background(fill)
+    } else {
+        val sheen = remember(dark) {
+            if (dark) Brush.linearGradient(listOf(Color.White.copy(alpha = 0.10f), Color.Transparent))
+            else      Brush.linearGradient(listOf(Color.White, AccentBlue.copy(alpha = 0.06f)))
+        }
+        val rim = remember(dark) {
+            if (dark) Brush.linearGradient(listOf(Color.White.copy(alpha = 0.30f), Color.White.copy(alpha = 0.06f)))
+            else      Brush.linearGradient(listOf(Color.White, AccentBlue.copy(alpha = 0.18f)))
+        }
+        this
+            .shadow(
+                elevation    = 6.dp,
+                shape        = shape,
+                clip         = false,
+                ambientColor = Color(0x1A0D1117),
+                spotColor    = Color(0x330D1117)
+            )
+            .clip(shape)
+            .background(fill)
+            .background(sheen)
+            .border(1.dp, rim, shape)
+    }
 }
 
-// Same fill, no shadow — for small controls / pills that sit inside another
-// surface (a shadow under every little pill costs more than it shows).
+// Glass-mode fill, no shadow — small controls / pills inside another surface.
+// dark = true/false forces a theme (the Detail screen is always dark); null
+// follows the system. Callers use it only in Glass mode and keep their own
+// classic fill otherwise.
 fun Modifier.glassFill(shape: Shape, dark: Boolean? = null): Modifier = composed {
-    // dark = true/false forces a theme (the Detail screen is always dark);
-    // null follows the system.
     val d = dark ?: isSystemInDarkTheme()
     clip(shape).background(if (d) GlassSurfaceDark else GlassSurfaceLight)
 }
 
-// Glass tinted by a caller colour (the reader's text colour), for surfaces
-// that must follow the reader theme. Same 44% glass fill logic, scaled so the
-// tint reads on a solid page: fg @ 13%.
-fun Modifier.glassTint(tint: Color, shape: Shape, strength: Float = 0.33f): Modifier =
-    clip(shape).background(tint.copy(alpha = GlassSpec.CARD_FILL * strength))
+// Surface tinted by a caller colour (the reader's text colour) so it follows
+// the reader theme. Glass: 44% scaled by [strength]. Classic: the fixed alpha
+// the reader always used.
+fun Modifier.glassTint(
+    tint: Color,
+    shape: Shape,
+    strength: Float = 0.33f,
+    classic: Float = 0.13f
+): Modifier {
+    val a = if (GlassMode.enabled) GlassSpec.CARD_FILL * strength else classic
+    return clip(shape).background(tint.copy(alpha = a))
+}
+
+// ── Real backdrop blur (Glass mode, Haze) ────────────────────────────────────
+// glassSource() marks the layer content scrolls on; glassBlur() on a SIBLING
+// drawn above it blurs whatever is behind it (30dp, tv3 value), tinted with the
+// glass fill. Android 12+ blurs for real; older versions get just the tinted
+// fill. Not used on descendants of a source (Haze can't blur its own parent).
+fun Modifier.glassSource(state: HazeState): Modifier =
+    if (GlassMode.enabled) this.haze(state) else this
+
+fun Modifier.glassBlur(
+    state: HazeState,
+    shape: Shape,
+    tint: Color,
+    blur: Dp = GlassSpec.BLUR
+): Modifier = this.hazeChild(
+    state = state,
+    shape = shape,
+    style = HazeStyle(tint = tint, blurRadius = blur, noiseFactor = 0f)
+)
 
 // Cover ratio (width / height) shared by every novel card — homepage rows and
 // Discover's genre grid — so a card is the same size on both screens.
