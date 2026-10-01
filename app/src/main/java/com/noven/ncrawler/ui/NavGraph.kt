@@ -40,7 +40,7 @@ import com.noven.ncrawler.ui.theme.GlassBase
 import com.noven.ncrawler.ui.theme.GlassMode
 import dev.chrisbanes.haze.HazeState
 import com.noven.ncrawler.ui.theme.GlassSpec
-import com.noven.ncrawler.ui.components.NavIcons
+import com.noven.ncrawler.ui.components.SolarIcons
 import com.noven.ncrawler.ui.screens.browse.BrowseScreen
 import com.noven.ncrawler.ui.screens.browse.SearchOverlay
 import com.noven.ncrawler.ui.screens.detail.DetailScreen
@@ -406,10 +406,12 @@ private data class NavTab(
 )
 
 private val navTabs = listOf(
-    NavTab(Routes.BROWSE,   "Home",     NavIcons.HomeOutline,     NavIcons.HomeFilled),
-    NavTab(Routes.LIBRARY,  "Library",  NavIcons.FolderOutline,   NavIcons.FolderFilled),
-    NavTab(Routes.DISCOVER, "Discover", NavIcons.DiscoverOutline, NavIcons.DiscoverFilled),
-    NavTab(Routes.SETTINGS, "Settings", NavIcons.SettingsOutline, NavIcons.SettingsFilled)
+    // Solar duotone pairs: Line Duotone = inactive, Bold Duotone = active (same
+    // geometry, so the crossfade never jumps).
+    NavTab(Routes.BROWSE,   "Home",     SolarIcons.Home,    SolarIcons.HomeBold),
+    NavTab(Routes.LIBRARY,  "Library",  SolarIcons.Library, SolarIcons.LibraryBold),
+    NavTab(Routes.DISCOVER, "Discover", SolarIcons.Compass, SolarIcons.CompassBold),
+    NavTab(Routes.SETTINGS, "Settings", SolarIcons.Settings, SolarIcons.SettingsBold)
 )
 
 // CHANGE: a bit smaller than the HTML's geometry (48dp buttons, 8dp apart,
@@ -418,7 +420,7 @@ private val navTabs = listOf(
 // FAB size) derives from these, so resizing again is a few numbers.
 private val NavItemSize = 44.dp
 private val NavItemGap  = 4.dp
-private val NavIconSize = 22.dp     // a tiny bit bigger (was 20dp)
+private val NavIconSize = 24.dp     // Solar is drawn on a 24dp grid
 // Classic: the pill and the search FAB are 87% opaque. Glass mode: tv3's 51%.
 private const val NavOpacityClassic = 0.87f
 private val NavPadH     = 6.dp
@@ -655,7 +657,7 @@ private fun SearchFab(hazeState: HazeState, active: Boolean, onClick: () -> Unit
         contentAlignment = Alignment.Center
     ) {
         Icon(
-            imageVector        = NavIcons.Search,
+            imageVector        = if (active) SolarIcons.SearchBold else SolarIcons.Search,
             contentDescription = "Search",
             tint               = iconTint,
             modifier           = Modifier.size(NavIconSize)
