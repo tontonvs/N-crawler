@@ -1,5 +1,6 @@
 package com.noven.ncrawler.ui.screens.downloads
 
+import com.noven.ncrawler.ui.components.SolarIcons
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -135,7 +136,7 @@ fun DownloadsScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Icon(
-                        Icons.Default.DownloadForOffline,
+                        SolarIcons.Download,
                         contentDescription = null,
                         modifier = Modifier.size(64.dp).staggerIn(0, distance = 10.dp),
                         tint     = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
@@ -379,7 +380,7 @@ private fun DownloadCard(
                 if (progress.downloadedChapters > 0 && progress.status != DownloadStatus.QUEUED) {
                     TextButton(onClick = onExport) {
                         Icon(
-                            Icons.Default.Description,
+                            SolarIcons.Document,
                             contentDescription = null,
                             modifier = Modifier.size(18.dp)
                         )
@@ -388,7 +389,7 @@ private fun DownloadCard(
                     }
                     IconButton(onClick = onPickFolder) {
                         Icon(
-                            Icons.Default.FolderOpen,
+                            SolarIcons.FolderOpen,
                             contentDescription = "Choose export folder",
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -396,7 +397,7 @@ private fun DownloadCard(
                 }
                 IconButton(onClick = onDelete) {
                     Icon(
-                        Icons.Default.DeleteOutline,
+                        SolarIcons.TrashBin,
                         contentDescription = "Delete download",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -447,7 +448,7 @@ private fun StatusIcon(status: DownloadStatus, wait: NetworkWait = NetworkWait.N
     ) { (st, w) ->
         if (w != NetworkWait.NONE) {
             Icon(
-                Icons.Default.WifiOff,
+                SolarIcons.Wifi,
                 contentDescription = w.label,
                 tint     = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(20.dp)
@@ -462,7 +463,7 @@ private fun StatusIcon(status: DownloadStatus, wait: NetworkWait = NetworkWait.N
             }
             DownloadStatus.COMPLETE -> {
                 Icon(
-                    Icons.Default.CheckCircle,
+                    SolarIcons.CheckCircleBold,
                     contentDescription = "Complete",
                     tint     = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(20.dp)
@@ -470,7 +471,7 @@ private fun StatusIcon(status: DownloadStatus, wait: NetworkWait = NetworkWait.N
             }
             DownloadStatus.QUEUED -> {
                 Icon(
-                    Icons.Default.Schedule,
+                    SolarIcons.ClockCircle,
                     contentDescription = "Queued",
                     tint     = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(20.dp)
@@ -478,7 +479,7 @@ private fun StatusIcon(status: DownloadStatus, wait: NetworkWait = NetworkWait.N
             }
             DownloadStatus.PAUSED -> {
                 Icon(
-                    Icons.Default.PauseCircle,
+                    SolarIcons.PauseCircle,
                     contentDescription = "Paused",
                     tint     = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(20.dp)
@@ -486,7 +487,7 @@ private fun StatusIcon(status: DownloadStatus, wait: NetworkWait = NetworkWait.N
             }
             DownloadStatus.ERROR -> {
                 Icon(
-                    Icons.Default.ErrorOutline,
+                    SolarIcons.DangerCircle,
                     contentDescription = "Error",
                     tint     = MaterialTheme.colorScheme.error,
                     modifier = Modifier.size(20.dp)

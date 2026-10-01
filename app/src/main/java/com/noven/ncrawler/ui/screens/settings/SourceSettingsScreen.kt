@@ -185,6 +185,17 @@ fun SourceSettingsScreen(
                 SectionLabel("Look")
             }
             item { GlassModeCard() }
+
+            // Credit required by the icon licence (CC BY 4.0)
+            item {
+                Text(
+                    "Icons: Solar by 480 Design (CC BY 4.0)",
+                    fontFamily = MontserratFamily,
+                    fontSize   = 11.sp,
+                    color      = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    modifier   = Modifier.padding(top = 8.dp)
+                )
+            }
         }
     }
 }

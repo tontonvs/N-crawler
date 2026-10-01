@@ -1,5 +1,6 @@
 package com.noven.ncrawler.ui.screens.library
 
+import com.noven.ncrawler.ui.components.SolarIcons
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -162,7 +163,7 @@ private fun LibraryCard(
                     // onRemove used to be wired up but never shown — no way out of the library.
                     IconButton(onClick = onRemove, modifier = Modifier.size(32.dp)) {
                         Icon(
-                            Icons.Default.Bookmark,
+                            SolarIcons.BookmarkBold,
                             contentDescription = "Remove from library",
                             modifier = Modifier.size(20.dp),
                             tint     = MaterialTheme.colorScheme.primary
@@ -226,7 +227,7 @@ private fun LibraryCard(
                                 horizontalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
                                 Icon(
-                                    Icons.Default.DownloadDone,
+                                    SolarIcons.CheckCircleBold,
                                     contentDescription = null,
                                     modifier = Modifier.size(12.dp),
                                     tint     = MaterialTheme.colorScheme.primary
@@ -275,7 +276,7 @@ private fun LibraryCard(
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                     ) {
                         Icon(
-                            if (reading != null) Icons.Default.PlayArrow else Icons.Default.MenuBook,
+                            if (reading != null) SolarIcons.PlayBold else SolarIcons.Books,
                             contentDescription = null,
                             modifier = Modifier.size(14.dp)
                         )
@@ -302,7 +303,7 @@ private fun LibraryEmptyState(modifier: Modifier = Modifier) {
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Icon(
-                Icons.Default.CollectionsBookmark,
+                SolarIcons.Library,
                 contentDescription = null,
                 modifier = Modifier.size(64.dp).staggerIn(0, distance = 10.dp),
                 tint     = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)

@@ -1,5 +1,9 @@
 package com.noven.ncrawler.ui.screens.reader
 
+import com.noven.ncrawler.ui.components.staggerIn
+import com.noven.ncrawler.ui.components.rememberReducedMotion
+import androidx.compose.ui.draw.drawBehind
+import com.noven.ncrawler.ui.components.SolarIcons
 import dev.chrisbanes.haze.HazeState
 import com.noven.ncrawler.ui.theme.GlassSpec
 import com.noven.ncrawler.ui.theme.GlassMode
@@ -235,7 +239,7 @@ fun ReaderScreen(
                         modifier            = Modifier.align(Alignment.Center).errorShake(),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Icon(Icons.Default.WifiOff, contentDescription = null,
+                        Icon(SolarIcons.Wifi, contentDescription = null,
                             modifier = Modifier.size(48.dp), tint = fg.copy(alpha = 0.5f))
                         Spacer(Modifier.height(12.dp))
                         Text((state as? ReaderUiState.Error)?.message ?: "Something went wrong",
@@ -643,7 +647,7 @@ private fun PullNextIndicator(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(
-            Icons.Default.KeyboardArrowUp,
+            SolarIcons.ArrowUp,
             contentDescription = null,
             tint     = if (ready) accent else fg.copy(alpha = 0.9f),
             modifier = Modifier
@@ -865,10 +869,10 @@ private fun ReaderHeader(
             ) {
                 // Change 2+3: solid filled circle buttons, bigger (48dp)
                 ReaderIconButton(fg = fg, onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = fg, modifier = Modifier.size(24.dp))
+                    Icon(SolarIcons.ArrowLeft, "Back", tint = fg, modifier = Modifier.size(24.dp))
                 }
                 ReaderIconButton(fg = fg, onClick = onSettingsClick) {
-                    Icon(Icons.Default.Settings, "Settings", tint = fg, modifier = Modifier.size(24.dp))
+                    Icon(SolarIcons.Settings, "Settings", tint = fg, modifier = Modifier.size(24.dp))
                 }
             }
         }
@@ -974,7 +978,7 @@ private fun ChapterNavBar(
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    Icons.AutoMirrored.Filled.ArrowBack,
+                    SolarIcons.ArrowLeft,
                     "Previous chapter",
                     tint     = fg.copy(alpha = if (canGoPrev) 0.9f else 0.25f),
                     modifier = Modifier.size(22.dp)
@@ -996,7 +1000,7 @@ private fun ChapterNavBar(
                     modifier              = Modifier.fillMaxWidth()
                 ) {
                     Icon(
-                        Icons.Default.MenuBook,
+                        SolarIcons.List,
                         contentDescription = null,
                         tint     = accent,
                         modifier = Modifier.size(16.dp)
@@ -1043,7 +1047,7 @@ private fun ChapterNavBar(
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    Icons.AutoMirrored.Filled.ArrowForward,
+                    SolarIcons.ArrowRight,
                     "Next chapter",
                     tint     = fg.copy(alpha = 0.9f),
                     modifier = Modifier.size(22.dp)
@@ -1340,7 +1344,7 @@ private fun DraggableSettingsSheet(
             verticalAlignment = Alignment.CenterVertically,
             modifier          = Modifier.padding(bottom = 20.dp)
         ) {
-            Icon(Icons.Default.LightMode, null, tint = Color(0xFF6B6259), modifier = Modifier.size(18.dp))
+            Icon(SolarIcons.Sun, null, tint = Color(0xFF6B6259), modifier = Modifier.size(18.dp))
             Slider(
                 value         = settings.brightness,
                 onValueChange = onBrightness,
@@ -1352,7 +1356,7 @@ private fun DraggableSettingsSheet(
                     inactiveTrackColor = Color(0xFFDCD5CB)
                 )
             )
-            Icon(Icons.Default.LightMode, null, tint = Color(0xFF1A1714), modifier = Modifier.size(26.dp))
+            Icon(SolarIcons.Sun, null, tint = Color(0xFF1A1714), modifier = Modifier.size(26.dp))
         }
 
         // Theme swatches
@@ -1408,10 +1412,10 @@ private fun DraggableSettingsSheet(
             modifier              = Modifier.fillMaxWidth().padding(bottom = 12.dp),
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            AlignButton(Icons.Filled.FormatAlignLeft,    settings.textAlign == ReaderTextAlign.LEFT)    { onSetAlign(ReaderTextAlign.LEFT) }
-            AlignButton(Icons.Filled.FormatAlignCenter,  settings.textAlign == ReaderTextAlign.CENTER)  { onSetAlign(ReaderTextAlign.CENTER) }
-            AlignButton(Icons.Filled.FormatAlignRight,   settings.textAlign == ReaderTextAlign.RIGHT)   { onSetAlign(ReaderTextAlign.RIGHT) }
-            AlignButton(Icons.Filled.FormatAlignJustify, settings.textAlign == ReaderTextAlign.JUSTIFY) { onSetAlign(ReaderTextAlign.JUSTIFY) }
+            AlignButton(SolarIcons.AlignLeft,    settings.textAlign == ReaderTextAlign.LEFT)    { onSetAlign(ReaderTextAlign.LEFT) }
+            AlignButton(SolarIcons.AlignCenter,  settings.textAlign == ReaderTextAlign.CENTER)  { onSetAlign(ReaderTextAlign.CENTER) }
+            AlignButton(SolarIcons.AlignRight,   settings.textAlign == ReaderTextAlign.RIGHT)   { onSetAlign(ReaderTextAlign.RIGHT) }
+            AlignButton(SolarIcons.AlignJustify, settings.textAlign == ReaderTextAlign.JUSTIFY) { onSetAlign(ReaderTextAlign.JUSTIFY) }
         }
     }
 }
@@ -1609,7 +1613,7 @@ private fun SortPill(ascending: Boolean, onClick: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(
-            Icons.Default.SwapVert,
+            SolarIcons.Sort,
             contentDescription = null,
             tint     = TocInk,
             modifier = Modifier
@@ -1682,9 +1686,15 @@ private suspend fun smoothScrollToTop(state: LazyListState) {
 }
 
 // ── Audio "coming soon" overlay ──────────────────────────────────────────────
-// Change 1: pill moved here so user can switch back to Text without dismissing.
-// Ring radius widened to 130f (from 100f) so it doesn't cover the info text.
-// Info text pushed further down (padding top 280dp → well below the ring).
+// REDESIGNED (was: six icons spinning round a ring, with text squeezed below).
+// Now one calm, readable screen: a headphones badge with two soft pulse rings
+// (one slow ease-out loop), then "Coming soon", one short line and the
+// Audio/Text pill rise in one after another (the app's usual stack-in).
+//  • Rings are drawn in the draw phase from one infinite transition, so nothing
+//    recomposes while it runs; with system animations off they sit still.
+//  • The backdrop still inverts the reader theme (light page → deep blue, dark
+//    page → warm cream) so it reads as a separate mode.
+//  • Tap anywhere to go back; the pill switches back to Text without closing.
 @Composable
 private fun AudioComingSoonOverlay(
     readerBg: Color,
@@ -1698,33 +1708,18 @@ private fun AudioComingSoonOverlay(
     val backdrop  = if (luminance < 0.5f) Color(0xFFF5F0EA) else Color(0xFF0B1E3D)
     val content   = if (luminance < 0.5f) Color(0xFF1A1714) else Color(0xFFEAF1FF)
 
-    var started by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { started = true }
-
-    val spread by animateFloatAsState(
-        targetValue   = if (started) 1f else 0f,
-        animationSpec = tween(950, easing = FastOutSlowInEasing),
-        label         = "spread"
-    )
-    val textAlpha by animateFloatAsState(
-        targetValue   = if (spread > 0.8f) 1f else 0f,
-        animationSpec = tween(500),
-        label         = "text"
-    )
-    val infinite = rememberInfiniteTransition(label = "spin")
-    val rotation by infinite.animateFloat(
-        initialValue  = 0f,
-        targetValue   = 360f,
-        animationSpec = infiniteRepeatable(tween(7000, easing = LinearEasing)),
-        label         = "rotation"
-    )
-
-    val orbitIcons = remember {
-        listOf(
-            Icons.Default.Headphones, Icons.Default.GraphicEq, Icons.Default.PlayArrow,
-            Icons.Default.VolumeUp,   Icons.Default.Mic,       Icons.Default.MusicNote
-        )
-    }
+    val reduced = rememberReducedMotion()
+    val phase: State<Float> =
+        if (reduced) {
+            remember { mutableStateOf(0.35f) }
+        } else {
+            rememberInfiniteTransition(label = "audioPulse").animateFloat(
+                initialValue  = 0f,
+                targetValue   = 1f,
+                animationSpec = infiniteRepeatable(tween(2600, easing = LinearEasing)),
+                label         = "audioPulsePhase"
+            )
+        }
 
     val noRipple = remember { MutableInteractionSource() }
 
@@ -1735,76 +1730,91 @@ private fun AudioComingSoonOverlay(
             .clickable(interactionSource = noRipple, indication = null, onClick = onDismiss),
         contentAlignment = Alignment.Center
     ) {
-        // Orbit ring — wider (300dp container, 130f radius)
-        Box(
-            modifier         = Modifier
-                .offset(y = (-30).dp)
-                .size(300.dp)
-                .graphicsLayer { rotationZ = rotation * spread },
-            contentAlignment = Alignment.Center
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier            = Modifier.padding(horizontal = 32.dp)
         ) {
-            orbitIcons.forEachIndexed { i, icon ->
-                val angle  = (360f / orbitIcons.size) * i
-                val radius = 130f
-                val rad    = Math.toRadians(angle.toDouble())
-                val tx     = (radius * cos(rad)).toFloat()
-                val ty     = (radius * sin(rad)).toFloat()
-                Box(
-                    modifier = Modifier
-                        .offset(x = (tx * spread).dp, y = (ty * spread).dp)
-                        .size(44.dp)
-                        .alpha(spread)
-                        .clip(CircleShape)
-                        .background(content.copy(alpha = 0.14f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(icon, contentDescription = null, tint = content, modifier = Modifier.size(22.dp))
-                }
-            }
+            // Badge + pulse rings
             Box(
-                modifier         = Modifier.graphicsLayer { rotationZ = -rotation * spread },
+                modifier = Modifier
+                    .staggerIn(0, distance = 10.dp, stepMs = 90, maxAnimated = 4)
+                    .size(220.dp)
+                    .drawBehind {
+                        val base  = 48.dp.toPx()                       // badge radius
+                        val reach = size.minDimension / 2f - base
+                        if (reduced) {
+                            drawCircle(
+                                color  = content.copy(alpha = 0.14f),
+                                radius = base + reach * 0.5f,
+                                style  = Stroke(width = 1.5.dp.toPx())
+                            )
+                        } else {
+                            for (offset in floatArrayOf(0f, 0.5f)) {
+                                val t      = (phase.value + offset) % 1f
+                                val eased  = 1f - (1f - t) * (1f - t)  // ease-out: quick out, soft finish
+                                drawCircle(
+                                    color  = content.copy(alpha = 0.28f * (1f - t)),
+                                    radius = base + reach * eased,
+                                    style  = Stroke(width = 1.5.dp.toPx())
+                                )
+                            }
+                        }
+                    },
                 contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    Icons.Default.MusicNote,
-                    contentDescription = null,
-                    tint     = content,
-                    modifier = Modifier.size(56.dp).alpha(spread)
-                )
+                Box(
+                    modifier = Modifier
+                        .size(96.dp)
+                        .clip(CircleShape)
+                        .background(content.copy(alpha = 0.10f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        SolarIcons.HeadphonesBold,
+                        contentDescription = null,
+                        tint     = content,
+                        modifier = Modifier.size(44.dp)
+                    )
+                }
             }
-        }
 
-        // Info text + pill — below the ring, clear of the orbit
-        Column(
-            modifier            = Modifier
-                .align(Alignment.Center)
-                .padding(top = 280.dp)
-                .alpha(textAlpha),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
             Text(
-                "Audio coming soon",
-                fontFamily = MontserratFamily,
-                fontWeight = FontWeight.ExtraBold,
-                fontSize   = 16.sp,
-                color      = content
+                "AUDIO",
+                modifier      = Modifier.staggerIn(1, distance = 10.dp, stepMs = 90, maxAnimated = 4),
+                fontFamily    = MontserratFamily,
+                fontWeight    = FontWeight.Bold,
+                fontSize      = 12.sp,
+                letterSpacing = 2.sp,
+                color         = content.copy(alpha = 0.55f)
             )
             Spacer(Modifier.height(6.dp))
             Text(
-                "Tap to go back",
+                "Coming soon",
+                modifier   = Modifier.staggerIn(1, distance = 10.dp, stepMs = 90, maxAnimated = 4),
                 fontFamily = MontserratFamily,
-                fontSize   = 12.sp,
-                color      = content.copy(alpha = 0.6f)
+                fontWeight = FontWeight.ExtraBold,
+                fontSize   = 28.sp,
+                color      = content
             )
-            Spacer(Modifier.height(20.dp))
-            // Pill in the overlay so user can switch back to Text mode
-            SegmentedPill(
-                audioSelected = audioSelected,
-                accent        = accent,
-                fg            = content,
-                onAudioClick  = onAudioClick,
-                onTextClick   = onTextClick
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Hear chapters read aloud",
+                modifier   = Modifier.staggerIn(2, distance = 10.dp, stepMs = 90, maxAnimated = 4),
+                fontFamily = MontserratFamily,
+                fontSize   = 14.sp,
+                textAlign  = TextAlign.Center,
+                color      = content.copy(alpha = 0.65f)
             )
+            Spacer(Modifier.height(28.dp))
+            Box(Modifier.staggerIn(3, distance = 10.dp, stepMs = 90, maxAnimated = 4)) {
+                SegmentedPill(
+                    audioSelected = audioSelected,
+                    accent        = accent,
+                    fg            = content,
+                    onAudioClick  = onAudioClick,
+                    onTextClick   = onTextClick
+                )
+            }
         }
     }
 }
