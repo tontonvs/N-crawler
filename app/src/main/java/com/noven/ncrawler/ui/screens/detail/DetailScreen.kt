@@ -2,6 +2,22 @@ package com.noven.ncrawler.ui.screens.detail
 
 import com.noven.ncrawler.ui.components.AnimatedDownloadIcon
 import com.noven.ncrawler.ui.components.AnimatedRefreshIcon
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.snap
+import com.noven.ncrawler.ui.components.rememberReducedMotion
+import com.noven.ncrawler.ui.components.SolarStars
+import com.noven.ncrawler.ui.components.Motion
+import com.noven.ncrawler.viewmodel.DownloadNotice
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.withFrameNanos
+import kotlinx.coroutines.launch
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -61,7 +77,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.DownloadForOffline
@@ -72,9 +87,6 @@ import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Schedule
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.StarHalf
-import androidx.compose.material.icons.outlined.StarOutline
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -129,7 +141,6 @@ import com.noven.ncrawler.data.db.DownloadStatus
 import com.noven.ncrawler.data.db.NovelEntity
 import com.noven.ncrawler.data.local.DominantColorStore
 import com.noven.ncrawler.data.scraper.ChapterLink
-import com.noven.ncrawler.ui.components.Motion
 import com.noven.ncrawler.ui.components.errorShake
 import com.noven.ncrawler.ui.theme.GlassSurfaceDark
 import com.noven.ncrawler.ui.theme.GlassSpec
@@ -183,9 +194,13 @@ private val FallbackAccent = Color(0xFF4FC3F7)
 private const val SUMMARY_INDEX  = 1
 private const val CHAPTERS_INDEX = 2
 
-// Chapter list paging: first batch, then this many more per "See more" tap.
+// Chapter list loading. The first batch shows at once; ONE tap on "See more" then
+// streams in the rest in growing batches (10, 20, 30, 30 …), each preceded by a
+// short skeleton beat, so a 3000-chapter novel never lands in one frame.
 private const val CHAPTER_FIRST_BATCH = 10
-private const val CHAPTER_PAGE        = 5
+private const val CHAPTER_BATCH_STEP  = 10
+private const val CHAPTER_BATCH_MAX   = 30
+private const val CHAPTER_BATCH_GAP_MS = 70L
 
 // ── Star rating ───────────────────────────────────────────────────────────────
 
@@ -202,17 +217,43 @@ private fun StarRating(
 
     Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
         for (i in 1..5) {
-            val icon = when {
-                stars >= i          -> Icons.Filled.Star
-                stars >= i - 0.5f   -> Icons.Filled.StarHalf
-                else                -> Icons.Outlined.StarOutline
+            when {
+                // full: solid duotone star
+                stars >= i -> Icon(
+                    imageVector        = SolarStars.StarBold,
+                    contentDescription = null,
+                    tint               = starColor,
+                    modifier           = Modifier.size(21.dp),
+                )
+                // half: outline star with the solid one clipped to its left half
+                stars >= i - 0.5f -> Box(Modifier.size(21.dp)) {
+                    Icon(
+                        imageVector        = SolarStars.Star,
+                        contentDescription = null,
+                        tint               = starColor,
+                        modifier           = Modifier.fillMaxSize(),
+                    )
+                    Icon(
+                        imageVector        = SolarStars.StarBold,
+                        contentDescription = null,
+                        tint               = starColor,
+                        modifier           = Modifier
+                            .fillMaxSize()
+                            .drawWithContent {
+                                clipRect(right = size.width / 2f) {
+                                    this@drawWithContent.drawContent()
+                                }
+                            },
+                    )
+                }
+                // empty: line duotone star
+                else -> Icon(
+                    imageVector        = SolarStars.Star,
+                    contentDescription = null,
+                    tint               = emptyColor,
+                    modifier           = Modifier.size(21.dp),
+                )
             }
-            Icon(
-                imageVector        = icon,
-                contentDescription = null,
-                tint               = if (stars >= i - 0.5f) starColor else emptyColor,
-                modifier           = Modifier.size(21.dp),
-            )
         }
         Spacer(Modifier.width(9.dp))
         Text(
@@ -867,36 +908,225 @@ private fun ChapterRowSkeleton(a: State<Float>) {
 }
 
 // ── Sort toggle ───────────────────────────────────────────────────────────────
-// An arrow + three bars of falling length. The whole icon turns 180° when the
-// order flips (arrow down + long bar on top = newest first).
+// Solar "Sort Vertical" (line duotone, like every other icon on this screen).
+// It turns 180° when the order flips, which also swaps its two tones — the solid
+// arrow marks the direction in use. 260ms, ease-out; instant with reduced motion.
 
 @Composable
 private fun SortToggle(newestFirst: Boolean, onClick: () -> Unit) {
+    val reduced = rememberReducedMotion()
     val turn by animateFloatAsState(
         targetValue   = if (newestFirst) 0f else 180f,
-        animationSpec = tween(260, easing = FastOutSlowInEasing),
+        animationSpec = if (reduced) snap() else tween(260, easing = Motion.EaseOut),
         label         = "sortTurn",
     )
     ReaderCircleBtn(onClick = onClick, size = 40.dp) {
-        Canvas(
-            Modifier
+        Icon(
+            SolarIcons.Sort,
+            contentDescription = if (newestFirst) "Newest first — tap for oldest first"
+                                 else "Oldest first — tap for newest first",
+            tint               = Color.White.copy(alpha = 0.9f),
+            modifier           = Modifier
                 .size(22.dp)
                 .graphicsLayer { rotationZ = turn },
-        ) {
-            val u = size.width / 24f
-            val sw = 2f * u
-            val c  = Color.White.copy(alpha = 0.9f)
-            fun line(x1: Float, y1: Float, x2: Float, y2: Float) =
-                drawLine(c, Offset(x1 * u, y1 * u), Offset(x2 * u, y2 * u), strokeWidth = sw, cap = StrokeCap.Round)
-            // arrow (pointing down)
-            line(7f, 4f, 7f, 20f)
-            line(3.5f, 16.5f, 7f, 20f)
-            line(10.5f, 16.5f, 7f, 20f)
-            // bars
-            line(13f, 6f, 21f, 6f)
-            line(13f, 12f, 18f, 12f)
-            line(13f, 18f, 15.5f, 18f)
+        )
+    }
+}
+
+// ── Refresh button ────────────────────────────────────────────────────────────
+// Motion (Jakub primary, Emil secondary): refresh is occasional, so one calm,
+// functional motion and nothing decorative.
+//  • tap     → static icon swaps to the spinning one: fade + scale 0.85→1, 200ms
+//  • running → the spin IS the loading indicator (no ring/pulse on top of it)
+//  • done    → the spin decelerates to the resting pose (never stops dead), and
+//              only then swaps back: exit is subtler than enter (120ms, 0.9)
+//  • reduced motion → no spin; swaps are instant; the skeleton shows progress
+
+@Composable
+private fun RefreshButton(refreshing: Boolean, onClick: () -> Unit) {
+    val reduced = rememberReducedMotion()
+    var spinning by remember { mutableStateOf(false) }
+    LaunchedEffect(refreshing) { if (refreshing) spinning = true }
+    val showSpinner = refreshing || spinning
+
+    ReaderCircleBtn(onClick = onClick) {
+        AnimatedContent(
+            targetState    = showSpinner,
+            transitionSpec = {
+                if (reduced) {
+                    EnterTransition.None togetherWith ExitTransition.None
+                } else {
+                    (fadeIn(tween(200, easing = Motion.EaseOut)) +
+                        scaleIn(initialScale = 0.85f, animationSpec = tween(200, easing = Motion.EaseOut)))
+                        .togetherWith(
+                            fadeOut(tween(120, easing = Motion.EaseOut)) +
+                                scaleOut(targetScale = 0.9f, animationSpec = tween(120, easing = Motion.EaseOut))
+                        )
+                }
+            },
+            label = "refreshIconSwap",
+        ) { busy ->
+            if (busy) {
+                AnimatedRefreshIcon(
+                    animating = refreshing,
+                    ink       = Color.White.copy(alpha = 0.9f),
+                    size      = 32.dp,
+                    onRested  = { spinning = false },
+                )
+            } else {
+                Icon(
+                    SolarIcons.Refresh,
+                    contentDescription = "Check updates",
+                    tint               = Color.White.copy(alpha = 0.9f),
+                    modifier           = Modifier.size(24.dp),
+                )
+            }
         }
+    }
+}
+
+// ── "Downloading <novel>" banner ──────────────────────────────────────────────
+// Shown when a download is started. Same glass pill as the rest of the screen,
+// Solar icons, Montserrat. Motion: enter = fade + slide down from just above
+// (critically damped spring, no bounce, ~400ms); exit = fade + a 12dp lift, 200ms
+// — subtler than the enter. Auto-dismisses after 4.5s; "View" opens Downloads.
+// Reduced motion: fade only.
+
+private const val BANNER_VISIBLE_MS = 4500L
+
+@Composable
+private fun DownloadBanner(
+    notice: DownloadNotice?,
+    accent: Color,
+    onView: () -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val reduced = rememberReducedMotion()
+    val density = LocalDensity.current
+    // keep the last title on screen while the exit animation plays
+    var shown by remember { mutableStateOf<DownloadNotice?>(null) }
+    LaunchedEffect(notice) {
+        if (notice != null) {
+            shown = notice
+            delay(BANNER_VISIBLE_MS)
+            onDismiss()
+        }
+    }
+
+    AnimatedVisibility(
+        visible  = notice != null,
+        modifier = modifier,
+        enter = if (reduced) fadeIn(tween(120)) else
+            fadeIn(tween(300, easing = Motion.EaseOut)) +
+                slideInVertically(spring(dampingRatio = 1f, stiffness = Spring.StiffnessMediumLow)) { -it },
+        exit = if (reduced) fadeOut(tween(120)) else
+            fadeOut(tween(200, easing = Motion.EaseOut)) +
+                slideOutVertically(tween(200, easing = Motion.EaseOut)) { with(density) { -12.dp.roundToPx() } },
+    ) {
+        val shape = RoundedCornerShape(20.dp)
+        Row(
+            modifier = Modifier
+                .padding(horizontal = 12.dp)
+                .fillMaxWidth()
+                .then(
+                    if (GlassMode.enabled) Modifier.glassFill(shape, dark = true)
+                    else Modifier
+                        .clip(shape)
+                        .background(Color.Black.copy(alpha = 0.62f))
+                        .border(1.dp, Color.White.copy(alpha = 0.08f), shape)
+                )
+                .padding(start = 12.dp, end = 6.dp, top = 10.dp, bottom = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(accent.copy(alpha = 0.18f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    SolarIcons.DownloadBold,
+                    contentDescription = null,
+                    tint               = accent,
+                    modifier           = Modifier.size(22.dp),
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text          = "DOWNLOADING",
+                    color         = accent,
+                    fontFamily    = MontserratFamily,
+                    fontSize      = 11.sp,
+                    fontWeight    = FontWeight.SemiBold,
+                    letterSpacing = 1.5.sp,
+                )
+                Text(
+                    text       = shown?.novelTitle.orEmpty(),
+                    color      = Color.White,
+                    fontFamily = MontserratFamily,
+                    fontSize   = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines   = 1,
+                    overflow   = TextOverflow.Ellipsis,
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(16.dp))
+                    .clickable {
+                        onDismiss()
+                        onView()
+                    }
+                    .padding(start = 12.dp, end = 8.dp, top = 9.dp, bottom = 9.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text       = "View",
+                    color      = Color.White,
+                    fontFamily = MontserratFamily,
+                    fontSize   = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(Modifier.width(2.dp))
+                Icon(
+                    SolarIcons.ArrowRight,
+                    contentDescription = "View download",
+                    tint               = Color.White.copy(alpha = 0.9f),
+                    modifier           = Modifier.size(18.dp),
+                )
+            }
+        }
+    }
+}
+
+// ── Chapter panel backgrounds ─────────────────────────────────────────────────
+// The chapter list used to be ONE tall item (every row measured at once — the
+// freeze). Rows are now real lazy items, so each piece paints its own slice of the
+// panel: the header has the rounded top, the rows are flat, same fill throughout.
+
+@Composable
+private fun chapterPanel(top: Boolean): Modifier {
+    val shape = if (top) RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp) else RectangleShape
+    return if (GlassMode.enabled) {
+        // Glass mode: nav-strength fill (51%), no border.
+        Modifier.clip(shape).background(GlassBase.copy(alpha = GlassSpec.NAV_FILL))
+    } else {
+        // Classic: black 50% + hairline (top: full outline; rows: the two sides)
+        val line = Color.White.copy(alpha = 0.08f)
+        Modifier
+            .clip(shape)
+            .background(Color.Black.copy(alpha = 0.50f))
+            .then(
+                if (top) Modifier.border(1.dp, line, shape)
+                else Modifier.drawBehind {
+                    drawLine(line, Offset(0.5f, 0f), Offset(0.5f, size.height), strokeWidth = 1.dp.toPx())
+                    drawLine(line, Offset(size.width - 0.5f, 0f), Offset(size.width - 0.5f, size.height), strokeWidth = 1.dp.toPx())
+                }
+            )
     }
 }
 
@@ -1008,6 +1238,7 @@ fun DetailScreen(
     val inLibrary       by vm.inLibrary.collectAsStateWithLifecycle()
     val updateMessage   by vm.updateMessage.collectAsStateWithLifecycle()
     val refreshing      by vm.refreshing.collectAsStateWithLifecycle()
+    val downloadNotice  by vm.downloadNotice.collectAsStateWithLifecycle()
 
     // CHANGE (partial downloads): only non-null once the novel and its
     // chapter list have actually loaded — the download-options sheet needs
@@ -1184,34 +1415,22 @@ fun DetailScreen(
                         modifier           = Modifier.size(24.dp),
                     )
                 }
-                ReaderCircleBtn(onClick = vm::checkForUpdates) {
-                    // Animated while the update check runs, the static icon otherwise
-                    AnimatedContent(
-                        targetState    = refreshing,
-                        transitionSpec = {
-                            (fadeIn(tween(200)) + scaleIn(initialScale = 0.85f, animationSpec = tween(200)))
-                                .togetherWith(fadeOut(tween(120)) + scaleOut(targetScale = 0.85f, animationSpec = tween(120)))
-                        },
-                        label = "refreshIconSwap",
-                    ) { busy ->
-                        if (busy) {
-                            AnimatedRefreshIcon(
-                                ink  = Color.White.copy(alpha = 0.9f),
-                                size = 32.dp,
-                            )
-                        } else {
-                            Icon(
-                                SolarIcons.Refresh,
-                                contentDescription = "Check updates",
-                                tint               = Color.White.copy(alpha = 0.9f),
-                                modifier           = Modifier.size(24.dp),
-                            )
-                        }
-                    }
-                }
+                RefreshButton(refreshing = refreshing, onClick = vm::checkForUpdates)
             }
         }
         }
+
+        // "Downloading <novel>" banner — just under the floating buttons row
+        DownloadBanner(
+            notice    = downloadNotice,
+            accent    = accent,
+            onView    = onDownloadsClick,
+            onDismiss = vm::clearDownloadNotice,
+            modifier  = Modifier
+                .align(Alignment.TopCenter)
+                .statusBarsPadding()
+                .padding(top = 64.dp),
+        )
 
         // Snackbar — custom content so its text is Montserrat too
         SnackbarHost(
@@ -1262,10 +1481,28 @@ private fun CinematicDetail(
     // composed. Only `visibleCount` rows ever exist — that's the freeze fix.
     var newestFirst  by remember { mutableStateOf(true) }
     var visibleCount by remember { mutableStateOf(CHAPTER_FIRST_BATCH) }
+    var expanded     by remember { mutableStateOf(false) }   // "See more" tapped (once)
+    val scope  = rememberCoroutineScope()
+    val reducedMotion = rememberReducedMotion()
     val sortedChapters = remember(chapters, newestFirst) {
         if (newestFirst) chapters.sortedByDescending { it.num } else chapters.sortedBy { it.num }
     }
     val shownChapters = remember(sortedChapters, visibleCount) { sortedChapters.take(visibleCount) }
+
+    // After the one "See more" tap, stream in the rest: 10, then 20, then 30 at a
+    // time. Each round shows the skeleton rows for a beat (the assumed place of the
+    // next batch), then swaps them for the real rows and yields a frame so the list
+    // never composes a huge block at once. Restarts if the order or list changes.
+    LaunchedEffect(expanded, sortedChapters) {
+        if (!expanded) return@LaunchedEffect
+        var batch = CHAPTER_BATCH_STEP
+        while (visibleCount < sortedChapters.size) {
+            if (!reducedMotion) delay(CHAPTER_BATCH_GAP_MS)
+            visibleCount = minOf(sortedChapters.size, visibleCount + batch)
+            batch = minOf(batch + CHAPTER_BATCH_STEP, CHAPTER_BATCH_MAX)
+            withFrameNanos { }
+        }
+    }
 
     // Scroll hint: visible for 2s, then it fades away — or sooner, the moment
     // the user starts scrolling (they've found the content, no hint needed).
@@ -1485,25 +1722,14 @@ private fun CinematicDetail(
                 }
             }
 
-            // ── Chapter list (item 2) — same: hidden until scrolled to ────
-            item {
+            // ── Chapter list (items 2…) — header, then one LAZY item per row, then
+            // the footer. Rows are lazy so only the ones on screen are composed.
+            item(key = "chapters-header") {
                 RevealOnScroll(listState, itemIndex = CHAPTERS_INDEX) {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            // Glass mode: nav-strength fill (51%), no border.
-                            // Classic: black 50% + hairline.
-                            .clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
-                            .then(
-                                if (GlassMode.enabled) Modifier.background(GlassBase.copy(alpha = GlassSpec.NAV_FILL))
-                                else Modifier
-                                    .background(Color.Black.copy(alpha = 0.50f))
-                                    .border(
-                                        width = 1.dp,
-                                        color = Color.White.copy(alpha = 0.08f),
-                                        shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
-                                    )
-                            ),
+                            .then(chapterPanel(top = true)),
                     ) {
                         // Header: title | count + sort toggle
                         Row(
@@ -1535,6 +1761,10 @@ private fun CinematicDetail(
                                     onClick     = {
                                         newestFirst  = !newestFirst
                                         visibleCount = CHAPTER_FIRST_BATCH   // new order → back to the first batch
+                                        // if you were deep in the list, land back at the top of it
+                                        if (listState.firstVisibleItemIndex > CHAPTERS_INDEX + 1) {
+                                            scope.launch { listState.scrollToItem(CHAPTERS_INDEX) }
+                                        }
                                     },
                                 )
                             }
@@ -1548,20 +1778,40 @@ private fun CinematicDetail(
                             val a = rememberSkeletonAlpha()
                             repeat(4) { ChapterRowSkeleton(a) }
                         }
+                    }
+                }
+            }
 
-                        // Only the rows revealed so far are composed — see-more adds 5.
-                        shownChapters.forEach { chapter ->
-                            key(chapter.num) {
-                                ChapterRow(
-                                    chapter = chapter,
-                                    accent  = accent,
-                                    onClick = { onReadChapter(chapter.num) },
-                                )
-                            }
-                        }
+            items(items = shownChapters, key = { "ch-${it.num}" }) { chapter ->
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(chapterPanel(top = false)),
+                ) {
+                    Column {
+                        ChapterRow(
+                            chapter = chapter,
+                            accent  = accent,
+                            onClick = { onReadChapter(chapter.num) },
+                        )
+                    }
+                }
+            }
 
-                        // "See more" with fade gradient while more remain
-                        if (visibleCount < sortedChapters.size) {
+            item(key = "chapters-footer") {
+                val remaining = sortedChapters.size - visibleCount
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(chapterPanel(top = false)),
+                ) {
+                    if (remaining > 0) {
+                        if (expanded) {
+                            // The assumed place of the next batch
+                            val a = rememberSkeletonAlpha()
+                            repeat(minOf(3, remaining)) { ChapterRowSkeleton(a) }
+                        } else {
+                            // "See more" with fade gradient — tapped ONCE
                             Box(
                                 modifier         = Modifier
                                     .fillMaxWidth()
@@ -1585,7 +1835,7 @@ private fun CinematicDetail(
                                             if (GlassMode.enabled) Modifier.glassFill(RoundedCornerShape(24.dp), dark = true)
                                             else Modifier.clip(RoundedCornerShape(24.dp)).background(Color.White.copy(alpha = 0.13f))
                                         )
-                                        .clickable { visibleCount += CHAPTER_PAGE }
+                                        .clickable { expanded = true }
                                         .padding(horizontal = 22.dp, vertical = 10.dp),
                                 ) {
                                     Text(
@@ -1598,9 +1848,8 @@ private fun CinematicDetail(
                                 }
                             }
                         }
-
-                        Spacer(Modifier.height(8.dp))
                     }
+                    Spacer(Modifier.height(8.dp))
                 }
             }
 

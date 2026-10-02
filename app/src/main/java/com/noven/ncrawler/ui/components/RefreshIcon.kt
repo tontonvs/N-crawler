@@ -1,14 +1,16 @@
 package com.noven.ncrawler.ui.components
 
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
@@ -16,33 +18,51 @@ import androidx.compose.ui.unit.dp
 
 // The animated refresh icon (refresh.json, Feather "refresh-cw": a quick wind-up,
 // then two full spins, 2s per loop), played natively by LottieLite — no lottie
-// dependency. Only compose it WHILE refreshing; when the refresh ends the caller
-// swaps back to the static SolarIcons.Refresh.
-// Reduced motion (system "Remove animations"): shown as a still, fully drawn icon.
+// dependency. Compose it while refreshing and until it reports onRested; the
+// caller then swaps to the static SolarIcons.Refresh.
 
 private val REFRESH_ICON by lazy { LottieIcon(REFRESH_JSON) }
 
+/**
+ * [animating] true  → loops (a quick wind-up, two spins, 2s per loop).
+ * [animating] false → does NOT stop dead: the spin decelerates to the resting
+ * pose (ease-out, 150–600ms, never longer than the loop that was left) and then
+ * calls [onRested], so the caller swaps to the static icon at a moment the two
+ * line up. Frame 59 of the file is a 720° turn = the resting pose.
+ */
 @Composable
 fun AnimatedRefreshIcon(
+    animating: Boolean,
     ink: Color,
     modifier: Modifier = Modifier,
-    size: Dp = 32.dp
+    size: Dp = 32.dp,
+    onRested: () -> Unit = {}
 ) {
     val icon = REFRESH_ICON
     val reduced = rememberReducedMotion()
-    val loop = rememberInfiniteTransition(label = "refreshLoop")
-    val phase = loop.animateFloat(
-        initialValue  = 0f,
-        targetValue   = 1f,
-        animationSpec = infiniteRepeatable(
-            tween(icon.durationMs, easing = LinearEasing),
-            RepeatMode.Restart
-        ),
-        label = "refreshPhase"
-    )
+    val phase = remember { Animatable(0f) }
+    val rested by rememberUpdatedState(onRested)
+
+    LaunchedEffect(animating, reduced) {
+        if (animating && !reduced) {
+            while (true) {
+                val left = ((1f - phase.value) * icon.durationMs).toInt().coerceAtLeast(1)
+                phase.animateTo(1f, tween(left, easing = LinearEasing))
+                phase.snapTo(0f)
+            }
+        } else {
+            if (!reduced && phase.value > 0f) {
+                val left = ((1f - phase.value) * icon.durationMs).toInt().coerceIn(150, 600)
+                phase.animateTo(1f, tween(left, easing = LinearOutSlowInEasing))
+                phase.snapTo(0f)
+            }
+            rested()
+        }
+    }
 
     Canvas(modifier.size(size)) {
-        // phase is read here, in the draw phase — no recomposition per frame
+        // phase is read here, in the draw phase — no recomposition per frame.
+        // Reduced motion: a still, fully drawn icon (the skeleton + the swap show progress).
         val f = if (reduced) 0f else icon.frameAt(phase.value)
         icon.draw(this, f, ink, ink)
     }

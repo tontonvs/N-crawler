@@ -33,6 +33,10 @@ sealed interface DetailUiState {
 private const val OPEN_SKELETON_MIN_MS    = 700L
 private const val REFRESH_SKELETON_MIN_MS = 1600L
 
+// "Downloading <novel>" banner on the Detail screen. `id` makes every tap a new
+// event, so tapping again re-shows the banner even if the title is the same.
+data class DownloadNotice(val novelTitle: String, val id: Long)
+
 class DetailViewModel(app: Application) : AndroidViewModel(app) {
 
     private val repo = (app as NCrawlerApp).repository
@@ -56,6 +60,9 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
     // refresh icon and the skeleton over the Detail layout.
     private val _refreshing = MutableStateFlow(false)
     val refreshing: StateFlow<Boolean> = _refreshing.asStateFlow()
+
+    private val _downloadNotice = MutableStateFlow<DownloadNotice?>(null)
+    val downloadNotice: StateFlow<DownloadNotice?> = _downloadNotice.asStateFlow()
 
     private val _updateMessage = MutableStateFlow<String?>(null)
     val updateMessage: StateFlow<String?> = _updateMessage.asStateFlow()
@@ -156,6 +163,13 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    private fun announceDownload() {
+        val title = (_state.value as? DetailUiState.Success)?.novel?.title ?: return
+        _downloadNotice.value = DownloadNotice(title, SystemClock.elapsedRealtime())
+    }
+
+    fun clearDownloadNotice() { _downloadNotice.value = null }
+
     fun showMessage(message: String) { _updateMessage.value = message }
 
     fun toggleLibrary() {
@@ -179,6 +193,7 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 if (_downloadProgress.value != null) repo.resumeDownload(currentSlug)
                 else repo.queueDownloadAll(currentSlug)
+                announceDownload()
             } catch (e: Exception) {
                 _updateMessage.value = "Couldn't start download"
             }
@@ -187,7 +202,7 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
 
     fun downloadAll() {
         viewModelScope.launch {
-            try { repo.queueDownloadAll(currentSlug) }
+            try { repo.queueDownloadAll(currentSlug); announceDownload() }
             catch (e: Exception) { _updateMessage.value = "Couldn't start download" }
         }
     }
@@ -196,21 +211,21 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
     // sheet — "Last N chapters" and volume/custom-range picks.
     fun downloadLast(count: Int) {
         viewModelScope.launch {
-            try { repo.queueDownloadLast(currentSlug, count) }
+            try { repo.queueDownloadLast(currentSlug, count); announceDownload() }
             catch (e: Exception) { _updateMessage.value = "Couldn't start download" }
         }
     }
 
     fun downloadRange(startChapter: Int, endChapter: Int) {
         viewModelScope.launch {
-            try { repo.queueDownloadRange(currentSlug, startChapter, endChapter) }
+            try { repo.queueDownloadRange(currentSlug, startChapter, endChapter); announceDownload() }
             catch (e: Exception) { _updateMessage.value = "Couldn't start download" }
         }
     }
 
     fun downloadFirst(count: Int) {
         viewModelScope.launch {
-            try { repo.queueDownloadFirst(currentSlug, count) }
+            try { repo.queueDownloadFirst(currentSlug, count); announceDownload() }
             catch (e: Exception) { _updateMessage.value = "Couldn't start download" }
         }
     }
@@ -220,7 +235,7 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 if (repo.queueDownloadMissing(currentSlug) == 0) {
                     _updateMessage.value = "Every chapter is already downloaded"
-                }
+                } else announceDownload()
             } catch (e: Exception) { _updateMessage.value = "Couldn't start download" }
         }
     }
@@ -231,6 +246,7 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             try {
                 repo.queueDownloadChapters(currentSlug, nums)
+                announceDownload()
                 _updateMessage.value = "Queued ${nums.size} chapter${if (nums.size == 1) "" else "s"}"
             } catch (e: Exception) { _updateMessage.value = "Couldn't start download" }
         }
