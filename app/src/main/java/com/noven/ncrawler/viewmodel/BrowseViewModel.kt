@@ -90,6 +90,23 @@ class BrowseViewModel(app: Application) : AndroidViewModel(app) {
             .distinctUntilChanged()
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
 
+    // CHANGE (top-bar progress ring): overall progress 0f..1f of everything that is
+    // DOWNLOADING right now = chapters saved / chapters requested, summed across the
+    // active downloads (so two concurrent novels read as one combined ring). 0f when
+    // nothing is active. Same flow as isDownloading, still one cheap pass per write.
+    // Disadvantage: when several novels download, a short one finishing makes the
+    // combined fraction dip a little; the ring animates that smoothly.
+    val downloadFraction: StateFlow<Float> =
+        repo.allDownloadProgressFlow()
+            .map { rows ->
+                val active = rows.filter { it.status == DownloadStatus.DOWNLOADING }
+                val total  = active.sumOf { it.totalChapters }
+                if (total <= 0) 0f
+                else (active.sumOf { it.downloadedChapters }.toFloat() / total).coerceIn(0f, 1f)
+            }
+            .distinctUntilChanged()
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0f)
+
     // Pull-to-refresh: true while a silent reload (content stays on screen) runs.
     private val _isRefreshing = MutableStateFlow(false)
     val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()

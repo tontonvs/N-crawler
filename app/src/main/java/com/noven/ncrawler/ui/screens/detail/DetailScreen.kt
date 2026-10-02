@@ -1,5 +1,6 @@
 package com.noven.ncrawler.ui.screens.detail
 
+import com.noven.ncrawler.ui.components.AnimatedDownloadIcon
 import com.noven.ncrawler.ui.components.SolarIcons
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.CompositionLocalProvider
@@ -325,10 +326,18 @@ private fun DownloadCircleBtn(
         ) { s ->
             when (s) {
                 DownloadStatus.DOWNLOADING -> {
-                    CircularProgressIndicator(
-                        modifier    = Modifier.size(20.dp),
-                        strokeWidth = 2.dp,
-                        color       = Color.White.copy(alpha = 0.9f),
+                    // CHANGE (animated download icon): the plain spinner is replaced by the
+                    // animated download icon (box draws, wave fills, checkmark, arrow
+                    // returns — a 4s loop) for as long as THIS novel is downloading. When
+                    // the status changes, the cross-fade above fades it out (120ms) while
+                    // it keeps looping, then swaps in the next icon. 32dp canvas = the
+                    // same ~24dp of artwork as the other icons in this button.
+                    // `paper` = the dark disc colour the white checkmark knocks out to.
+                    AnimatedDownloadIcon(
+                        animating = true,
+                        ink       = Color.White.copy(alpha = 0.9f),
+                        paper     = Color(0xFF2B2E33),
+                        size      = 32.dp,
                     )
                 }
                 DownloadStatus.QUEUED -> {
