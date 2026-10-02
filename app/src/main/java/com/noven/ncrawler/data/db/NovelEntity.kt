@@ -18,5 +18,8 @@ data class NovelEntity(
     // e.g. "1|https://novelarrow.com/novel/slug/c1-...\t2|https://..."
     val chapterUrls: String = "",
     val isInLibrary: Boolean = false,
-    val cachedAt: Long = System.currentTimeMillis()
+    val cachedAt: Long = System.currentTimeMillis(),
+    // CHANGE (Detail redesign): shown in the meta row where "Latest" used to be.
+    // Defaulted so every existing NovelEntity(...) call keeps compiling.
+    val author: String = ""
 )

@@ -1,6 +1,15 @@
 package com.noven.ncrawler.ui.screens.detail
 
 import com.noven.ncrawler.ui.components.AnimatedDownloadIcon
+import com.noven.ncrawler.ui.components.AnimatedRefreshIcon
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.runtime.State
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.Shape
+import android.provider.Settings
 import com.noven.ncrawler.ui.components.SolarIcons
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.CompositionLocalProvider
@@ -32,6 +41,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -78,6 +88,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.key
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -136,7 +147,18 @@ import kotlin.math.PI
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
-// CHANGE (this pass):
+// CHANGE (Detail redesign pass):
+//  • The first screen is now a long, SHARP cover card (the Browse hero's design)
+//    with the details laid over it — genre, title, Status | Genre | Author,
+//    rating, play. The blurred full-bleed cover stays behind it.
+//  • "Latest" is gone from the meta row (Author took its place) and now sits
+//    under the play button: "Latest Ch. N" when unread, "Continue Ch. N" when
+//    in progress. Unread play still starts at Chapter 1.
+//  • Chapters: sort toggle (newest first by default), "See more" reveals 5 at a
+//    time (the old all-at-once list froze the app), real titles where known.
+//  • Refresh: animated icon while it runs + a skeleton of this screen's layout;
+//    the skeleton also shows when a novel is opened.
+// CHANGE (earlier pass):
 //  • Every piece of text is Montserrat — the reader's font — including the
 //    rating, chips, chapter rows, buttons, error state and the snackbar.
 //  • Buttons (back, refresh, play, retry, "see all") use the reader's design:
@@ -160,6 +182,10 @@ private val FallbackAccent = Color(0xFF4FC3F7)
 // them to know when ITS item has been scrolled into view.
 private const val SUMMARY_INDEX  = 1
 private const val CHAPTERS_INDEX = 2
+
+// Chapter list paging: first batch, then this many more per "See more" tap.
+private const val CHAPTER_FIRST_BATCH = 10
+private const val CHAPTER_PAGE        = 5
 
 // ── Star rating ───────────────────────────────────────────────────────────────
 
@@ -733,6 +759,236 @@ private fun ScrollHint(visible: Boolean, modifier: Modifier = Modifier) {
     }
 }
 
+// ── Skeleton ──────────────────────────────────────────────────────────────────
+// One shared pulse for every block (a single transition, read in the DRAW phase,
+// so the skeleton never recomposes per frame).
+
+@Composable
+private fun rememberSkeletonAlpha(): State<Float> {
+    val t = rememberInfiniteTransition(label = "skeleton")
+    return t.animateFloat(
+        initialValue  = 0.07f,
+        targetValue   = 0.17f,
+        animationSpec = infiniteRepeatable(tween(900, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+        label         = "skeletonAlpha",
+    )
+}
+
+private fun Modifier.skelBlock(alpha: State<Float>, shape: Shape = RoundedCornerShape(8.dp)): Modifier =
+    this.clip(shape).drawBehind { drawRect(Color.White.copy(alpha = alpha.value)) }
+
+// Mirrors the real layout: top buttons row, the long image card with its details
+// (genre, title, 3 meta columns, rating, play + label), and the chapter header.
+@Composable
+private fun DetailSkeleton(bgTop: Color, modifier: Modifier = Modifier) {
+    val a = rememberSkeletonAlpha()
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(Brush.verticalGradient(listOf(bgTop, Color(0xFF000000)))),
+    ) {
+        // top row: back | download, bookmark, refresh
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .statusBarsPadding()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Box(Modifier.size(48.dp).skelBlock(a, CircleShape))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                repeat(3) { Box(Modifier.size(48.dp).skelBlock(a, CircleShape)) }
+            }
+        }
+
+        BoxWithConstraints(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .navigationBarsPadding(),
+        ) {
+            val cardHeight = maxHeight * CARD_HEIGHT_FRACTION
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = CARD_TOP_PADDING, start = 16.dp, end = 16.dp)
+                    .fillMaxWidth()
+                    .height(cardHeight)
+                    .skelBlock(a, RoundedCornerShape(24.dp)),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp, vertical = 20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Box(Modifier.width(90.dp).height(14.dp).skelBlock(a))
+                    Spacer(Modifier.height(12.dp))
+                    Box(Modifier.fillMaxWidth(0.85f).height(30.dp).skelBlock(a))
+                    Spacer(Modifier.height(8.dp))
+                    Box(Modifier.fillMaxWidth(0.55f).height(30.dp).skelBlock(a))
+                    Spacer(Modifier.height(24.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                        repeat(3) {
+                            Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                                Box(Modifier.fillMaxWidth(0.8f).height(16.dp).skelBlock(a))
+                                Spacer(Modifier.height(8.dp))
+                                Box(Modifier.fillMaxWidth(0.5f).height(11.dp).skelBlock(a))
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(22.dp))
+                    Box(Modifier.width(170.dp).height(20.dp).skelBlock(a))
+                    Spacer(Modifier.height(26.dp))
+                    Box(Modifier.size(76.dp).skelBlock(a, CircleShape))
+                    Spacer(Modifier.height(10.dp))
+                    Box(Modifier.width(110.dp).height(15.dp).skelBlock(a))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChapterRowSkeleton(a: State<Float>) {
+    Row(
+        modifier          = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 17.dp, horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(7.dp).skelBlock(a, CircleShape))
+        Spacer(Modifier.width(12.dp))
+        Box(Modifier.weight(1f).height(14.dp).skelBlock(a))
+        Spacer(Modifier.width(24.dp))
+        Box(Modifier.width(38.dp).height(12.dp).skelBlock(a))
+    }
+}
+
+// ── Sort toggle ───────────────────────────────────────────────────────────────
+// An arrow + three bars of falling length. The whole icon turns 180° when the
+// order flips (arrow down + long bar on top = newest first).
+
+@Composable
+private fun SortToggle(newestFirst: Boolean, onClick: () -> Unit) {
+    val turn by animateFloatAsState(
+        targetValue   = if (newestFirst) 0f else 180f,
+        animationSpec = tween(260, easing = FastOutSlowInEasing),
+        label         = "sortTurn",
+    )
+    ReaderCircleBtn(onClick = onClick, size = 40.dp) {
+        Canvas(
+            Modifier
+                .size(22.dp)
+                .graphicsLayer { rotationZ = turn },
+        ) {
+            val u = size.width / 24f
+            val sw = 2f * u
+            val c  = Color.White.copy(alpha = 0.9f)
+            fun line(x1: Float, y1: Float, x2: Float, y2: Float) =
+                drawLine(c, Offset(x1 * u, y1 * u), Offset(x2 * u, y2 * u), strokeWidth = sw, cap = StrokeCap.Round)
+            // arrow (pointing down)
+            line(7f, 4f, 7f, 20f)
+            line(3.5f, 16.5f, 7f, 20f)
+            line(10.5f, 16.5f, 7f, 20f)
+            // bars
+            line(13f, 6f, 21f, 6f)
+            line(13f, 12f, 18f, 12f)
+            line(13f, 18f, 15.5f, 18f)
+        }
+    }
+}
+
+// ── Novel image card ──────────────────────────────────────────────────────────
+// The Browse hero banner's design (rounded card, cover with a slow drift, dark
+// bottom scrim, text over the bottom) with three changes:
+//  • much taller — a long card — so the whole first screen's details fit on it;
+//  • the drift is gentler (1.04→1.10 zoom, was 1.12→1.20): the point of this
+//    card is a CLEAR cover, and heavy zoom is what blurred it;
+//  • it carries the palette listener (the colours the screen is themed with).
+
+private const val CARD_HEIGHT_FRACTION = 0.80f
+private val CARD_TOP_PADDING = 72.dp          // clears the floating buttons row
+
+@Composable
+private fun NovelImageCard(
+    novel: NovelEntity,
+    onCoverLoaded: (android.graphics.drawable.Drawable) -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable BoxScope.() -> Unit,
+) {
+    val context = LocalContext.current
+    val reducedMotion = remember(context) {
+        Settings.Global.getFloat(
+            context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f
+        ) == 0f
+    }
+    val drift = rememberInfiniteTransition(label = "cardDrift")
+    val zoom by drift.animateFloat(
+        initialValue  = 0f, targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(22000, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+        label         = "cardZoom",
+    )
+    val panX by drift.animateFloat(
+        initialValue  = -1f, targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(17000, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+        label         = "cardPanX",
+    )
+    val panY by drift.animateFloat(
+        initialValue  = -1f, targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(23000, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+        label         = "cardPanY",
+    )
+
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(24.dp))
+            .background(Color(0xFF10141F)),
+    ) {
+        AsyncImage(
+            model = ImageRequest.Builder(context)
+                .data(novel.coverUrl)
+                .crossfade(400)
+                // Palette.from() needs a software bitmap (hardware bitmaps throw).
+                .allowHardware(false)
+                .listener(onSuccess = { _, result -> onCoverLoaded(result.drawable) })
+                .build(),
+            contentDescription = novel.title,
+            contentScale       = ContentScale.Crop,
+            modifier           = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    if (!reducedMotion) {
+                        val scale = 1.04f + 0.06f * zoom
+                        scaleX = scale
+                        scaleY = scale
+                        translationX = panX * (scale - 1f) * size.width  * 0.4f
+                        translationY = panY * (scale - 1f) * size.height * 0.4f
+                    }
+                },
+        )
+
+        // Scrim: clear on top (the cover stays sharp), dark at the bottom where the text sits
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        colorStops = arrayOf(
+                            0f    to Color.Black.copy(alpha = 0.04f),
+                            0.40f to Color.Black.copy(alpha = 0.10f),
+                            0.68f to Color.Black.copy(alpha = 0.62f),
+                            1f    to Color.Black.copy(alpha = 0.90f),
+                        )
+                    )
+                )
+        )
+
+        content()
+    }
+}
+
 // ── Main screen ───────────────────────────────────────────────────────────────
 
 @Composable
@@ -751,6 +1007,7 @@ fun DetailScreen(
     val downloadProgress by vm.downloadProgress.collectAsStateWithLifecycle()
     val inLibrary       by vm.inLibrary.collectAsStateWithLifecycle()
     val updateMessage   by vm.updateMessage.collectAsStateWithLifecycle()
+    val refreshing      by vm.refreshing.collectAsStateWithLifecycle()
 
     // CHANGE (partial downloads): only non-null once the novel and its
     // chapter list have actually loaded — the download-options sheet needs
@@ -791,13 +1048,8 @@ fun DetailScreen(
         when (p) {
 
             0 -> {
-                // Solid dark bg while loading
-                Box(
-                    modifier         = Modifier.fillMaxSize().background(FallbackTop),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    CircularProgressIndicator(color = FallbackAccent)
-                }
+                // Skeleton of the real layout while the novel loads
+                DetailSkeleton(bgTop = FallbackTop)
             }
 
             1 -> {
@@ -879,6 +1131,17 @@ fun DetailScreen(
         }
         }
 
+        // Refresh: the skeleton fades over the (already loaded) content for the
+        // length of the update check; the content underneath keeps its state.
+        AnimatedVisibility(
+            visible  = refreshing,
+            enter    = fadeIn(tween(180)),
+            exit     = fadeOut(tween(300)),
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            DetailSkeleton(bgTop = bgTop)
+        }
+
         // ── Floating top row: back + download + refresh — always on top ──
         // Reader-style 48dp circles with 24dp icons (same as the reader header).
         CompositionLocalProvider(LocalDetailHaze provides detailHaze) {
@@ -922,12 +1185,29 @@ fun DetailScreen(
                     )
                 }
                 ReaderCircleBtn(onClick = vm::checkForUpdates) {
-                    Icon(
-                        SolarIcons.Refresh,
-                        contentDescription = "Check updates",
-                        tint               = Color.White.copy(alpha = 0.9f),
-                        modifier           = Modifier.size(24.dp),
-                    )
+                    // Animated while the update check runs, the static icon otherwise
+                    AnimatedContent(
+                        targetState    = refreshing,
+                        transitionSpec = {
+                            (fadeIn(tween(200)) + scaleIn(initialScale = 0.85f, animationSpec = tween(200)))
+                                .togetherWith(fadeOut(tween(120)) + scaleOut(targetScale = 0.85f, animationSpec = tween(120)))
+                        },
+                        label = "refreshIconSwap",
+                    ) { busy ->
+                        if (busy) {
+                            AnimatedRefreshIcon(
+                                ink  = Color.White.copy(alpha = 0.9f),
+                                size = 32.dp,
+                            )
+                        } else {
+                            Icon(
+                                SolarIcons.Refresh,
+                                contentDescription = "Check updates",
+                                tint               = Color.White.copy(alpha = 0.9f),
+                                modifier           = Modifier.size(24.dp),
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -977,8 +1257,15 @@ private fun CinematicDetail(
     onCoverLoaded: (android.graphics.drawable.Drawable) -> Unit,
 ) {
     val listState = rememberLazyListState()
-    var showAllChapters by remember { mutableStateOf(false) }
-    val PREVIEW_COUNT = 10
+
+    // Chapter list state: order (newest first by default) and how many rows are
+    // composed. Only `visibleCount` rows ever exist — that's the freeze fix.
+    var newestFirst  by remember { mutableStateOf(true) }
+    var visibleCount by remember { mutableStateOf(CHAPTER_FIRST_BATCH) }
+    val sortedChapters = remember(chapters, newestFirst) {
+        if (newestFirst) chapters.sortedByDescending { it.num } else chapters.sortedBy { it.num }
+    }
+    val shownChapters = remember(sortedChapters, visibleCount) { sortedChapters.take(visibleCount) }
 
     // Scroll hint: visible for 2s, then it fades away — or sooner, the moment
     // the user starts scrolling (they've found the content, no hint needed).
@@ -997,41 +1284,35 @@ private fun CinematicDetail(
     // Parse first genre only for the chip slot
     val primaryGenre = novel.genres.split(",").firstOrNull()?.trim().orEmpty()
 
-    // Format latest chapter label
-    val latestLabel = novel.latestChapter.let {
-        if (it.isNotBlank()) "Ch. $it" else "—"
-    }
+    // Latest chapter number: from the loaded list when we have it (the stored
+    // "latest" text is sometimes a title, not a number), else digits from the text.
+    val latestNum: String? = chapters.maxOfOrNull { it.num }?.toString()
+        ?: Regex("(\\d+)").find(novel.latestChapter)?.groupValues?.get(1)
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Brush.verticalGradient(listOf(bgTop, Color(0xFF000000)))),
     ) {
-        // Full-bleed cover art
+        // Blurred-look full-bleed backdrop (same cover, scaled up) behind the card
         AsyncImage(
             model = ImageRequest.Builder(LocalContext.current)
                 .data(novel.coverUrl)
                 .crossfade(500)
-                // Palette.from() below needs a software bitmap — Coil defaults
-                // to hardware bitmaps on API 26+, which Palette throws on
-                // (IllegalArgumentException), silently killing this request.
-                // Cards never hit this because they never touch Palette.
-                .allowHardware(false)
-                .listener(onSuccess = { _, result -> onCoverLoaded(result.drawable) })
                 .build(),
-            contentDescription = novel.title,
+            contentDescription = null,
             contentScale       = ContentScale.Crop,
             modifier           = Modifier
                 .fillMaxSize()
                 .drawWithContent {
                     drawContent()
-                    // Heavy bottom scrim so all text is readable over any cover
+                    // Heavy scrim so the sharp card stands out and all text reads
                     drawRect(
                         Brush.verticalGradient(
-                            0f    to Color.Black.copy(alpha = 0.10f),
-                            0.25f to Color.Black.copy(alpha = 0.30f),
-                            0.55f to Color.Black.copy(alpha = 0.72f),
-                            0.75f to Color.Black.copy(alpha = 0.90f),
+                            0f    to Color.Black.copy(alpha = 0.25f),
+                            0.25f to Color.Black.copy(alpha = 0.45f),
+                            0.55f to Color.Black.copy(alpha = 0.78f),
+                            0.75f to Color.Black.copy(alpha = 0.92f),
                             1f    to Color.Black.copy(alpha = 0.98f),
                         )
                     )
@@ -1048,120 +1329,127 @@ private fun CinematicDetail(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
 
-            // ── First screen: exactly ONE viewport tall ───────────────────
-            // Cover art fills the top (the back/refresh row floats over it); the
-            // text block is bottom-anchored above the hint zone. Because this item
-            // is a full viewport high, the summary and chapters below it start
-            // off-screen — nothing of them shows until the user scrolls.
-            // wrapContentHeight(unbounded) so that on a very short screen any
-            // overflow goes off the TOP (under the button row), never pushing the
-            // play button below the fold.
+            // ── First screen: ONE viewport tall ───────────────────────────
+            // The long image card sits under the floating buttons row, its
+            // details bottom-anchored on it. The rest of the viewport is the
+            // scroll-hint zone. Summary and chapters start below the fold.
+            // wrapContentHeight(unbounded) so on a very short screen overflow
+            // goes off the TOP of the card, never pushing play below it.
             item {
                 Box(
                     modifier = Modifier
                         .fillParentMaxHeight()
                         .fillMaxWidth(),
                 ) {
-                    Column(
-                        modifier = Modifier
-                            .align(Alignment.BottomCenter)
+                    NovelImageCard(
+                        novel         = novel,
+                        onCoverLoaded = onCoverLoaded,
+                        modifier      = Modifier
+                            .align(Alignment.TopCenter)
+                            .padding(top = CARD_TOP_PADDING, start = 16.dp, end = 16.dp)
                             .fillMaxWidth()
-                            .wrapContentHeight(align = Alignment.Bottom, unbounded = true)
-                            // 84dp keeps the play button clear of the scroll hint
-                            .padding(bottom = 84.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
+                            .fillParentMaxHeight(CARD_HEIGHT_FRACTION),
                     ) {
-                        // Sub-brand label: first genre
-                        Text(
-                            text          = primaryGenre.uppercase().ifBlank { "NOVEL" },
-                            color         = accent,
-                            fontFamily    = MontserratFamily,
-                            fontSize      = 14.sp,
-                            fontWeight    = FontWeight.SemiBold,
-                            letterSpacing = 2.sp,
-                            textAlign     = TextAlign.Center,
-                            modifier      = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 32.dp),
-                        )
-
-                        Spacer(Modifier.height(8.dp))
-
-                        // Title
-                        Text(
-                            text       = novel.title,
-                            color      = Color.White,
-                            fontFamily = MontserratFamily,
-                            fontSize   = 32.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            lineHeight = 36.sp,
-                            textAlign  = TextAlign.Center,
-                            style      = TextStyle(
-                                shadow = Shadow(
-                                    color      = Color.Black.copy(alpha = 0.6f),
-                                    offset     = Offset(0f, 4f),
-                                    blurRadius = 14f,
-                                )
-                            ),
+                        Column(
                             modifier = Modifier
+                                .align(Alignment.BottomCenter)
                                 .fillMaxWidth()
-                                .padding(horizontal = 24.dp),
-                        )
-
-                        Spacer(Modifier.height(22.dp))
-
-                        // Meta row: Status | Genre | Latest — equal-weight
-                        // columns so the larger text wraps/ellipsizes inside its
-                        // own slot instead of pushing the row wider than the screen.
-                        Row(
-                            modifier          = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp),
-                            verticalAlignment = Alignment.CenterVertically,
+                                .wrapContentHeight(align = Alignment.Bottom, unbounded = true)
+                                .padding(start = 14.dp, end = 14.dp, bottom = 18.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
-                            MetaChip(
-                                label    = "STATUS",
-                                value    = novel.status.ifBlank { "—" },
-                                accent   = accent,
-                                modifier = Modifier.weight(1f),
+                            // Sub-brand label: first genre
+                            Text(
+                                text          = primaryGenre.uppercase().ifBlank { "NOVEL" },
+                                color         = accent,
+                                fontFamily    = MontserratFamily,
+                                fontSize      = 14.sp,
+                                fontWeight    = FontWeight.SemiBold,
+                                letterSpacing = 2.sp,
+                                textAlign     = TextAlign.Center,
+                                modifier      = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp),
                             )
-                            MetaSeparator()
-                            MetaChip(
-                                label    = "GENRE",
-                                value    = primaryGenre.ifBlank { "—" },
-                                accent   = accent,
-                                modifier = Modifier.weight(1f),
+
+                            Spacer(Modifier.height(8.dp))
+
+                            // Title
+                            Text(
+                                text       = novel.title,
+                                color      = Color.White,
+                                fontFamily = MontserratFamily,
+                                fontSize   = 30.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                lineHeight = 34.sp,
+                                textAlign  = TextAlign.Center,
+                                style      = TextStyle(
+                                    shadow = Shadow(
+                                        color      = Color.Black.copy(alpha = 0.6f),
+                                        offset     = Offset(0f, 4f),
+                                        blurRadius = 14f,
+                                    )
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 8.dp),
                             )
-                            MetaSeparator()
-                            MetaChip(
-                                label    = "LATEST",
-                                value    = latestLabel,
-                                accent   = accent,
-                                modifier = Modifier.weight(1f),
+
+                            Spacer(Modifier.height(20.dp))
+
+                            // Meta row: Status | Genre | Author — equal-weight
+                            // columns so long text wraps/ellipsizes inside its
+                            // own slot instead of widening the row.
+                            Row(
+                                modifier          = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                MetaChip(
+                                    label    = "STATUS",
+                                    value    = novel.status.ifBlank { "—" },
+                                    accent   = accent,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                MetaSeparator()
+                                MetaChip(
+                                    label    = "GENRE",
+                                    value    = primaryGenre.ifBlank { "—" },
+                                    accent   = accent,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                MetaSeparator()
+                                MetaChip(
+                                    label    = "AUTHOR",
+                                    value    = novel.author.ifBlank { "—" },
+                                    accent   = accent,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+
+                            Spacer(Modifier.height(20.dp))
+
+                            // Star rating
+                            StarRating(rawRating = novel.rating)
+
+                            Spacer(Modifier.height(22.dp))
+
+                            // Play button. Label under the icon:
+                            //   in progress → "Continue Ch. N" (opens that chapter)
+                            //   unread      → "Latest Ch. N"   (still opens Chapter 1)
+                            val readLabel = when {
+                                lastReadChapter != null -> "Continue Ch. $lastReadChapter"
+                                latestNum != null       -> "Latest Ch. $latestNum"
+                                else                    -> "Latest Ch."
+                            }
+                            val targetChapter = lastReadChapter
+                                ?: chapters.minOfOrNull { it.num }
+                                ?: 1
+
+                            PlayButton(
+                                label   = readLabel,
+                                onClick = { onReadChapter(targetChapter) },
                             )
                         }
-
-                        Spacer(Modifier.height(22.dp))
-
-                        // Star rating
-                        StarRating(
-                            rawRating = novel.rating,
-                            modifier  = Modifier.padding(horizontal = 24.dp),
-                        )
-
-                        Spacer(Modifier.height(26.dp))
-
-                        // Play button
-                        val readLabel = if (lastReadChapter != null)
-                            "Continue Ch.$lastReadChapter" else "Start"
-                        val targetChapter = lastReadChapter
-                            ?: chapters.lastOrNull()?.num
-                            ?: 1
-
-                        PlayButton(
-                            label   = readLabel,
-                            onClick = { onReadChapter(targetChapter) },
-                        )
                     }
                 }
             }
@@ -1217,11 +1505,11 @@ private fun CinematicDetail(
                                     )
                             ),
                     ) {
-                        // Header
+                        // Header: title | count + sort toggle
                         Row(
                             modifier              = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 16.dp),
+                                .padding(start = 16.dp, end = 12.dp, top = 12.dp, bottom = 12.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment     = Alignment.CenterVertically,
                         ) {
@@ -1232,18 +1520,24 @@ private fun CinematicDetail(
                                 fontSize   = 18.sp,
                                 fontWeight = FontWeight.Bold,
                             )
-                            Text(
-                                // CHANGE (perf fix): chapters can now still
-                                // be streaming in when this first renders —
-                                // "0 total" would read as broken rather than
-                                // loading.
-                                text       = if (chaptersLoading && chapters.isEmpty())
-                                    "Loading…" else "${chapters.size} total",
-                                color      = accent.copy(alpha = 0.85f),
-                                fontFamily = MontserratFamily,
-                                fontSize   = 14.sp,
-                                fontWeight = FontWeight.Medium,
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text       = if (chaptersLoading && chapters.isEmpty())
+                                        "Loading…" else "${chapters.size} total",
+                                    color      = accent.copy(alpha = 0.85f),
+                                    fontFamily = MontserratFamily,
+                                    fontSize   = 14.sp,
+                                    fontWeight = FontWeight.Medium,
+                                )
+                                Spacer(Modifier.width(10.dp))
+                                SortToggle(
+                                    newestFirst = newestFirst,
+                                    onClick     = {
+                                        newestFirst  = !newestFirst
+                                        visibleCount = CHAPTER_FIRST_BATCH   // new order → back to the first batch
+                                    },
+                                )
+                            }
                         }
                         HorizontalDivider(
                             color     = Color.White.copy(alpha = 0.10f),
@@ -1251,44 +1545,23 @@ private fun CinematicDetail(
                         )
 
                         if (chaptersLoading && chapters.isEmpty()) {
-                            Row(
-                                modifier             = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 16.dp, vertical = 24.dp),
-                                horizontalArrangement = Arrangement.Center,
-                                verticalAlignment     = Alignment.CenterVertically,
-                            ) {
-                                CircularProgressIndicator(
-                                    modifier    = Modifier.size(18.dp),
-                                    strokeWidth = 2.dp,
-                                    color       = accent,
-                                )
-                                Spacer(Modifier.width(10.dp))
-                                Text(
-                                    text       = "Loading chapters…",
-                                    color      = Color.White.copy(alpha = 0.7f),
-                                    fontFamily = MontserratFamily,
-                                    fontSize   = 14.sp,
+                            val a = rememberSkeletonAlpha()
+                            repeat(4) { ChapterRowSkeleton(a) }
+                        }
+
+                        // Only the rows revealed so far are composed — see-more adds 5.
+                        shownChapters.forEach { chapter ->
+                            key(chapter.num) {
+                                ChapterRow(
+                                    chapter = chapter,
+                                    accent  = accent,
+                                    onClick = { onReadChapter(chapter.num) },
                                 )
                             }
                         }
 
-                        // Preview 10, or the full list once "See All" is tapped.
-                        // Plain (non-lazy) rows, same as before — fine up to a
-                        // few thousand chapters; if a novel's full list ever
-                        // gets sluggish to expand, that's the point to switch
-                        // this inner list to its own LazyColumn.
-                        val preview = if (showAllChapters) chapters else chapters.take(PREVIEW_COUNT)
-                        preview.forEach { chapter ->
-                            ChapterRow(
-                                chapter     = chapter,
-                                accent      = accent,
-                                onClick     = { onReadChapter(chapter.num) },
-                            )
-                        }
-
-                        // "See All" with fade gradient mask if >10 chapters
-                        if (!showAllChapters && chapters.size > PREVIEW_COUNT) {
+                        // "See more" with fade gradient while more remain
+                        if (visibleCount < sortedChapters.size) {
                             Box(
                                 modifier         = Modifier
                                     .fillMaxWidth()
@@ -1312,11 +1585,11 @@ private fun CinematicDetail(
                                             if (GlassMode.enabled) Modifier.glassFill(RoundedCornerShape(24.dp), dark = true)
                                             else Modifier.clip(RoundedCornerShape(24.dp)).background(Color.White.copy(alpha = 0.13f))
                                         )
-                                        .clickable { showAllChapters = true }
+                                        .clickable { visibleCount += CHAPTER_PAGE }
                                         .padding(horizontal = 22.dp, vertical = 10.dp),
                                 ) {
                                     Text(
-                                        text       = "All ${chapters.size} chapters",
+                                        text       = "See more",
                                         color      = Color.White,
                                         fontFamily = MontserratFamily,
                                         fontSize   = 15.sp,

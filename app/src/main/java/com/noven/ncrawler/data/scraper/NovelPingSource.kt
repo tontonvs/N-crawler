@@ -259,7 +259,8 @@ class NovelPingSource : NovelSource {
                     rating = ratingOutOfTen(info.optJSONObject("avgPoint")),
                     genres = genres,
                     chapterCount = info.optInt("totalChapter", 0),
-                    latestChapter = info.optJSONObject("recentChapter")?.optString("chapter_name") ?: ""
+                    latestChapter = info.optJSONObject("recentChapter")?.optString("chapter_name") ?: "",
+                    author = info.optString("novel_author").trim()
                 )
             }
             Log.w(TAG, "Detail API returned no novelInfo — falling back to HTML")
@@ -284,7 +285,8 @@ class NovelPingSource : NovelSource {
             genres = doc.select("meta[property=og:novel:genre]").attr("content")
                 .split(",").joinToString(", ") { it.trim().lowercase().replaceFirstChar { c -> c.uppercase() } },
             chapterCount = latestNum,
-            latestChapter = latestName
+            latestChapter = latestName,
+            author = doc.select("meta[property=og:novel:author]").attr("content").trim()
         )
     }
 

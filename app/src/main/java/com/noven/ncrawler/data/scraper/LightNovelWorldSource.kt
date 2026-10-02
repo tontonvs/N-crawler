@@ -146,7 +146,8 @@ class LightNovelWorldSource : NovelSource {
         return NovelEntity(
             slug = slug, title = title, coverUrl = cover, synopsis = synopsis,
             status = status, rating = "", genres = genres,
-            chapterCount = 0, latestChapter = ""
+            chapterCount = 0, latestChapter = "",
+            author = author
         )
     }
 

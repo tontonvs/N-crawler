@@ -203,7 +203,8 @@ class NovelFullSource : NovelSource {
             val novel = NovelEntity(
                 slug = slug, title = title, coverUrl = cover,
                 synopsis = synopsis, status = status, rating = rating,
-                genres = genres, chapterCount = chapters.size, latestChapter = ""
+                genres = genres, chapterCount = chapters.size, latestChapter = "",
+                author = author
             )
             Pair(novel, chapters)
         } catch (e: Exception) {

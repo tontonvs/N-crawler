@@ -163,12 +163,20 @@ class NovelBuddySource : NovelSource {
         val synopsis = htmlToPlainText(t.optString("summary"))
         val status = t.optString("status").ifBlank { "" }
 
+        // authors[] entries may be plain strings or {name: ...} objects
+        val author = t.optJSONArray("authors")?.let { arr ->
+            (0 until arr.length()).mapNotNull { i ->
+                arr.optJSONObject(i)?.optString("name") ?: arr.optString(i)
+            }.filter { it.isNotBlank() }.joinToString(", ")
+        } ?: ""
+
         Log.d(TAG, "Detail: title=$title titleId=$titleId genres=${genres.size}")
 
         return NovelEntity(
             slug = slug, title = title, coverUrl = absoluteUrl(cover),
             synopsis = synopsis, status = status, rating = "",
-            genres = genres.joinToString(", "), chapterCount = 0, latestChapter = ""
+            genres = genres.joinToString(", "), chapterCount = 0, latestChapter = "",
+            author = author
         )
     }
 

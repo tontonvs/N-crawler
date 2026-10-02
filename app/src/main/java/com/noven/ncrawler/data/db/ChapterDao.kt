@@ -3,8 +3,16 @@ package com.noven.ncrawler.data.db
 import androidx.room.*
 import kotlinx.coroutines.flow.Flow
 
+// Number + title only — lets the Detail screen show real chapter titles for
+// downloaded chapters without loading their full text.
+data class ChapterTitleRow(val chapterNum: Int, val title: String)
+
 @Dao
 interface ChapterDao {
+
+    @Query("SELECT chapterNum, title FROM chapters WHERE novelSlug = :slug")
+    suspend fun downloadedTitles(slug: String): List<ChapterTitleRow>
+
 
     @Upsert
     suspend fun upsert(chapter: ChapterEntity)

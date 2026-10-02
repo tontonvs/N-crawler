@@ -1,6 +1,7 @@
 package com.noven.ncrawler.viewmodel
 
 import android.app.Application
+import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.noven.ncrawler.NCrawlerApp
@@ -25,6 +26,13 @@ sealed interface DetailUiState {
     ) : DetailUiState
 }
 
+// Skeleton hold times. Opening a novel: the skeleton shows until the metadata is in,
+// and at least this long so a cached open doesn't flash it for one frame.
+// Refresh: the skeleton always shows for at least this long (or until the update
+// check finishes, whichever is later).
+private const val OPEN_SKELETON_MIN_MS    = 700L
+private const val REFRESH_SKELETON_MIN_MS = 1600L
+
 class DetailViewModel(app: Application) : AndroidViewModel(app) {
 
     private val repo = (app as NCrawlerApp).repository
@@ -44,6 +52,11 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
     private val _downloadedNums = MutableStateFlow<Set<Int>>(emptySet())
     val downloadedNums: StateFlow<Set<Int>> = _downloadedNums.asStateFlow()
 
+    // True while the refresh button's update check runs — drives the animated
+    // refresh icon and the skeleton over the Detail layout.
+    private val _refreshing = MutableStateFlow(false)
+    val refreshing: StateFlow<Boolean> = _refreshing.asStateFlow()
+
     private val _updateMessage = MutableStateFlow<String?>(null)
     val updateMessage: StateFlow<String?> = _updateMessage.asStateFlow()
 
@@ -62,6 +75,7 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
 
         viewModelScope.launch {
             _state.value = DetailUiState.Loading
+            val openedAt = SystemClock.elapsedRealtime()
 
             val novel = try {
                 repo.getNovelInfo(slug)
@@ -75,6 +89,10 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
             }
 
             val lastRead = repo.getReadingProgress(slug)?.lastChapterNum
+
+            val held = SystemClock.elapsedRealtime() - openedAt
+            if (held < OPEN_SKELETON_MIN_MS) delay(OPEN_SKELETON_MIN_MS - held)
+
             _state.value = DetailUiState.Success(
                 novel           = novel,
                 chapters        = emptyList(),
@@ -87,7 +105,7 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
             // currentSlug will have moved on and this result is discarded
             // instead of clobbering whatever screen is showing now.
             try {
-                val chapters = repo.getChapterList(slug)
+                val chapters = loadChapters(slug)
                 if (currentSlug == slug) {
                     (_state.value as? DetailUiState.Success)?.let {
                         _state.value = it.copy(chapters = chapters, chaptersLoading = false)
@@ -120,6 +138,21 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
                 _downloadedNums.value = it.toHashSet()
                 delay(750)
             }
+        }
+    }
+
+    // The cached chapter list only knows "Chapter N" for most rows. Where the
+    // chapter is downloaded we know its real title — use it instead.
+    private fun ChapterLink.isPlaceholder() =
+        title.isBlank() || title.trim().equals("Chapter $num", ignoreCase = true)
+
+    private suspend fun loadChapters(slug: String): List<ChapterLink> {
+        val raw = repo.getChapterList(slug)
+        val titles = try { repo.downloadedChapterTitles(slug) } catch (e: Exception) { emptyMap() }
+        if (titles.isEmpty()) return raw
+        return raw.map { c ->
+            if (!c.isPlaceholder()) c
+            else titles[c.num]?.takeIf { it.isNotBlank() }?.let { c.copy(title = it) } ?: c
         }
     }
 
@@ -209,25 +242,38 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // Refresh: the chapters already loaded stay in memory (and in the DB cache);
+    // the check only adds what's new. While it runs the screen shows the skeleton
+    // for at least REFRESH_SKELETON_MIN_MS.
     fun checkForUpdates() {
+        if (_refreshing.value) return
         viewModelScope.launch {
+            _refreshing.value = true
+            val startedAt = SystemClock.elapsedRealtime()
+            var message: String
             try {
                 val newCount = repo.checkForUpdates(currentSlug)
-                if (newCount > 0) {
-                    // The on-screen chapter list was stale after a check.
-                    val chapters = repo.getChapterList(currentSlug)
-                    (_state.value as? DetailUiState.Success)?.let {
-                        _state.value = it.copy(chapters = chapters)
-                    }
+
+                // Pick up the re-saved novel (author, status, cover) and the
+                // fresh chapter list.
+                val chapters = loadChapters(currentSlug)
+                val novel    = repo.getCachedNovel(currentSlug)
+                (_state.value as? DetailUiState.Success)?.let {
+                    _state.value = it.copy(novel = novel ?: it.novel, chapters = chapters)
                 }
-                _updateMessage.value = when {
-                    newCount <= 0                  -> "Already up to date"
+                message = when {
+                    newCount <= 0                   -> "Already up to date"
                     _downloadProgress.value != null -> "$newCount new · downloading"
-                    else                           -> "$newCount new chapters"
+                    else                            -> "$newCount new chapters"
                 }
             } catch (e: Exception) {
-                _updateMessage.value = "Couldn't check updates"
+                message = "Couldn't check updates"
             }
+
+            val held = SystemClock.elapsedRealtime() - startedAt
+            if (held < REFRESH_SKELETON_MIN_MS) delay(REFRESH_SKELETON_MIN_MS - held)
+            _refreshing.value = false
+            _updateMessage.value = message
         }
     }
 

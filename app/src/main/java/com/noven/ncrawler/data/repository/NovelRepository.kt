@@ -96,6 +96,7 @@ class NovelRepository(
             genres        = fresh.genres.ifBlank { old.genres },
             chapterCount  = if (fresh.chapterCount > 0) fresh.chapterCount else old.chapterCount,
             latestChapter = fresh.latestChapter.ifBlank { old.latestChapter },
+            author        = fresh.author.ifBlank { old.author },
             chapterUrls   = fresh.chapterUrls.ifBlank { old.chapterUrls },
             isInLibrary   = old.isInLibrary
         )
@@ -221,6 +222,14 @@ class NovelRepository(
         val result = source.fetchDetail(realSlug) ?: return cached
         return saveNovel(rewrapSlug(result.first, source.id))
     }
+
+    // Real titles of chapters saved on this device (num -> title). The cached
+    // chapter list only stores "num|url", so rows fall back to "Chapter N";
+    // this fills in the real title wherever the chapter has been downloaded.
+    suspend fun downloadedChapterTitles(slug: String): Map<Int, String> =
+        withContext(Dispatchers.IO) {
+            chapterDao.downloadedTitles(slug).associate { it.chapterNum to it.title }
+        }
 
     suspend fun getChapterList(slug: String): List<ChapterLink> {
         val novel = novelDao.getBySlug(slug)

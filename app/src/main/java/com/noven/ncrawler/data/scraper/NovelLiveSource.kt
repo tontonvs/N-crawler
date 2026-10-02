@@ -147,6 +147,9 @@ class NovelLiveSource : NovelSource {
             val synopsis = doc.select("meta[property=og:description]").attr("content").trim()
             val genres   = doc.select("meta[property=og:novel:genre]").attr("content")
             val status   = doc.select("meta[property=og:novel:status]").attr("content")
+            // UNVERIFIED live: og:novel:author, then any /author/ link. Blank if neither exists.
+            val author   = doc.select("meta[property=og:novel:author]").attr("content").trim()
+                .ifBlank { doc.select("a[href*=/author/], a[href*=/authors/]").firstOrNull()?.text()?.trim().orEmpty() }
             val latestChapterUrl = doc.select("meta[property=og:novel:lastest_chapter_url]").attr("content")
 
             Log.d(TAG, "Detail: title=$title cover=${cover.take(40)} genres=$genres")
@@ -195,7 +198,8 @@ class NovelLiveSource : NovelSource {
                 genres        = genres,
                 chapterCount  = chapters.size,
                 latestChapter = chapters.firstOrNull()?.title ?: "",
-                chapterUrls   = urlMap
+                chapterUrls   = urlMap,
+                author        = author
             )
             Pair(novel, chapters)
         } catch (e: Exception) {
