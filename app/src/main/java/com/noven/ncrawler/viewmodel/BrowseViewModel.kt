@@ -5,6 +5,7 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.noven.ncrawler.NCrawlerApp
+import com.noven.ncrawler.data.db.DownloadStatus
 import com.noven.ncrawler.data.db.NovelEntity
 import com.noven.ncrawler.data.db.ReadingProgress
 import com.noven.ncrawler.data.local.RecentSearchStore
@@ -74,6 +75,20 @@ class BrowseViewModel(app: Application) : AndroidViewModel(app) {
                     .mapNotNull { p -> repo.getCachedNovel(p.novelSlug)?.let { ContinueReadingInfo(it, p) } }
             }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // CHANGE (top-bar download icon): true while ANY novel is actively DOWNLOADING.
+    // Drives the animated download / arrow icons in the Browse top bar. Only the
+    // DOWNLOADING status counts: a QUEUED download that is waiting for Wi-Fi isn't
+    // moving, so its icon stays still. Reuses the flow the Downloads screen already
+    // observes — no new query. A row stuck on DOWNLOADING after the app was killed is
+    // reset to PAUSED at startup by repo.reconcileDownloads().
+    // Disadvantage: re-evaluated on every progress write (once per chapter), but
+    // distinctUntilChanged() means the UI only hears about true <-> false flips.
+    val isDownloading: StateFlow<Boolean> =
+        repo.allDownloadProgressFlow()
+            .map { rows -> rows.any { it.status == DownloadStatus.DOWNLOADING } }
+            .distinctUntilChanged()
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
 
     // Pull-to-refresh: true while a silent reload (content stays on screen) runs.
     private val _isRefreshing = MutableStateFlow(false)

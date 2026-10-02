@@ -29,6 +29,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.delay
 import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavType
 import androidx.navigation.compose.*
@@ -39,6 +40,7 @@ import com.noven.ncrawler.ui.components.glassSource
 import com.noven.ncrawler.ui.theme.GlassBase
 import com.noven.ncrawler.ui.theme.GlassMode
 import dev.chrisbanes.haze.HazeState
+import dev.chrisbanes.haze.haze
 import com.noven.ncrawler.ui.theme.GlassSpec
 import com.noven.ncrawler.ui.components.SolarIcons
 import com.noven.ncrawler.ui.screens.browse.BrowseScreen
@@ -225,12 +227,32 @@ fun NCrawlerNavGraph() {
     // itself is a SIBLING drawn above it (Haze can't blur its own parent).
     val hazeState = remember { HazeState() }
 
+    // CHANGE (UI polish #5): the Search overlay is frosted glass — it blurs the screen
+    // underneath with the same Haze setup as the nav. glassSource() only registers the
+    // nav host as a blur source in Glass mode, so in Classic mode the host is registered
+    // here, and only while the overlay is open. The 220ms tail keeps the source alive
+    // through the overlay's 140ms fade-out; without it the blur would vanish the moment
+    // the overlay starts closing and the screen behind would "pop" sharp for a beat.
+    var searchHazeTail by remember { mutableStateOf(false) }
+    LaunchedEffect(showSearchOverlay) {
+        if (showSearchOverlay) {
+            searchHazeTail = true
+        } else {
+            delay(220)
+            searchHazeTail = false
+        }
+    }
+    val searchNeedsHaze = !GlassMode.enabled && (showSearchOverlay || searchHazeTail)
+
     Box(modifier = Modifier.fillMaxSize()) {
         // Main nav host — no bottom padding, nav floats over content
         NavHost(
             navController    = nav,
             startDestination = Routes.BROWSE,
-            modifier         = Modifier.fillMaxSize().glassSource(hazeState),
+            modifier         = Modifier
+                .fillMaxSize()
+                .glassSource(hazeState)
+                .then(if (searchNeedsHaze) Modifier.haze(hazeState) else Modifier),
             enterTransition    = { screenEnter() },
             exitTransition     = { screenExit() },
             popEnterTransition = { screenPopEnter() },
@@ -341,7 +363,8 @@ fun NCrawlerNavGraph() {
                     closeSearch()
                     nav.navigate(Routes.detail(slug))
                 },
-                onClose      = { closeSearch() }
+                onClose      = { closeSearch() },
+                hazeState    = hazeState
             )
         }
 
