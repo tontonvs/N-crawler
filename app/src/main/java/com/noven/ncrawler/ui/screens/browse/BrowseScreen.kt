@@ -70,6 +70,7 @@ import com.noven.ncrawler.ui.components.AppPullToRefresh
 import com.noven.ncrawler.ui.components.AnimatedArrowDownIcon
 import com.noven.ncrawler.ui.components.AnimatedDownloadIcon
 import com.noven.ncrawler.ui.components.CoverImage
+import com.noven.ncrawler.ui.components.StaticArrowDownIcon
 import com.noven.ncrawler.ui.components.GenreGlassTile
 import com.noven.ncrawler.ui.components.Motion
 import com.noven.ncrawler.ui.components.ShimmerScope
@@ -285,6 +286,9 @@ private val BTN_MARGIN_END     = 14.dp      // button ↔ screen's right edge
 private val BTN_MARGIN_TOP     = 13.dp      // centres the 40dp button in the 66dp bar
 private val BAR_FLARE          = 14.dp      // how far the inverted corners reach below the flat edge
 private val RING_STROKE        = 2.7.dp     // download-progress ring around the button
+// The open bar shows the arrow-down icon held STILL (the ring shows progress). Flip to true
+// to make it loop while a download runs, like the "Browse" pill's arrow does.
+private const val BAR_ICON_ANIMATES_WHEN_DOWNLOADING = false
 private const val TOP_GLASS_ALPHA = 0.55f   // glass tint over the blur (lower = more of the cover shows)
 
 // CHANGE: the bar's bottom corners used to be rounded OFF (convex, like a tab). They are
@@ -315,8 +319,9 @@ private class InvertedBottomCorners(private val flare: Dp) : Shape {
 private class BarGlass(
     val tint: Color,        // fill of the glass over the blur
     val ink: Color,         // text + icon colour
-    val paper: Color,       // solid version of the glass colour (floating pill / checkmark knock-out)
-    val buttonFill: Color   // download button disc on the glass
+    val paper: Color,       // solid version of the glass colour (the "Browse" pill)
+    val discFill: Color,    // download button disc: uniform, bright, opaque
+    val discInk: Color      // everything drawn on that disc: icon + progress ring
 )
 
 @Composable
@@ -329,7 +334,9 @@ private fun rememberBarGlass(): BarGlass {
             tint       = base.copy(alpha = TOP_GLASS_ALPHA),
             ink        = ink,
             paper      = base,
-            buttonFill = ink.copy(alpha = 0.10f)
+            // The button is the same bright disc with near-black marks in both themes.
+            discFill   = if (dark) Color(0xFFE6EAF2) else Color.White,
+            discInk    = Color(0xFF0D1117)
         )
     }
 }
@@ -405,10 +412,11 @@ private fun TopNavBar(
 
 // The downloads button, shared by the open top bar (soft disc on the glass) and the
 // collapsed pill row (solid disc + soft shadow: there it floats over scrolling covers).
-// CHANGE: both states now behave the same — the static download icon cross-fades to the
-// looping arrow while a download runs (and back when it ends), and a 2.7dp ring traces
-// the disc's circumference showing overall progress. (The 4-second box/wave/checkmark
-// animation moved to the Detail screen's download button.)
+// CHANGE: a bright, uniform disc with near-black marks. A 2.7dp dark ring traces the
+// disc's circumference showing overall progress (no track behind it). The open bar holds
+// the arrow-down icon still; the pill keeps its static download icon that swaps to the
+// looping arrow while downloading. (The 4-second box/wave/checkmark animation lives on
+// the Detail screen's download button.)
 @Composable
 private fun DownloadButton(
     onClick: (() -> Unit)?,
@@ -436,15 +444,13 @@ private fun DownloadButton(
         animationSpec = tween(400, easing = Motion.EaseOut),
         label         = "ringSweep"
     )
-    val trackColor = glass.ink.copy(alpha = 0.14f)
-    val arcColor   = MaterialTheme.colorScheme.primary
 
     Box(
         modifier = modifier
             .size(BTN_SIZE)
             .then(if (floating) Modifier.shadow(6.dp, CircleShape) else Modifier)
             .clip(CircleShape)
-            .background(if (floating) glass.paper.copy(alpha = 0.94f) else glass.buttonFill)
+            .background(glass.discFill)
             .clickable(
                 enabled           = onClick != null,
                 interactionSource = interaction,
@@ -467,17 +473,9 @@ private fun DownloadButton(
             val stroke = RING_STROKE.toPx()
             val inset  = stroke / 2f
             val arc    = Size(size.width - stroke, size.height - stroke)
+            // progress arc only — no background track, just the dark arc on the bright disc
             drawArc(
-                color      = trackColor,
-                startAngle = 0f,
-                sweepAngle = 360f,
-                useCenter  = false,
-                topLeft    = Offset(inset, inset),
-                size       = arc,
-                style      = Stroke(width = stroke)
-            )
-            drawArc(
-                color      = arcColor,
+                color      = glass.discInk,
                 startAngle = -90f,
                 sweepAngle = 360f * sweep.coerceIn(0.02f, 1f),
                 useCenter  = false,
@@ -491,15 +489,20 @@ private fun DownloadButton(
             modifier = Modifier.graphicsLayer { alpha = if (pressed) 0.7f else 1f },
             contentAlignment = Alignment.Center
         ) {
+            // Open bar: the arrow-down held still (loops only if the token above is true).
+            // Pill: static download icon, swapping to the looping arrow while downloading.
+            val animated = downloading && (floating || BAR_ICON_ANIMATES_WHEN_DOWNLOADING)
             Crossfade(
-                targetState   = downloading,
+                targetState   = animated,
                 animationSpec = tween(Motion.BASE_MS),
                 label         = "downloadIconSwap"
             ) { running ->
                 if (running) {
-                    AnimatedArrowDownIcon(ink = glass.ink)
+                    AnimatedArrowDownIcon(ink = glass.discInk)
+                } else if (floating) {
+                    AnimatedDownloadIcon(animating = false, ink = glass.discInk, paper = glass.discFill)
                 } else {
-                    AnimatedDownloadIcon(animating = false, ink = glass.ink, paper = glass.paper)
+                    StaticArrowDownIcon(ink = glass.discInk)
                 }
             }
         }
