@@ -24,6 +24,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.noven.ncrawler.data.db.DownloadStatus
 import com.noven.ncrawler.ui.components.CoverImage
+import com.noven.ncrawler.ui.components.FavouritePink
 import com.noven.ncrawler.ui.components.errorShake
 import com.noven.ncrawler.ui.components.glassCard
 import com.noven.ncrawler.ui.components.pressable
@@ -160,13 +161,13 @@ private fun LibraryCard(
                         maxLines   = 2,
                         overflow   = TextOverflow.Ellipsis
                     )
-                    // onRemove used to be wired up but never shown — no way out of the library.
+                    // Filled heart = favourited. Tap to remove it from favourites.
                     IconButton(onClick = onRemove, modifier = Modifier.size(32.dp)) {
                         Icon(
-                            SolarIcons.BookmarkBold,
-                            contentDescription = "Remove from library",
+                            Icons.Filled.Favorite,
+                            contentDescription = "Remove from favourites",
                             modifier = Modifier.size(20.dp),
-                            tint     = MaterialTheme.colorScheme.primary
+                            tint     = FavouritePink
                         )
                     }
                 }
@@ -309,13 +310,13 @@ private fun LibraryEmptyState(modifier: Modifier = Modifier) {
                 tint     = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
             )
             Text(
-                "Nothing saved yet",
+                "No favourites yet",
                 modifier = Modifier.staggerIn(1, distance = 10.dp, stepMs = 70),
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Text(
-                "Tap the bookmark on a novel to save it",
+                "Tap the heart on a novel to add it to favourites",
                 modifier = Modifier.staggerIn(2, distance = 10.dp, stepMs = 70),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)

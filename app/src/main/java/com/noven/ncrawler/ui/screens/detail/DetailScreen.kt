@@ -85,6 +85,11 @@ import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.PauseCircle
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.animation.core.Animatable
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
+import com.noven.ncrawler.ui.components.FavouritePink
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Schedule
@@ -272,6 +277,37 @@ private fun StarRating(
 // no border, icon at 90%. Here the circle sits over cover art rather than the
 // reader's solid page, so a dark base tint sits under the 13% white to keep it
 // visible on bright covers.
+
+// ── Favourite heart pop ──────────────────────────────────────────────────────
+// A large heart springs in (overshoots, settles), holds a beat, then fades —
+// the "like" feel from social apps. Drawn only through graphicsLayer, so the
+// animation never recomposes; it is invisible (alpha 0) and non-interactive
+// whenever it is not playing. [trigger] 0 = never played.
+@Composable
+private fun HeartBurst(trigger: Int, modifier: Modifier = Modifier) {
+    val heartScale = remember { Animatable(0f) }
+    val heartAlpha = remember { Animatable(0f) }
+    LaunchedEffect(trigger) {
+        if (trigger == 0) return@LaunchedEffect
+        heartAlpha.snapTo(1f)
+        heartScale.snapTo(0.3f)
+        heartScale.animateTo(1.1f, spring(dampingRatio = 0.4f, stiffness = 380f))
+        delay(180)
+        heartAlpha.animateTo(0f, tween(260))
+    }
+    Icon(
+        Icons.Filled.Favorite,
+        contentDescription = null,
+        tint     = FavouritePink,
+        modifier = modifier
+            .size(120.dp)
+            .graphicsLayer {
+                scaleX = heartScale.value
+                scaleY = heartScale.value
+                alpha = heartAlpha.value
+            }
+    )
+}
 
 // Blur layer for the top-row circle buttons (Glass mode). Provided only to the
 // top row, which is a sibling of the cover layer — never to its descendants.
@@ -1277,6 +1313,10 @@ fun DetailScreen(
     var showDownloadSheet by remember { mutableStateOf(false) }
 
     val context = LocalContext.current
+    // Each new heart increments this; HeartBurst replays its animation per change.
+    var heartBurst by remember { mutableStateOf(0) }
+    LaunchedEffect(Unit) { vm.favouriteBurst.collect { heartBurst++ } }
+
     val snackbarHost = remember { SnackbarHostState() }
     LaunchedEffect(updateMessage) {
         updateMessage?.let { vm.clearUpdateMessage(); snackbarHost.showSnackbar(it) }
@@ -1437,12 +1477,13 @@ fun DetailScreen(
                         if (successState != null && !successState.chaptersLoading) showDownloadSheet = true
                     },
                 )
-                // Library membership — there was no way to add/remove a novel from here.
+                // Favourite heart (was a bookmark). Reddish pink when filled; adding one
+                // plays the big heart pop (HeartBurst below), then the notice.
                 ReaderCircleBtn(onClick = vm::toggleLibrary) {
                     Icon(
-                        if (inLibrary) SolarIcons.BookmarkBold else SolarIcons.Bookmark,
-                        contentDescription = if (inLibrary) "Remove from library" else "Add to library",
-                        tint               = Color.White.copy(alpha = 0.9f),
+                        if (inLibrary) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                        contentDescription = if (inLibrary) "Remove from favourites" else "Add to favourites",
+                        tint               = if (inLibrary) FavouritePink else Color.White.copy(alpha = 0.9f),
                         modifier           = Modifier.size(24.dp),
                     )
                 }
@@ -1450,6 +1491,12 @@ fun DetailScreen(
             }
         }
         }
+
+        // Big heart pop in the middle of the screen when a novel is favourited.
+        HeartBurst(
+            trigger  = heartBurst,
+            modifier = Modifier.align(Alignment.Center)
+        )
 
         // "Downloading <novel>" banner — just under the floating buttons row
         DownloadBanner(

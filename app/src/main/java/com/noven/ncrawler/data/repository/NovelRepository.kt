@@ -50,6 +50,7 @@ class NovelRepository(
     private val chapterDao          = db.chapterDao()
     private val downloadProgressDao = db.downloadProgressDao()
     private val readingProgressDao  = db.readingProgressDao()
+    private val bookmarkDao         = db.readerBookmarkDao()
     private val workManager         = WorkManager.getInstance(context)
 
     private val sourcePrefs   = SourcePreferences(context)
@@ -613,6 +614,32 @@ class NovelRepository(
 
     suspend fun getReadingProgress(slug: String) = readingProgressDao.get(slug)
     fun allReadingProgressFlow() = readingProgressDao.observeAll()
+
+    // ── Reader bookmarks (one per chapter) ────────────────────────────────────
+    fun bookmarksFlow(slug: String): Flow<List<ReaderBookmark>> = bookmarkDao.observe(slug)
+
+    /** Adds the chapter's bookmark, or removes it if it already has one. Returns true when added. */
+    suspend fun toggleBookmark(slug: String, chapterNum: Int, chapterTitle: String, fraction: Float): Boolean {
+        val id = ReaderBookmark.idFor(slug, chapterNum)
+        return if (bookmarkDao.get(id) != null) {
+            bookmarkDao.delete(id)
+            false
+        } else {
+            bookmarkDao.upsert(
+                ReaderBookmark(
+                    id           = id,
+                    novelSlug    = slug,
+                    chapterNum   = chapterNum,
+                    chapterTitle = chapterTitle,
+                    fraction     = fraction.coerceIn(0f, 1f)
+                )
+            )
+            true
+        }
+    }
+
+    suspend fun removeBookmark(slug: String, chapterNum: Int) =
+        bookmarkDao.delete(ReaderBookmark.idFor(slug, chapterNum))
 
     // ── Chapters ──────────────────────────────────────────────────────────────
     fun chaptersFlow(slug: String) = chapterDao.chaptersForNovel(slug)

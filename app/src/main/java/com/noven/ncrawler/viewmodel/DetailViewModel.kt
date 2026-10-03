@@ -32,6 +32,8 @@ sealed interface DetailUiState {
 // check finishes, whichever is later).
 private const val OPEN_SKELETON_MIN_MS    = 700L
 private const val REFRESH_SKELETON_MIN_MS = 1600L
+// Gap between the heart animation starting and the "Added to favourites" notice.
+private const val HEART_NOTICE_DELAY_MS   = 700L
 
 // "Downloading <novel>" banner on the Detail screen. `id` makes every tap a new
 // event, so tapping again re-shows the banner even if the title is the same.
@@ -47,7 +49,7 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
     private val _downloadProgress = MutableStateFlow<DownloadProgress?>(null)
     val downloadProgress: StateFlow<DownloadProgress?> = _downloadProgress.asStateFlow()
 
-    // Drives the bookmark button (Detail had no way to add/remove a library entry).
+    // Drives the heart (favourite) button. Stored in the same isInLibrary column.
     private val _inLibrary = MutableStateFlow(false)
     val inLibrary: StateFlow<Boolean> = _inLibrary.asStateFlow()
 
@@ -60,6 +62,11 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
     // refresh icon and the skeleton over the Detail layout.
     private val _refreshing = MutableStateFlow(false)
     val refreshing: StateFlow<Boolean> = _refreshing.asStateFlow()
+
+    // CHANGE (favourites): fires when a novel is hearted — the screen plays the
+    // big heart pop, and the "Added to favourites" notice follows it.
+    private val _favouriteBurst = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val favouriteBurst: SharedFlow<Unit> = _favouriteBurst.asSharedFlow()
 
     private val _downloadNotice = MutableStateFlow<DownloadNotice?>(null)
     val downloadNotice: StateFlow<DownloadNotice?> = _downloadNotice.asStateFlow()
@@ -176,7 +183,14 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val add = !_inLibrary.value
             repo.setLibrary(currentSlug, add)
-            _updateMessage.value = if (add) "Added to library" else "Removed from library"
+            if (add) {
+                // Heart animation first (~0.7s), then the notice — like a social-app like.
+                _favouriteBurst.tryEmit(Unit)
+                delay(HEART_NOTICE_DELAY_MS)
+                _updateMessage.value = "Added to favourites"
+            } else {
+                _updateMessage.value = "Removed from favourites"
+            }
         }
     }
 

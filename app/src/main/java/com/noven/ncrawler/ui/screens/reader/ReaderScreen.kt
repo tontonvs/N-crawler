@@ -98,6 +98,12 @@ import com.noven.ncrawler.viewmodel.ReaderUiState
 import com.noven.ncrawler.viewmodel.ReaderViewModel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import com.noven.ncrawler.data.db.ReaderBookmark
+import com.noven.ncrawler.ui.components.BookmarkGold
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.cos
 import kotlin.math.roundToInt
@@ -118,6 +124,7 @@ fun ReaderScreen(
     val chapterList by vm.chapterList.collectAsStateWithLifecycle()
     val readChapters by vm.readChapters.collectAsStateWithLifecycle()
     val novelTitle   by vm.novelTitle.collectAsStateWithLifecycle()
+    val bookmarks    by vm.bookmarks.collectAsStateWithLifecycle()
 
     // vm.currentChapterNum is 0 until load() runs — fall back to the route's
     // chapter so nothing flashes "Chapter 0" on the first frame.
@@ -148,6 +155,29 @@ fun ReaderScreen(
 
     val scrollState = rememberScrollState()
 
+    // ── Page bookmark (one per chapter) ──────────────────────────────────────
+    val bookmarkedNums = remember(bookmarks) { bookmarks.map { it.chapterNum }.toSet() }
+    val isBookmarked   = currentNum in bookmarkedNums
+
+    // Little "Bookmark added" toast: shown ~1.6s, then fades. toastText is kept
+    // after hiding so the text doesn't vanish mid fade-out.
+    var toastVisible by remember { mutableStateOf(false) }
+    var toastText    by remember { mutableStateOf("") }
+    var toastStamp   by remember { mutableStateOf(0L) }
+    LaunchedEffect(Unit) {
+        vm.bookmarkEvent.collect { msg ->
+            toastText    = msg
+            toastVisible = true
+            toastStamp   = System.nanoTime()   // restarts the timer on a quick second tap
+        }
+    }
+    LaunchedEffect(toastStamp) {
+        if (toastStamp != 0L) {
+            delay(1600)
+            toastVisible = false
+        }
+    }
+
     // CHANGE: the reading spot is remembered. A chapter that loads scrolls to
     // where you stopped (saved as a fraction of the chapter, so font-size /
     // line-height changes don't move it) instead of always jumping to the top.
@@ -158,10 +188,13 @@ fun ReaderScreen(
     LaunchedEffect(state) {
         if (state is ReaderUiState.Success) {
             canSave = false
-            val saved = vm.savedFraction(currentNum)   // read BEFORE anything can overwrite it
+            // A tapped bookmark wins over the saved reading spot (consumed once).
+            val jump  = vm.takePendingJump(currentNum)
+            val saved = jump ?: vm.savedFraction(currentNum)   // read BEFORE anything can overwrite it
             scrollState.scrollTo(0)
             // A finished chapter (≥97%) reopens at the top; a barely-started one too.
-            if (saved != null && saved in 0.02f..0.97f) {
+            // A bookmark jump goes exactly where it was saved, even the very top/bottom.
+            if (saved != null && (jump != null || saved in 0.02f..0.97f)) {
                 // maxValue is 0 until the text has been measured
                 withTimeoutOrNull(1500) { snapshotFlow { scrollState.maxValue }.first { it > 0 } }
                 scrollState.scrollTo((saved * scrollState.maxValue).roundToInt())
@@ -290,6 +323,14 @@ fun ReaderScreen(
                     onBack          = onBack,
                     onAudioClick    = { audioSelected = true; showAudioOverlay = true },
                     onTextClick     = { audioSelected = false },
+                    bookmarked      = isBookmarked,
+                    onBookmarkClick = {
+                        // Only while a chapter is actually on screen — the spot is a
+                        // fraction of loaded text.
+                        if (state is ReaderUiState.Success) {
+                            vm.toggleBookmark(progress, chapterTitle ?: "Chapter $currentNum")
+                        }
+                    },
                     onSettingsClick = { showToc = false; showSettings = !showSettings }
                 )
             }
@@ -361,12 +402,50 @@ fun ReaderScreen(
                 onDismiss      = { showToc = false },
                 heightFraction = 0.85f
             ) { dismiss ->
-                ChapterTocContent(
-                    chapters     = chapterList,
-                    currentNum   = currentNum,
-                    readChapters = readChapters,
-                    onSelect     = { num -> vm.jumpTo(num); dismiss() }
+                TocTabs(
+                    chapters         = chapterList,
+                    currentNum       = currentNum,
+                    readChapters     = readChapters,
+                    bookmarks        = bookmarks,
+                    onSelect         = { num -> vm.jumpTo(num); dismiss() },
+                    onOpenBookmark   = { b -> vm.jumpToBookmark(b); dismiss() },
+                    onRemoveBookmark = vm::removeBookmark
                 )
+            }
+        }
+
+        // ── Bookmark toast (gold icon + text, sits above the chapter bar) ──
+        AnimatedVisibility(
+            visible  = toastVisible,
+            enter    = fadeIn(tween(160)) + slideInVertically(tween(200)) { it / 2 },
+            exit     = fadeOut(tween(220)),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(bottom = 118.dp)
+        ) {
+            CompositionLocalProvider(LocalReaderHaze provides readerHaze) {
+                Row(
+                    modifier = Modifier
+                        .readerGlass(fg, RoundedCornerShape(50), strength = 0.6f, classic = 0.22f)
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalAlignment     = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        SolarIcons.BookmarkBold,
+                        contentDescription = null,
+                        tint     = BookmarkGold,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Text(
+                        toastText,
+                        color      = fg,
+                        fontFamily = MontserratFamily,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize   = 13.sp
+                    )
+                }
             }
         }
 
@@ -834,8 +913,18 @@ private fun ReaderHeader(
     onBack: () -> Unit,
     onAudioClick: () -> Unit,
     onTextClick: () -> Unit,
+    bookmarked: Boolean,
+    onBookmarkClick: () -> Unit,
     onSettingsClick: () -> Unit
 ) {
+    // Little spring pop whenever this chapter becomes bookmarked.
+    val pop = remember { Animatable(1f) }
+    LaunchedEffect(bookmarked) {
+        if (bookmarked) {
+            pop.snapTo(0.6f)
+            pop.animateTo(1f, spring(dampingRatio = 0.45f, stiffness = Spring.StiffnessMedium))
+        }
+    }
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -871,8 +960,21 @@ private fun ReaderHeader(
                 ReaderIconButton(fg = fg, onClick = onBack) {
                     Icon(SolarIcons.ArrowLeft, "Back", tint = fg, modifier = Modifier.size(24.dp))
                 }
-                ReaderIconButton(fg = fg, onClick = onSettingsClick) {
-                    Icon(SolarIcons.Settings, "Settings", tint = fg, modifier = Modifier.size(24.dp))
+                // Bookmark sits next to Settings. Gold + filled when this chapter has one.
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    ReaderIconButton(fg = fg, onClick = onBookmarkClick) {
+                        Icon(
+                            if (bookmarked) SolarIcons.BookmarkBold else SolarIcons.Bookmark,
+                            contentDescription = if (bookmarked) "Remove bookmark" else "Bookmark this page",
+                            tint     = if (bookmarked) BookmarkGold else fg,
+                            modifier = Modifier
+                                .size(24.dp)
+                                .graphicsLayer { scaleX = pop.value; scaleY = pop.value }
+                        )
+                    }
+                    ReaderIconButton(fg = fg, onClick = onSettingsClick) {
+                        Icon(SolarIcons.Settings, "Settings", tint = fg, modifier = Modifier.size(24.dp))
+                    }
                 }
             }
         }
@@ -1457,10 +1559,15 @@ private fun ColumnScope.ChapterTocContent(
     chapters: List<ChapterLink>,
     currentNum: Int,
     readChapters: Set<Int>,
+    bookmarkedNums: Set<Int>,
+    // Hoisted into TocTabs: the pager drops an off-screen page, and swiping back
+    // to Contents must keep the sort order and scroll spot instead of resetting.
+    listState: LazyListState,
+    sortAscending: Boolean,
+    onToggleSort: () -> Unit,
+    positioned: MutableState<Boolean>,
     onSelect: (Int) -> Unit
 ) {
-    var sortAscending by remember { mutableStateOf(true) }
-    val listState = rememberLazyListState()
 
     // distinctBy: a repeated chapter number in the scraped list would show the
     // same row twice (and would crash a keyed list).
@@ -1473,10 +1580,9 @@ private fun ColumnScope.ChapterTocContent(
     // (the chapter list loads separately from the sheet opening). Instant, not
     // animated: from chapter 1 to chapter 2000 an animation would be a blur.
     // Lands 3 rows below the top so there's context above the current row.
-    var positioned by remember { mutableStateOf(false) }
     LaunchedEffect(sorted.isNotEmpty()) {
-        if (sorted.isNotEmpty() && !positioned) {
-            positioned = true
+        if (sorted.isNotEmpty() && !positioned.value) {
+            positioned.value = true
             val index = sorted.indexOfFirst { it.num == currentNum }
             listState.scrollToItem((index - 3).coerceAtLeast(0))
         }
@@ -1504,7 +1610,7 @@ private fun ColumnScope.ChapterTocContent(
             letterSpacing = 1.sp,
             color         = TocInk
         )
-        SortPill(ascending = sortAscending, onClick = { sortAscending = !sortAscending })
+        SortPill(ascending = sortAscending, onClick = onToggleSort)
     }
 
     HorizontalDivider(color = Color(0xFFE3DCD2))
@@ -1570,6 +1676,16 @@ private fun ColumnScope.ChapterTocContent(
                         overflow   = TextOverflow.Ellipsis,
                         modifier   = Modifier.weight(1f)
                     )
+                    // Gold marker: this chapter has a page bookmark
+                    if (chapter.num in bookmarkedNums) {
+                        Spacer(Modifier.width(8.dp))
+                        Icon(
+                            SolarIcons.BookmarkBold,
+                            contentDescription = "Bookmarked",
+                            tint     = BookmarkGold,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
                     // Right badge
                     when {
                         isCurrent -> {
@@ -1588,6 +1704,179 @@ private fun ColumnScope.ChapterTocContent(
                             ThickCheck(color = TocReadCheck)
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+// ── Contents | Bookmarks tabs (content of the TOC sheet) ─────────────────────
+// Tap a tab or swipe sideways between the two pages. The Contents page keeps its
+// scroll spot and sort order because that state lives here, not in the page.
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun ColumnScope.TocTabs(
+    chapters: List<ChapterLink>,
+    currentNum: Int,
+    readChapters: Set<Int>,
+    bookmarks: List<ReaderBookmark>,
+    onSelect: (Int) -> Unit,
+    onOpenBookmark: (ReaderBookmark) -> Unit,
+    onRemoveBookmark: (Int) -> Unit
+) {
+    val pagerState    = rememberPagerState(pageCount = { 2 })
+    val scope         = androidx.compose.runtime.rememberCoroutineScope()
+    val listState     = rememberLazyListState()
+    var sortAscending by remember { mutableStateOf(true) }
+    val positioned    = remember { mutableStateOf(false) }
+    val bookmarkedNums = remember(bookmarks) { bookmarks.map { it.chapterNum }.toSet() }
+
+    Row(
+        modifier              = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        TocTab(
+            label    = "Contents",
+            selected = pagerState.currentPage == 0,
+            onClick  = { scope.launch { pagerState.animateScrollToPage(0) } }
+        )
+        TocTab(
+            label    = if (bookmarks.isEmpty()) "Bookmarks" else "Bookmarks (${bookmarks.size})",
+            selected = pagerState.currentPage == 1,
+            onClick  = { scope.launch { pagerState.animateScrollToPage(1) } }
+        )
+    }
+
+    HorizontalPager(
+        state    = pagerState,
+        modifier = Modifier.fillMaxWidth().weight(1f)
+    ) { page ->
+        Column(Modifier.fillMaxSize()) {
+            if (page == 0) {
+                ChapterTocContent(
+                    chapters       = chapters,
+                    currentNum     = currentNum,
+                    readChapters   = readChapters,
+                    bookmarkedNums = bookmarkedNums,
+                    listState      = listState,
+                    sortAscending  = sortAscending,
+                    onToggleSort   = { sortAscending = !sortAscending },
+                    positioned     = positioned,
+                    onSelect       = onSelect
+                )
+            } else {
+                BookmarksContent(
+                    bookmarks = bookmarks,
+                    onOpen    = onOpenBookmark,
+                    onRemove  = onRemoveBookmark
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TocTab(label: String, selected: Boolean, onClick: () -> Unit) {
+    Text(
+        label,
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(if (selected) TocInk else TocReadBg)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        fontFamily = MontserratFamily,
+        fontWeight = FontWeight.Bold,
+        fontSize   = 12.sp,
+        color      = if (selected) TocPaper else TocInk
+    )
+}
+
+// One row per bookmarked chapter (a chapter has at most one bookmark), in chapter
+// order. Tap = open that chapter at the saved spot; the bin removes the bookmark.
+@Composable
+private fun ColumnScope.BookmarksContent(
+    bookmarks: List<ReaderBookmark>,
+    onOpen: (ReaderBookmark) -> Unit,
+    onRemove: (Int) -> Unit
+) {
+    if (bookmarks.isEmpty()) {
+        Column(
+            modifier              = Modifier.fillMaxWidth().weight(1f).padding(horizontal = 32.dp),
+            horizontalAlignment   = Alignment.CenterHorizontally,
+            verticalArrangement   = Arrangement.Center
+        ) {
+            Icon(
+                SolarIcons.Bookmark,
+                contentDescription = null,
+                tint     = TocReadCheck,
+                modifier = Modifier.size(40.dp)
+            )
+            Spacer(Modifier.height(12.dp))
+            Text(
+                "No bookmarks yet",
+                fontFamily = MontserratFamily,
+                fontWeight = FontWeight.Bold,
+                fontSize   = 15.sp,
+                color      = TocInk
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Tap the bookmark icon next to Settings while reading to save your spot.",
+                fontFamily = MontserratFamily,
+                fontSize   = 13.sp,
+                color      = TocReadCheck,
+                textAlign  = TextAlign.Center
+            )
+        }
+        return
+    }
+
+    LazyColumn(
+        modifier       = Modifier.fillMaxWidth().weight(1f),
+        contentPadding = PaddingValues(bottom = 12.dp)
+    ) {
+        items(bookmarks, key = { it.id }) { b ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 6.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(TocReadBg)
+                    .clickable { onOpen(b) }
+                    .padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    SolarIcons.BookmarkBold,
+                    contentDescription = null,
+                    tint     = BookmarkGold,
+                    modifier = Modifier.size(22.dp)
+                )
+                Spacer(Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "Ch.${b.chapterNum} · ${b.chapterTitle}",
+                        fontFamily = MontserratFamily,
+                        fontWeight = FontWeight.Bold,
+                        fontSize   = 14.sp,
+                        color      = TocInk,
+                        maxLines   = 1,
+                        overflow   = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        "${(b.fraction * 100).roundToInt()}% through the chapter",
+                        fontFamily = MontserratFamily,
+                        fontSize   = 12.sp,
+                        color      = TocReadCheck
+                    )
+                }
+                IconButton(onClick = { onRemove(b.chapterNum) }) {
+                    Icon(
+                        SolarIcons.TrashBin,
+                        contentDescription = "Remove bookmark",
+                        tint     = TocReadCheck,
+                        modifier = Modifier.size(20.dp)
+                    )
                 }
             }
         }

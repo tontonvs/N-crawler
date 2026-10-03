@@ -12,9 +12,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         NovelEntity::class,
         ChapterEntity::class,
         DownloadProgress::class,
-        ReadingProgress::class
+        ReadingProgress::class,
+        ReaderBookmark::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -23,6 +24,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun chapterDao(): ChapterDao
     abstract fun downloadProgressDao(): DownloadProgressDao
     abstract fun readingProgressDao(): ReadingProgressDao
+    abstract fun readerBookmarkDao(): ReaderBookmarkDao
 
     companion object {
         @Volatile private var INSTANCE: AppDatabase? = null
@@ -35,6 +37,19 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        // 4 -> 5: reader page bookmarks. A real migration (the destructive fallback below
+        // would wipe downloaded chapters). The SQL must match ReaderBookmark exactly.
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `reader_bookmarks` (" +
+                    "`id` TEXT NOT NULL, `novelSlug` TEXT NOT NULL, `chapterNum` INTEGER NOT NULL, " +
+                    "`chapterTitle` TEXT NOT NULL, `fraction` REAL NOT NULL, `createdAt` INTEGER NOT NULL, " +
+                    "PRIMARY KEY(`id`))"
+                )
+            }
+        }
+
         fun get(context: Context): AppDatabase =
             INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -42,7 +57,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "ncrawler.db"
                 )
-                .addMigrations(MIGRATION_3_4)
+                .addMigrations(MIGRATION_3_4, MIGRATION_4_5)
                 .fallbackToDestructiveMigration()
                 .build()
                 .also { INSTANCE = it }

@@ -14,6 +14,7 @@ import coil.Coil
 import coil.request.ImageRequest
 import com.noven.ncrawler.NCrawlerApp
 import com.noven.ncrawler.data.db.ChapterEntity
+import com.noven.ncrawler.data.db.ReaderBookmark
 import com.noven.ncrawler.data.local.ReadChaptersStore
 import com.noven.ncrawler.data.local.ReadingPositionStore
 import com.noven.ncrawler.data.local.ReaderPrefsStore
@@ -21,7 +22,15 @@ import com.noven.ncrawler.data.scraper.ChapterLink
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
@@ -105,6 +114,23 @@ class ReaderViewModel(app: Application) : AndroidViewModel(app) {
     private var currentSlug    = ""
     private var currentChapter = 0
 
+    // ── Page bookmarks (one per chapter) ─────────────────────────────────────
+    // Follows whichever novel is open; the list is empty until load() sets a slug.
+    private val slugFlow = MutableStateFlow("")
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val bookmarks: StateFlow<List<ReaderBookmark>> = slugFlow
+        .flatMapLatest { slug -> if (slug.isEmpty()) flowOf(emptyList()) else repo.bookmarksFlow(slug) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // One-shot text for the little "Bookmark added" toast.
+    private val _bookmarkEvent = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    val bookmarkEvent: SharedFlow<String> = _bookmarkEvent.asSharedFlow()
+
+    // Set by jumpToBookmark(), read ONCE by the screen when that chapter has loaded,
+    // so it scrolls to the bookmarked spot instead of the last saved reading spot.
+    private var pendingJump: Pair<Int, Float>? = null
+
     // Slug the current swatches were successfully derived from (not the
     // amber defaults) — lets a failed/too-early attempt be retried.
     private var swatchesDerivedFor = ""
@@ -115,6 +141,9 @@ class ReaderViewModel(app: Application) : AndroidViewModel(app) {
         val novelChanged = slug != currentSlug
         currentSlug    = slug
         currentChapter = chapterNum
+        slugFlow.value = slug
+        // A jump only applies to the chapter it was made for; never let a stale one linger.
+        if (pendingJump?.first != chapterNum) pendingJump = null
 
         // FIX (colours from another novel): the moment a different novel is
         // loaded, everything that belongs to the previous one is thrown away —
@@ -284,6 +313,36 @@ class ReaderViewModel(app: Application) : AndroidViewModel(app) {
                 scrollPos    = scrollPos
             )
         }
+    }
+
+    /** Adds a bookmark at [fraction] of the open chapter, or removes the chapter's bookmark. */
+    fun toggleBookmark(fraction: Float, chapterTitle: String) {
+        val slug = currentSlug
+        val num  = currentChapter
+        if (slug.isEmpty() || num <= 0) return
+        viewModelScope.launch {
+            val added = repo.toggleBookmark(slug, num, chapterTitle, fraction)
+            _bookmarkEvent.tryEmit(if (added) "Bookmark added" else "Bookmark removed")
+        }
+    }
+
+    fun removeBookmark(chapterNum: Int) {
+        val slug = currentSlug
+        viewModelScope.launch { repo.removeBookmark(slug, chapterNum) }
+    }
+
+    /** Opens a bookmark: loads its chapter and scrolls to the saved spot. */
+    fun jumpToBookmark(bookmark: ReaderBookmark) {
+        pendingJump = bookmark.chapterNum to bookmark.fraction
+        load(currentSlug, bookmark.chapterNum)
+    }
+
+    /** The bookmarked spot to scroll to for [chapterNum], consumed on read; null if none. */
+    fun takePendingJump(chapterNum: Int): Float? {
+        val jump = pendingJump ?: return null
+        if (jump.first != chapterNum) return null
+        pendingJump = null
+        return jump.second
     }
 
     fun loadNext() = load(currentSlug, currentChapter + 1)
