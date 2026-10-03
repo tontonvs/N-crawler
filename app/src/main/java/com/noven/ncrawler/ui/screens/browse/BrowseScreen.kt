@@ -24,6 +24,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -43,14 +44,18 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -103,8 +108,8 @@ private val OnImageGlassFillMd  = Color(0x26FFFFFF)  // 15% white — slightly m
 
 // CHANGE (UI polish): tokens for the collapsing top bar, the recent-read backdrop,
 // the curved content panel and the glass search overlay.
-private const val PILL_SHOW_AT     = 0.98f   // top bar this collapsed → "Browse" pill drops in
-private const val PILL_HIDE_BELOW  = 0.82f   // …and only leaves once it is clearly re-opening (no flicker at the edge)
+private const val MORPH_COLLAPSE_AT  = 0.40f  // scrolled this far (fraction of the bar's height) → bar morphs into the capsule
+private const val MORPH_EXPAND_BELOW = 0.20f  // …and only grows back once it is clearly near the top again (no flicker at the edge)
 private val PanelRadius            = 28.dp   // curve of the content panel's top corners
 private const val BACKDROP_DECODE_W = 200    // backdrop cover is decoded this small, then scaled up
 private const val BACKDROP_DECODE_H = 300    // = the "very slight blur" (bigger = sharper, smaller = softer)
@@ -151,13 +156,28 @@ fun BrowseScreen(
     val pageBg      = MaterialTheme.colorScheme.background
     val reducedMotion = rememberReducedMotion()
 
-    // "Browse" pill: shows once the top bar has scrolled fully away, hides again
-    // when it starts coming back. Two thresholds (hysteresis) so a finger
-    // hovering on the boundary doesn't make the pill flicker in and out.
-    var pillShown by remember { mutableStateOf(false) }
+    // CHANGE (morph): ONE glass element is either the full-width bar (0f) or the "Browse"
+    // capsule (1f); [morph] is the animated position between the two. The scroll only
+    // flips [collapsed] (two thresholds = hysteresis, so a finger hovering on the boundary
+    // can't make it flicker); the morph itself is time-based and interruptible — flip it
+    // mid-flight and Animatable retargets from where it currently is.
+    var collapsed by remember { mutableStateOf(false) }
     LaunchedEffect(listState, barHeightPx) {
         snapshotFlow { collapseOf(listState, barHeightPx) }
-            .collect { c -> pillShown = if (pillShown) c > PILL_HIDE_BELOW else c >= PILL_SHOW_AT }
+            .collect { c -> collapsed = if (collapsed) c > MORPH_EXPAND_BELOW else c >= MORPH_COLLAPSE_AT }
+    }
+    val morph = remember { Animatable(0f) }
+    LaunchedEffect(collapsed, reducedMotion) {
+        val target = if (collapsed) 1f else 0f
+        if (reducedMotion) {
+            morph.snapTo(target)             // system animations off: no travel, just the end state
+        } else {
+            // forming the capsule = something arriving (340ms); growing back = settling (300ms)
+            morph.animateTo(
+                target,
+                tween(if (collapsed) Motion.ENTER_MS else Motion.SCREEN_MS, easing = Motion.EaseOut)
+            )
+        }
     }
 
     // Light background fills the entire screen
@@ -197,15 +217,15 @@ fun BrowseScreen(
             )
         }
 
-        // Status-bar scrim — once the bar has scrolled away, content would run
+        // Status-bar scrim — once the bar has become the capsule, content would run
         // straight under the system clock/battery icons; this fades the page colour
-        // in behind them (alpha follows the collapse, drawn without recomposing).
+        // in behind them (alpha follows the morph, drawn without recomposing).
         Box(
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .fillMaxWidth()
                 .height(statusBarDp + 16.dp)
-                .graphicsLayer { alpha = collapseOf(listState, barHeightPx) }
+                .graphicsLayer { alpha = morph.value }
                 .background(
                     Brush.verticalGradient(
                         listOf(pageBg.copy(alpha = 0.92f), pageBg.copy(alpha = 0f))
@@ -213,218 +233,304 @@ fun BrowseScreen(
                 )
         )
 
-        // ── Glass top bar — logo + download button. Rides up with the page as you
-        // scroll and fades over the second half of the move (see TopNavBar).
-        TopNavBar(
+        // ── Top chrome: the glass bar (logo + download button) that morphs into the
+        // "Browse" capsule as you scroll, and back (see TopChrome).
+        TopChrome(
             onDownloadsClick = onDownloadsClick,
             downloading      = downloading,
+            collapsed        = collapsed,
             progress         = downloadFraction,
             glass            = glass,
             hazeState        = topHaze,
-            collapse         = { collapseOf(listState, barHeightPx) },
+            morph            = { morph.value },
             modifier         = Modifier.align(Alignment.TopCenter)
         )
-
-        // ── "Browse" pill + download button, centred under the status bar. Drops in
-        // from the bar that just left (fade + scale 0.88→1 + a short slide, one strong
-        // ease-out, 340ms) and leaves quicker and subtler (140ms). With system
-        // animations off it just appears/disappears. It's only in the tree while shown,
-        // so an invisible pill can never swallow taps meant for the list.
-        AnimatedVisibility(
-            visible  = pillShown,
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(top = statusBarDp + BTN_MARGIN_TOP),
-            enter = if (reducedMotion) EnterTransition.None else
-                fadeIn(tween(Motion.BASE_MS, easing = Motion.EaseOut)) +
-                scaleIn(
-                    animationSpec   = tween(Motion.ENTER_MS, easing = Motion.EaseOut),
-                    initialScale    = 0.88f,
-                    transformOrigin = TransformOrigin(0.5f, 0f)
-                ) +
-                slideInVertically(tween(Motion.ENTER_MS, easing = Motion.EaseOut)) { -it / 2 },
-            exit = if (reducedMotion) ExitTransition.None else
-                fadeOut(tween(Motion.QUICK_MS, easing = LinearEasing)) +
-                scaleOut(
-                    animationSpec   = tween(Motion.QUICK_MS, easing = FastOutLinearInEasing),
-                    targetScale     = 0.94f,
-                    transformOrigin = TransformOrigin(0.5f, 0f)
-                ) +
-                slideOutVertically(tween(Motion.QUICK_MS, easing = FastOutLinearInEasing)) { -it / 4 }
-        ) {
-            CollapsedPill(
-                onDownloadsClick = onDownloadsClick,
-                downloading      = downloading,
-                progress         = downloadFraction,
-                glass            = glass
-            )
-        }
     }
 }
 
 // How far the top bar has collapsed: 0 = fully open (list at rest), 1 = fully gone.
 // Only meaningful while the list is near its top; once the first item has scrolled
 // out it is simply 1. With no list on screen (skeleton / error) the state sits at 0,
-// so the bar stays open. Call it from a layout/draw-phase lambda or snapshotFlow only.
+// so the bar stays open. Call it from snapshotFlow (or a draw-phase lambda) only.
 private fun collapseOf(state: LazyListState, barHeightPx: Float): Float {
     if (barHeightPx <= 0f) return 0f
     if (state.firstVisibleItemIndex > 0) return 1f
     return (state.firstVisibleItemScrollOffset / barHeightPx).coerceIn(0f, 1f)
 }
 
-// ── Top Nav Bar ───────────────────────────────────────────────────────────────
-// CHANGE: the old surface-coloured bar with its cut-out "bay" is now a frosted-glass
-// strip, 60dp tall below the status bar (was 100dp = 40% shorter). The "bay" can't
-// exist any more: it needed ~78dp of height, and the dominant-colour behind it is
-// replaced by the hero's own blurred cover showing through the glass.
-// Glass = the same Haze blur as the floating nav (30dp) + a theme tint: white glass
-// in light mode, the app's glass grey in dark mode. Not the nav's always-dark pill:
-// the system draws DARK status icons in light mode, which a dark bar would swallow.
-private val BAR_CONTENT_HEIGHT = 66.dp      // below the status bar (60dp last round, +10%)
-private val BTN_SIZE           = 40.dp      // downloads button (unchanged)
-private val BTN_MARGIN_END     = 14.dp      // button ↔ screen's right edge
-private val BTN_MARGIN_TOP     = 13.dp      // centres the 40dp button in the 66dp bar
+// ── Top chrome: glass bar ⇄ "Browse" capsule ─────────────────────────────────────
+// ONE glass element. At rest it is the full-width bar (66dp under the status bar, with
+// inverted bottom corners). Scroll a little and it shrinks in from both sides to the
+// centre until it is the "Browse" capsule — the logo text crossfades to "Browse" and the
+// download button rides along inside it; scroll back to the top and it grows back.
+//
+// MOTION (Jakub primary, Emil secondary — the app's Motion kit):
+//  • Nothing is measured while it moves. The element keeps ONE fixed layout rectangle
+//    (screen width × bar height). What animates is its clip OUTLINE (drawn from the
+//    morph value in the draw phase) and graphicsLayer transforms/alpha on the contents —
+//    so no layout runs mid-animation, and the Haze blur region never moves (a size
+//    animation would have forced the blur to re-read its bounds every frame).
+//  • Shape: rectangle edges close in from the sides while the bottom corners go from
+//    INVERTED fillets (bar) to fully round (capsule) — one outline, interpolated.
+//  • Content is staggered on the morph value: "nCrawler" leaves in the first 38%,
+//    "Browse" arrives in the last 38%, so the two words never overlap mid-way.
+//  • 340ms in / 300ms out, Motion.EaseOut, interruptible; reduced motion = snap.
+private val BAR_CONTENT_HEIGHT = 66.dp      // below the status bar (open bar)
+private val BTN_SIZE           = 40.dp      // downloads button
+private val BTN_MARGIN_END     = 14.dp      // open bar: button ↔ screen's right edge
+private val TITLE_INSET        = 36.dp      // open bar: logo ↔ screen's left edge
 private val BAR_FLARE          = 14.dp      // how far the inverted corners reach below the flat edge
+private val CAPSULE_H          = 48.dp      // button 40 + 4 above and below
+private val CAPSULE_TOP        = 10.dp      // capsule's top edge, below the status bar
+private val CAPSULE_PAD_START  = 22.dp      // capsule: left edge ↔ "Browse"
+private val CAPSULE_GAP        = 14.dp      // capsule: "Browse" ↔ button
+private val CAPSULE_PAD_END    = 4.dp       // capsule: button ↔ right edge
 private val RING_STROKE        = 2.7.dp     // download-progress ring around the button
 // The open bar shows the arrow-down icon held STILL (the ring shows progress). Flip to true
-// to make it loop while a download runs, like the "Browse" pill's arrow does.
+// to make it loop while a download runs; the capsule's arrow always loops while downloading.
 private const val BAR_ICON_ANIMATES_WHEN_DOWNLOADING = false
-private const val TOP_GLASS_ALPHA = 0.55f   // glass tint over the blur (lower = more of the cover shows)
+private const val TOP_GLASS_ALPHA = 0.58f   // glass tint over the blur (lower = more of the cover shows)
 
-// CHANGE: the bar's bottom corners used to be rounded OFF (convex, like a tab). They are
-// now the opposite — INVERTED fillets: the bar's flat bottom edge sits [flare] above the
-// full height, and at both screen edges the glass sweeps down along a concave quarter
-// circle to the full height, as if the bar were melting into the screen sides. Drawn
-// inside the bar's own bounds (full height = flat edge + flare), so nothing overflows.
-private class InvertedBottomCorners(private val flare: Dp) : Shape {
-    override fun createOutline(size: Size, layoutDirection: LayoutDirection, density: Density): Outline {
-        val w = size.width
-        val h = size.height
-        val r = with(density) { flare.toPx() }.coerceIn(0f, minOf(w / 2f, h))
-        val path = Path().apply {
-            moveTo(0f, 0f)
-            lineTo(w, 0f)
-            lineTo(w, h)
-            // right fillet: centre (w - r, h), from 0° sweeping -90° up to (w - r, h - r)
-            arcTo(Rect(w - 2f * r, h - r, w, h + r), 0f, -90f, false)
-            lineTo(r, h - r)
-            // left fillet: centre (r, h), from -90° sweeping -90° down to (0, h)
-            arcTo(Rect(0f, h - r, 2f * r, h + r), -90f, -90f, false)
-            close()
+private fun mix(a: Float, b: Float, t: Float): Float = a + (b - a) * t
+
+// 0 until [from], 1 from [to] on, linear in between — staggers parts of one morph.
+private fun window(p: Float, from: Float, to: Float): Float = ((p - from) / (to - from)).coerceIn(0f, 1f)
+
+// All the geometry of the morph, in px, computed once per density / status-bar height /
+// "Browse" text width. Everything that depends on the SCREEN width takes it as a parameter.
+private class MorphGeometry(private val density: Density, statusDp: Dp, browseTextPx: Int) {
+    private fun px(d: Dp): Float = with(density) { d.toPx() }
+
+    val statusPx    = px(statusDp)
+    val barH        = px(statusDp + BAR_CONTENT_HEIGHT + BAR_FLARE)
+    val flare       = px(BAR_FLARE)
+    val btn         = px(BTN_SIZE)
+    val marginEnd   = px(BTN_MARGIN_END)
+    val titleInset  = px(TITLE_INSET)
+    val capH        = px(CAPSULE_H)
+    val capTop      = statusPx + px(CAPSULE_TOP)
+    val padStart    = px(CAPSULE_PAD_START)
+    val padEnd      = px(CAPSULE_PAD_END)
+    val capW        = padStart + browseTextPx + px(CAPSULE_GAP) + btn + padEnd
+    val barCenterY  = statusPx + px(BAR_CONTENT_HEIGHT) / 2f
+    val capCenterY  = capTop + capH / 2f
+
+    /** x of the shape's left edge: 0 = screen edge (bar), centred (capsule). */
+    fun bodyLeft(w: Float, p: Float): Float = mix(0f, (w - capW) / 2f, p)
+
+    /** How far the button travels (px) from its open-bar spot to its capsule spot. */
+    fun buttonDx(w: Float): Float = capW / 2f - w / 2f - padEnd + marginEnd
+
+    /**
+     * The morphing outline. Rect edges: x [bodyLeft … w - bodyLeft], y [0 … barH] (bar)
+     * → [capTop … capTop + capH] (capsule). Top corners round off 0 → full; bottom corners
+     * go from an inverted fillet of radius [flare] (negative) to a full convex round.
+     */
+    fun path(w: Float, p: Float): Path {
+        val x0 = bodyLeft(w, p)
+        val x1 = w - x0
+        val y0 = mix(0f, capTop, p)
+        val y1 = y0 + mix(barH, capH, p)
+        val half = minOf(y1 - y0, x1 - x0) / 2f
+        val rt = mix(0f, half, p)
+        val sb = mix(-flare, half, p)          // signed bottom radius: < 0 = inverted
+        val path = Path()
+        path.moveTo(x0 + rt, y0)
+        path.lineTo(x1 - rt, y0)
+        if (rt > 0f) path.arcTo(Rect(x1 - 2f * rt, y0, x1, y0 + 2f * rt), -90f, 90f, false)
+        if (sb >= 0f) {
+            path.lineTo(x1, y1 - sb)
+            if (sb > 0f) path.arcTo(Rect(x1 - 2f * sb, y1 - 2f * sb, x1, y1), 0f, 90f, false)
+            path.lineTo(x0 + sb, y1)
+            if (sb > 0f) path.arcTo(Rect(x0, y1 - 2f * sb, x0 + 2f * sb, y1), 90f, 90f, false)
+        } else {
+            val r = -sb
+            path.lineTo(x1, y1)                                                        // flare tip
+            path.arcTo(Rect(x1 - 2f * r, y1 - r, x1, y1 + r), 0f, -90f, false)         // right fillet
+            path.lineTo(x0 + r, y1 - r)                                                // flat bottom edge
+            path.arcTo(Rect(x0, y1 - r, x0 + 2f * r, y1 + r), -90f, -90f, false)       // left fillet
         }
-        return Outline.Generic(path)
+        path.lineTo(x0, y0 + rt)
+        if (rt > 0f) path.arcTo(Rect(x0, y0, x0 + 2f * rt, y0 + 2f * rt), 180f, 90f, false)
+        path.close()
+        return path
     }
+}
+
+// A NEW instance per morph value on purpose: the layer only re-resolves its outline when
+// the Shape it is given changes, and the bounds (fixed) never do.
+private class MorphBarShape(private val geo: MorphGeometry, private val p: Float) : Shape {
+    override fun createOutline(size: Size, layoutDirection: LayoutDirection, density: Density): Outline =
+        Outline.Generic(geo.path(size.width, p))
 }
 
 private class BarGlass(
     val tint: Color,        // fill of the glass over the blur
-    val ink: Color,         // text + icon colour
-    val paper: Color,       // solid version of the glass colour (the "Browse" pill)
-    val discFill: Color,    // download button disc: uniform, bright, opaque
+    val ink: Color,         // text colour
+    val discFill: Color,    // download button disc: uniform and opaque
     val discInk: Color      // everything drawn on that disc: icon + progress ring
 )
 
+// Light mode: white glass, bright disc with near-black marks.
+// Dark mode:  dark glass, dark disc with light marks (a bright disc glares on dark glass).
 @Composable
 private fun rememberBarGlass(): BarGlass {
     val dark = isSystemInDarkTheme()
     val ink  = MaterialTheme.colorScheme.onSurface
     return remember(dark, ink) {
-        val base = if (dark) GlassBase else Color.White
         BarGlass(
-            tint       = base.copy(alpha = TOP_GLASS_ALPHA),
-            ink        = ink,
-            paper      = base,
-            // The button is the same bright disc with near-black marks in both themes.
-            discFill   = if (dark) Color(0xFFE6EAF2) else Color.White,
-            discInk    = Color(0xFF0D1117)
+            tint     = (if (dark) GlassBase else Color.White).copy(alpha = TOP_GLASS_ALPHA),
+            ink      = ink,
+            discFill = if (dark) Color(0xFF2A303D) else Color.White,
+            discInk  = if (dark) Color(0xFFF2F5FA) else Color(0xFF0D1117)
         )
     }
 }
 
 @Composable
-private fun TopNavBar(
+private fun TopChrome(
     onDownloadsClick: (() -> Unit)?,
     downloading: Boolean,
+    collapsed: Boolean,
     progress: Float,
     glass: BarGlass,
     hazeState: HazeState,
-    collapse: () -> Float,
+    morph: () -> Float,
     modifier: Modifier = Modifier
 ) {
     val density = LocalDensity.current
     val statusBarDp = with(density) { WindowInsets.statusBars.getTop(density).toDp() }
-    val shape = remember { InvertedBottomCorners(BAR_FLARE) }
 
-    Box(
+    val titleStyle = MaterialTheme.typography.titleLarge.copy(
+        fontWeight    = FontWeight.ExtraBold,
+        fontSize      = 28.sp,
+        letterSpacing = (-0.5).sp
+    )
+    val browseStyle = MaterialTheme.typography.titleLarge.copy(
+        fontWeight    = FontWeight.ExtraBold,
+        fontSize      = 20.sp,
+        lineHeight    = 24.sp,
+        letterSpacing = (-0.3).sp
+    )
+    // The capsule is exactly as wide as its content: measure the real "Browse" text.
+    val measurer = rememberTextMeasurer()
+    val browseWidthPx = remember(measurer, browseStyle) {
+        measurer.measure("Browse", browseStyle).size.width
+    }
+    val geo = remember(density, statusBarDp, browseWidthPx) {
+        MorphGeometry(density, statusBarDp, browseWidthPx)
+    }
+    // Screen width, for the draw-phase translations (set once the layout has a size).
+    var rootW by remember { mutableStateOf(0f) }
+
+    Layout(
         modifier = modifier
             .fillMaxWidth()
-            // Collapse = the bar is PLACED higher as you scroll (placement phase: cheap,
-            // no recomposition). It has to be a layout move, not a graphicsLayer one: Haze
-            // only re-reads where a glass element sits when it is laid out, so a
-            // draw-phase translation would leave the blur sampling the wrong strip.
-            .layout { measurable, constraints ->
-                val p = measurable.measure(constraints)
-                layout(p.width, p.height) {
-                    p.place(0, -(collapse() * p.height).roundToInt())
-                }
-            }
-            // fades over the second half of the move (alpha only — no position change)
-            .graphicsLayer { alpha = 1f - ((collapse() - 0.45f) / 0.55f).coerceIn(0f, 1f) }
-            .height(statusBarDp + BAR_CONTENT_HEIGHT + BAR_FLARE)
-            .clip(shape)
-            .glassBlur(hazeState, shape, glass.tint)
-    ) {
-        // Everything below sits in the 60dp under the status bar
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(statusBarDp + BAR_CONTENT_HEIGHT)
-                .padding(top = statusBarDp)
-        ) {
-            // Logo — larger (24 → 28sp) and nudged right (36dp from the edge)
+            .onSizeChanged { rootW = it.width.toFloat() },
+        content = {
+            // 0 — the glass body. Fixed rectangle; its visible shape is the morphing
+            // outline. Blur = the whole rectangle (RectangleShape), clipped by that outline.
+            Box(
+                Modifier
+                    .graphicsLayer {
+                        shape = MorphBarShape(geo, morph())
+                        clip = true
+                    }
+                    .glassBlur(hazeState, RectangleShape, glass.tint)
+                    .drawWithContent {
+                        drawContent()
+                        // hairline edge so the glass reads against a light page
+                        drawPath(
+                            geo.path(size.width, morph()),
+                            glass.ink.copy(alpha = 0.10f),
+                            style = Stroke(width = 1.5.dp.toPx())
+                        )
+                    }
+            )
+
+            // 1 — "nCrawler": leaves first, riding the shape's left edge inward while it
+            // shrinks a little (origin = its left-centre).
             Text(
                 "nCrawler",
                 modifier = Modifier
-                    .align(Alignment.CenterStart)
-                    .padding(start = 36.dp),
-                style = MaterialTheme.typography.titleLarge.copy(
-                    fontWeight    = FontWeight.ExtraBold,
-                    fontSize      = 28.sp,
-                    letterSpacing = (-0.5).sp
-                ),
-                color = glass.ink
+                    .then(if (collapsed) Modifier.clearAndSetSemantics { } else Modifier)
+                    .graphicsLayer {
+                        val p = morph()
+                        val gone = window(p, 0f, 0.38f)
+                        alpha        = 1f - gone
+                        translationX = geo.bodyLeft(rootW, p)
+                        scaleX       = 1f - 0.15f * gone
+                        scaleY       = 1f - 0.15f * gone
+                        transformOrigin = TransformOrigin(0f, 0.5f)
+                    },
+                style    = titleStyle,
+                color    = glass.ink,
+                maxLines = 1,
+                softWrap = false
             )
 
-            // Download button — static download icon on a soft disc; while a download runs
-            // it becomes the looping arrow and a progress ring traces the disc's edge.
+            // 2 — "Browse": waits, then arrives in the capsule (fade + settle 0.92 → 1)
+            Text(
+                "Browse",
+                modifier = Modifier
+                    .then(if (collapsed) Modifier else Modifier.clearAndSetSemantics { })
+                    .graphicsLayer {
+                        val a = window(morph(), 0.62f, 1f)
+                        alpha  = a
+                        scaleX = 0.92f + 0.08f * a
+                        scaleY = 0.92f + 0.08f * a
+                    },
+                style    = browseStyle,
+                color    = glass.ink,
+                maxLines = 1,
+                softWrap = false
+            )
+
+            // 3 — the download button, placed at its open-bar spot and carried to its
+            // capsule spot by translation.
             DownloadButton(
                 onClick     = onDownloadsClick,
                 downloading = downloading,
+                collapsed   = collapsed,
                 progress    = progress,
                 glass       = glass,
-                modifier    = Modifier
-                    .align(Alignment.CenterEnd)
-                    .padding(end = BTN_MARGIN_END)
+                modifier    = Modifier.graphicsLayer {
+                    val p = morph()
+                    translationX = geo.buttonDx(rootW) * p
+                    translationY = (geo.capCenterY - geo.barCenterY) * p
+                }
             )
+        }
+    ) { measurables, constraints ->
+        val w = constraints.maxWidth
+        val h = geo.barH.roundToInt()
+        val loose = constraints.copy(minWidth = 0, minHeight = 0, maxHeight = Constraints.Infinity)
+        val body   = measurables[0].measure(Constraints.fixed(w, h))
+        val title  = measurables[1].measure(loose)
+        val browse = measurables[2].measure(loose)
+        val btn    = measurables[3].measure(loose)
+        layout(w, h) {
+            body.place(0, 0)
+            title.place(geo.titleInset.roundToInt(), (geo.barCenterY - title.height / 2f).roundToInt())
+            browse.place(((w - geo.capW) / 2f + geo.padStart).roundToInt(), (geo.capCenterY - browse.height / 2f).roundToInt())
+            btn.place((w - geo.marginEnd - btn.width).roundToInt(), (geo.barCenterY - btn.height / 2f).roundToInt())
         }
     }
 }
 
-// The downloads button, shared by the open top bar (soft disc on the glass) and the
-// collapsed pill row (solid disc + soft shadow: there it floats over scrolling covers).
-// CHANGE: a bright, uniform disc with near-black marks. A 2.7dp dark ring traces the
-// disc's circumference showing overall progress (no track behind it). The open bar holds
-// the arrow-down icon still; the pill keeps its static download icon that swaps to the
-// looping arrow while downloading. (The 4-second box/wave/checkmark animation lives on
-// the Detail screen's download button.)
+// The downloads button: a uniform disc with a 2.7dp progress ring on its circumference
+// (no track — just the arc) and the arrow-down icon. Colours follow the theme (see
+// rememberBarGlass). The arrow is held still unless a download is running AND it is
+// the capsule (or BAR_ICON_ANIMATES_WHEN_DOWNLOADING is on); then it cross-fades to the
+// looping arrow. The 4s box/wave/checkmark animation lives on the Detail screen.
 @Composable
 private fun DownloadButton(
     onClick: (() -> Unit)?,
     downloading: Boolean,
+    collapsed: Boolean,
     progress: Float,
     glass: BarGlass,
-    modifier: Modifier = Modifier,
-    floating: Boolean = false
+    modifier: Modifier = Modifier
 ) {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
@@ -448,9 +554,9 @@ private fun DownloadButton(
     Box(
         modifier = modifier
             .size(BTN_SIZE)
-            .then(if (floating) Modifier.shadow(6.dp, CircleShape) else Modifier)
             .clip(CircleShape)
             .background(glass.discFill)
+            .border(0.75.dp, glass.discInk.copy(alpha = 0.12f), CircleShape)
             .clickable(
                 enabled           = onClick != null,
                 interactionSource = interaction,
@@ -462,9 +568,8 @@ private fun DownloadButton(
             },
         contentAlignment = Alignment.Center
     ) {
-        // progress ring — drawn on the circumference (inset by half the stroke so it
-        // sits fully inside the disc's edge). Never recomposes: both values are read
-        // in the draw phase. A tiny minimum sweep shows the ring has started.
+        // progress ring — on the circumference (inset by half the stroke so it sits fully
+        // inside the disc's edge). Both values are read in the draw phase.
         Canvas(
             Modifier
                 .matchParentSize()
@@ -473,7 +578,6 @@ private fun DownloadButton(
             val stroke = RING_STROKE.toPx()
             val inset  = stroke / 2f
             val arc    = Size(size.width - stroke, size.height - stroke)
-            // progress arc only — no background track, just the dark arc on the bright disc
             drawArc(
                 color      = glass.discInk,
                 startAngle = -90f,
@@ -489,69 +593,16 @@ private fun DownloadButton(
             modifier = Modifier.graphicsLayer { alpha = if (pressed) 0.7f else 1f },
             contentAlignment = Alignment.Center
         ) {
-            // Open bar: the arrow-down held still (loops only if the token above is true).
-            // Pill: static download icon, swapping to the looping arrow while downloading.
-            val animated = downloading && (floating || BAR_ICON_ANIMATES_WHEN_DOWNLOADING)
+            val animated = downloading && (collapsed || BAR_ICON_ANIMATES_WHEN_DOWNLOADING)
             Crossfade(
                 targetState   = animated,
                 animationSpec = tween(Motion.BASE_MS),
                 label         = "downloadIconSwap"
             ) { running ->
-                if (running) {
-                    AnimatedArrowDownIcon(ink = glass.discInk)
-                } else if (floating) {
-                    AnimatedDownloadIcon(animating = false, ink = glass.discInk, paper = glass.discFill)
-                } else {
-                    StaticArrowDownIcon(ink = glass.discInk)
-                }
+                if (running) AnimatedArrowDownIcon(ink = glass.discInk)
+                else StaticArrowDownIcon(ink = glass.discInk)
             }
         }
-    }
-}
-
-// "Browse" pill + download button, shown once the top bar has scrolled away. The
-// pill is exactly centred on the screen: an invisible spacer the width of the
-// button + gap on its left balances the button on its right. Same font as the
-// "nCrawler" logo (Montserrat ExtraBold via titleLarge), 20sp instead of 28sp.
-@Composable
-private fun CollapsedPill(
-    onDownloadsClick: (() -> Unit)?,
-    downloading: Boolean,
-    progress: Float,
-    glass: BarGlass
-) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Spacer(Modifier.width(BTN_SIZE + 8.dp))
-        Box(
-            modifier = Modifier
-                .height(BTN_SIZE)
-                .shadow(6.dp, CircleShape)
-                .clip(CircleShape)
-                .background(glass.paper.copy(alpha = 0.94f))
-                .padding(horizontal = 20.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                "Browse",
-                style = MaterialTheme.typography.titleLarge.copy(
-                    fontWeight    = FontWeight.ExtraBold,
-                    fontSize      = 20.sp,
-                    lineHeight    = 24.sp,
-                    letterSpacing = (-0.3).sp
-                ),
-                color    = glass.ink,
-                maxLines = 1,
-                softWrap = false
-            )
-        }
-        Spacer(Modifier.width(8.dp))
-        DownloadButton(
-            onClick     = onDownloadsClick,
-            downloading = downloading,
-            progress    = progress,
-            glass       = glass,
-            floating    = true
-        )
     }
 }
 
