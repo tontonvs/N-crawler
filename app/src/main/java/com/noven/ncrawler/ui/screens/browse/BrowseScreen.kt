@@ -261,8 +261,10 @@ private fun collapseOf(state: LazyListState, barHeightPx: Float): Float {
 // ── Top chrome: glass bar ⇄ "Browse" capsule ─────────────────────────────────────
 // ONE glass element. At rest it is the full-width bar (66dp under the status bar, with
 // inverted bottom corners). Scroll a little and it shrinks in from both sides to the
-// centre until it is the "Browse" capsule — the logo text crossfades to "Browse" and the
-// download button rides along inside it; scroll back to the top and it grows back.
+// centre until it is the "Browse" PILL (the logo text crossfades to "Browse"). The
+// download button does NOT go inside it: it slides out of the bar to sit as its own disc
+// right beside the pill, with its own shadow and its progress ring. Scroll back to the top
+// and the pill grows back into the bar while the button slides home.
 //
 // MOTION (Jakub primary, Emil secondary — the app's Motion kit):
 //  • Nothing is measured while it moves. The element keeps ONE fixed layout rectangle
@@ -280,14 +282,14 @@ private val BTN_SIZE           = 40.dp      // downloads button
 private val BTN_MARGIN_END     = 14.dp      // open bar: button ↔ screen's right edge
 private val TITLE_INSET        = 36.dp      // open bar: logo ↔ screen's left edge
 private val BAR_FLARE          = 14.dp      // how far the inverted corners reach below the flat edge
-private val CAPSULE_H          = 48.dp      // button 40 + 4 above and below
-private val CAPSULE_TOP        = 10.dp      // capsule's top edge, below the status bar
-private val CAPSULE_PAD_START  = 22.dp      // capsule: left edge ↔ "Browse"
-private val CAPSULE_GAP        = 14.dp      // capsule: "Browse" ↔ button
-private val CAPSULE_PAD_END    = 4.dp       // capsule: button ↔ right edge
+private val CAPSULE_H          = 40.dp      // the pill is as tall as the button
+private val CAPSULE_TOP        = 13.dp      // pill's top edge, below the status bar
+private val CAPSULE_PAD_START  = 20.dp      // pill: left edge ↔ "Browse"
+private val CAPSULE_PAD_END    = 20.dp      // pill: "Browse" ↔ right edge
+private val CAPSULE_GAP        = 8.dp       // pill ↔ the separate download button beside it
 private val RING_STROKE        = 2.7.dp     // download-progress ring around the button
 // The open bar shows the arrow-down icon held STILL (the ring shows progress). Flip to true
-// to make it loop while a download runs; the capsule's arrow always loops while downloading.
+// to make it loop while a download runs; beside the pill the arrow always loops while downloading.
 private const val BAR_ICON_ANIMATES_WHEN_DOWNLOADING = false
 private const val TOP_GLASS_ALPHA = 0.58f   // glass tint over the blur (lower = more of the cover shows)
 
@@ -311,15 +313,19 @@ private class MorphGeometry(private val density: Density, statusDp: Dp, browseTe
     val capTop      = statusPx + px(CAPSULE_TOP)
     val padStart    = px(CAPSULE_PAD_START)
     val padEnd      = px(CAPSULE_PAD_END)
-    val capW        = padStart + browseTextPx + px(CAPSULE_GAP) + btn + padEnd
+    val gap         = px(CAPSULE_GAP)
+    val capW        = padStart + browseTextPx + padEnd      // the pill alone
     val barCenterY  = statusPx + px(BAR_CONTENT_HEIGHT) / 2f
     val capCenterY  = capTop + capH / 2f
 
     /** x of the shape's left edge: 0 = screen edge (bar), centred (capsule). */
     fun bodyLeft(w: Float, p: Float): Float = mix(0f, (w - capW) / 2f, p)
 
-    /** How far the button travels (px) from its open-bar spot to its capsule spot. */
-    fun buttonDx(w: Float): Float = capW / 2f - w / 2f - padEnd + marginEnd
+    /**
+     * How far the button travels (px) from its open-bar spot (right edge, [marginEnd]) to
+     * its resting spot right beside the centred pill: [gap] past the pill's right edge.
+     */
+    fun buttonDx(w: Float): Float = (w + capW) / 2f + gap - (w - marginEnd - btn)
 
     /**
      * The morphing outline. Rect edges: x [bodyLeft … w - bodyLeft], y [0 … barH] (bar)
@@ -367,6 +373,7 @@ private class MorphBarShape(private val geo: MorphGeometry, private val p: Float
 private class BarGlass(
     val tint: Color,        // fill of the glass over the blur
     val ink: Color,         // text colour
+    val paper: Color,       // solid pill colour (the glass turns near-solid as it becomes the pill)
     val discFill: Color,    // download button disc: uniform and opaque
     val discInk: Color      // everything drawn on that disc: icon + progress ring
 )
@@ -381,6 +388,7 @@ private fun rememberBarGlass(): BarGlass {
         BarGlass(
             tint     = (if (dark) GlassBase else Color.White).copy(alpha = TOP_GLASS_ALPHA),
             ink      = ink,
+            paper    = if (dark) GlassBase else Color.White,
             discFill = if (dark) Color(0xFF2A303D) else Color.White,
             discInk  = if (dark) Color(0xFFF2F5FA) else Color(0xFF0D1117)
         )
@@ -433,12 +441,19 @@ private fun TopChrome(
             Box(
                 Modifier
                     .graphicsLayer {
-                        shape = MorphBarShape(geo, morph())
+                        val p = morph()
+                        shape = MorphBarShape(geo, p)
                         clip = true
+                        // the pill floats over the page: a soft shadow fades in with it. Held
+                        // at 0 while the outline still has its (non-convex) inverted corners.
+                        shadowElevation = 6.dp.toPx() * window(p, 0.55f, 1f)
                     }
                     .glassBlur(hazeState, RectangleShape, glass.tint)
                     .drawWithContent {
                         drawContent()
+                        // glass → near-solid as it becomes the pill (the old pill was solid)
+                        val solid = window(morph(), 0.55f, 1f)
+                        if (solid > 0f) drawRect(glass.paper.copy(alpha = 0.94f * solid))
                         // hairline edge so the glass reads against a light page
                         drawPath(
                             geo.path(size.width, morph()),
@@ -469,7 +484,7 @@ private fun TopChrome(
                 softWrap = false
             )
 
-            // 2 — "Browse": waits, then arrives in the capsule (fade + settle 0.92 → 1)
+            // 2 — "Browse": waits, then arrives in the pill (fade + settle 0.92 → 1)
             Text(
                 "Browse",
                 modifier = Modifier
@@ -486,8 +501,8 @@ private fun TopChrome(
                 softWrap = false
             )
 
-            // 3 — the download button, placed at its open-bar spot and carried to its
-            // capsule spot by translation.
+            // 3 — the download button, placed at its open-bar spot and carried out to its
+            // own spot beside the pill by translation.
             DownloadButton(
                 onClick     = onDownloadsClick,
                 downloading = downloading,
@@ -498,6 +513,10 @@ private fun TopChrome(
                     val p = morph()
                     translationX = geo.buttonDx(rootW) * p
                     translationY = (geo.capCenterY - geo.barCenterY) * p
+                    // its own disc beside the pill, so it gets its own soft shadow
+                    shape = CircleShape
+                    clip = false
+                    shadowElevation = 6.dp.toPx() * window(p, 0.55f, 1f)
                 }
             )
         }
@@ -520,8 +539,8 @@ private fun TopChrome(
 
 // The downloads button: a uniform disc with a 2.7dp progress ring on its circumference
 // (no track — just the arc) and the arrow-down icon. Colours follow the theme (see
-// rememberBarGlass). The arrow is held still unless a download is running AND it is
-// the capsule (or BAR_ICON_ANIMATES_WHEN_DOWNLOADING is on); then it cross-fades to the
+// rememberBarGlass). The arrow is held still unless a download is running AND the bar
+// has become the pill (or BAR_ICON_ANIMATES_WHEN_DOWNLOADING is on); then it cross-fades to the
 // looping arrow. The 4s box/wave/checkmark animation lives on the Detail screen.
 @Composable
 private fun DownloadButton(
