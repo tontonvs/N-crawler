@@ -45,6 +45,25 @@ object SourceRegistry {
 
     fun all(): List<NovelSource> = all
 
+    /** Group key for novels whose source is no longer registered (e.g. the retired "novelarrow"). */
+    const val UNKNOWN_SOURCE_ID = "unknown"
+
+    /**
+     * CHANGE (source folders): the one place that reads the source out of a composite
+     * "<sourceId>::<realSlug>" slug. Bare legacy slugs are FreeWebNovel; ids that are
+     * no longer registered collapse into UNKNOWN_SOURCE_ID so they share one folder
+     * instead of each retired site getting its own.
+     */
+    fun sourceIdOf(slug: String): String {
+        val idx = slug.indexOf("::")
+        val id = if (idx == -1) DEFAULT_SOURCE_ID else slug.substring(0, idx)
+        return if (all.any { it.id == id }) id else UNKNOWN_SOURCE_ID
+    }
+
+    /** Human-readable name for a group key from sourceIdOf(). Never throws. */
+    fun displayNameOf(sourceId: String): String =
+        all.find { it.id == sourceId }?.displayName ?: "Unknown source"
+
     // FIX: no silent fallback to the default source. An unknown id (old
     // "novelarrow::" library rows) used to fetch the wrong site with a slug it
     // never had; now it fails with a clear message and cached chapters still

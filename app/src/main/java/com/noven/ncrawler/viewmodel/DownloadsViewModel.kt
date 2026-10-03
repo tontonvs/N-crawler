@@ -12,7 +12,9 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.noven.ncrawler.NCrawlerApp
 import com.noven.ncrawler.data.db.DownloadProgress
+import com.noven.ncrawler.data.db.DownloadStatus
 import com.noven.ncrawler.data.db.NovelEntity
+import com.noven.ncrawler.data.scraper.SourceRegistry
 import com.noven.ncrawler.data.local.DownloadNetwork
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.*
@@ -25,7 +27,18 @@ import kotlinx.coroutines.launch
 // just no longer share a ViewModel class.
 data class DownloadItem(
     val novel: NovelEntity,
-    val progress: DownloadProgress
+    val progress: DownloadProgress,
+    // CHANGE (source folders): which site this novel came from, derived from its slug.
+    val sourceId: String = SourceRegistry.DEFAULT_SOURCE_ID,
+    val sourceName: String = ""
+)
+
+// CHANGE (source folders): completed downloads of one source, newest first —
+// backs the folder card on the Downloads screen.
+data class SourceFolder(
+    val sourceId: String,
+    val sourceName: String,
+    val items: List<DownloadItem>
 )
 
 // CHANGE (network choice): why a QUEUED download isn't moving. Replaces the old
@@ -51,13 +64,43 @@ class DownloadsViewModel(app: Application) : AndroidViewModel(app) {
         val bySlug = novels.associateBy { it.slug }
         progressList.mapNotNull { progress ->
             val novel = bySlug[progress.novelSlug] ?: return@mapNotNull null
-            DownloadItem(novel = novel, progress = progress)
+            val sourceId = SourceRegistry.sourceIdOf(progress.novelSlug)
+            DownloadItem(
+                novel      = novel,
+                progress   = progress,
+                sourceId   = sourceId,
+                sourceName = SourceRegistry.displayNameOf(sourceId)
+            )
         }
     }.stateIn(
         scope        = viewModelScope,
         started      = SharingStarted.WhileSubscribed(5000),
         initialValue = emptyList()
     )
+
+    // CHANGE (source folders): finished downloads grouped by source. Folders follow
+    // registry order (stable, so they don't jump around); "Unknown source" is last.
+    // Inside a folder the most recently updated novel comes first, so the folder's
+    // 3 peeking covers are always the latest ones.
+    val sourceFolders: StateFlow<List<SourceFolder>> = downloadItems
+        .map { items ->
+            val order = SourceRegistry.all().map { it.id } + SourceRegistry.UNKNOWN_SOURCE_ID
+            items.filter { it.progress.status == DownloadStatus.COMPLETE }
+                .groupBy { it.sourceId }
+                .map { (id, list) ->
+                    SourceFolder(
+                        sourceId   = id,
+                        sourceName = SourceRegistry.displayNameOf(id),
+                        items      = list.sortedByDescending { it.progress.lastUpdated }
+                    )
+                }
+                .sortedBy { order.indexOf(it.sourceId) }
+        }
+        .stateIn(
+            scope        = viewModelScope,
+            started      = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
 
     // CHANGE (reliability fix, generalised for the network choice): what, if
     // anything, a QUEUED download is currently waiting for. WorkManager holds a

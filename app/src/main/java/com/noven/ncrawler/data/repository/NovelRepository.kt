@@ -456,7 +456,9 @@ class NovelRepository(
             )
         )
 
-        novelDao.setLibrary(slug, true)
+        // CHANGE: downloading no longer adds the novel to the Library/Favourites.
+        // Favourites are a deliberate choice (the heart); downloaded novels live
+        // under "Your novels" in the Downloads tab instead.
 
         // Same concurrency guard as before — see enqueueDownloadWork's
         // callers and DownloadPreferences.getConcurrentLimit().

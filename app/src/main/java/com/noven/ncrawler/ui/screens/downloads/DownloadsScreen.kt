@@ -18,7 +18,15 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.activity.compose.BackHandler
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.foundation.layout.offset
+import com.noven.ncrawler.ui.components.SolarArrows
+import com.noven.ncrawler.ui.components.glassCard
+import com.noven.ncrawler.viewmodel.SourceFolder
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -64,9 +72,23 @@ fun DownloadsScreen(
         it.progress.status == DownloadStatus.ERROR ||
         it.progress.status == DownloadStatus.PAUSED
     }
-    val completedDownloads = allItems.filter {
-        it.progress.status == DownloadStatus.COMPLETE
+    // CHANGE (source folders): finished downloads now live in one folder per source.
+    val folders by vm.sourceFolders.collectAsStateWithLifecycle()
+
+    // Which source folder is open (null = the main list). Saveable so rotation keeps it.
+    var openSourceId by rememberSaveable { mutableStateOf<String?>(null) }
+    val openFolder = folders.firstOrNull { it.sourceId == openSourceId }
+    // The last novel in an open folder was deleted -> the folder is gone; go back.
+    // Only once data has loaded: the flows start empty, and a restored (rotated)
+    // screen must not mistake "not loaded yet" for "folder deleted".
+    LaunchedEffect(openFolder == null, openSourceId, allItems.isEmpty()) {
+        if (openSourceId != null && openFolder == null && allItems.isNotEmpty()) openSourceId = null
     }
+    BackHandler(enabled = openFolder != null) { openSourceId = null }
+
+    // "See all" arrows keep the top of the screen neat when many are active.
+    var showAllActive    by rememberSaveable { mutableStateOf(false) }
+    var showAllAttention by rememberSaveable { mutableStateOf(false) }
 
     var pendingDelete by remember { mutableStateOf<DownloadItem?>(null) }
 
@@ -114,11 +136,18 @@ fun DownloadsScreen(
             TopAppBar(
                 title = {
                     Text(
-                        "Downloads",
+                        openFolder?.sourceName ?: "Downloads",
                         fontFamily = MontserratFamily,
                         fontWeight = FontWeight.ExtraBold,
                         fontSize   = 24.sp
                     )
+                },
+                navigationIcon = {
+                    if (openFolder != null) {
+                        IconButton(onClick = { openSourceId = null }) {
+                            Icon(SolarIcons.ArrowLeft, contentDescription = "Back to Downloads")
+                        }
+                    }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.background
@@ -162,58 +191,86 @@ fun DownloadsScreen(
                 contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 120.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                if (activeDownloads.isNotEmpty()) {
-                    item { SectionHeader("Downloading") }
-                    // CHANGE (motion): one running index across all three sections, so
-                    // the cards stack in top to bottom as a single sequence (once).
-                    itemsIndexed(activeDownloads, key = { _, it -> it.novel.slug + "_active" }) { i, entry ->
+                if (openFolder != null) {
+                    // ── Inside one source folder: every novel from that source ──
+                    itemsIndexed(openFolder.items, key = { _, it -> it.novel.slug + "_folder" }) { i, entry ->
                         DownloadCard(
-                            modifier         = Modifier.staggerIn(i),
-                            item             = entry,
-                            vm               = vm,
-                            networkWait      = networkWait,
-                            onClick          = { onNovelClick(entry.novel.slug) },
-                            onPrimary        = { vm.pause(entry.novel.slug) },
-                            onExport         = { requestExport(entry.novel.slug) },
-                            onPickFolder     = requestPickFolder,
-                            onDelete         = { pendingDelete = entry }
+                            modifier     = Modifier.staggerIn(i),
+                            item         = entry,
+                            vm           = vm,
+                            networkWait  = networkWait,
+                            showSource   = false,   // the title bar already says which source
+                            onClick      = { onNovelClick(entry.novel.slug) },
+                            onPrimary    = null,
+                            onExport     = { requestExport(entry.novel.slug) },
+                            onPickFolder = requestPickFolder,
+                            onDelete     = { pendingDelete = entry }
                         )
                     }
-                    item { Spacer(Modifier.height(8.dp)) }
-                }
-
-                if (needsAttention.isNotEmpty()) {
-                    item { SectionHeader("Needs attention") }
-                    itemsIndexed(needsAttention, key = { _, it -> it.novel.slug + "_attention" }) { i, entry ->
-                        DownloadCard(
-                            modifier         = Modifier.staggerIn(i + activeDownloads.size),
-                            item             = entry,
-                            vm               = vm,
-                            networkWait      = networkWait,
-                            onClick          = { onNovelClick(entry.novel.slug) },
-                            onPrimary        = { vm.resume(entry.novel.slug) },
-                            onExport         = { requestExport(entry.novel.slug) },
-                            onPickFolder     = requestPickFolder,
-                            onDelete         = { pendingDelete = entry }
-                        )
+                } else {
+                    if (activeDownloads.isNotEmpty()) {
+                        item { SectionHeader("Downloading") }
+                        // CHANGE (motion): one running index across the sections, so the
+                        // cards stack in top to bottom as a single sequence (once).
+                        val shown = if (showAllActive) activeDownloads else activeDownloads.take(PREVIEW_COUNT)
+                        itemsIndexed(shown, key = { _, it -> it.novel.slug + "_active" }) { i, entry ->
+                            DownloadCard(
+                                modifier     = Modifier.staggerIn(i),
+                                item         = entry,
+                                vm           = vm,
+                                networkWait  = networkWait,
+                                onClick      = { onNovelClick(entry.novel.slug) },
+                                onPrimary    = { vm.pause(entry.novel.slug) },
+                                onExport     = { requestExport(entry.novel.slug) },
+                                onPickFolder = requestPickFolder,
+                                onDelete     = { pendingDelete = entry }
+                            )
+                        }
+                        if (activeDownloads.size > PREVIEW_COUNT) {
+                            item(key = "active_more") {
+                                SeeAllRow(expanded = showAllActive, total = activeDownloads.size) {
+                                    showAllActive = !showAllActive
+                                }
+                            }
+                        }
+                        item { Spacer(Modifier.height(8.dp)) }
                     }
-                    item { Spacer(Modifier.height(8.dp)) }
-                }
 
-                if (completedDownloads.isNotEmpty()) {
-                    item { SectionHeader("Downloaded") }
-                    itemsIndexed(completedDownloads, key = { _, it -> it.novel.slug + "_done" }) { i, entry ->
-                        DownloadCard(
-                            modifier         = Modifier.staggerIn(i + activeDownloads.size + needsAttention.size),
-                            item             = entry,
-                            vm               = vm,
-                            networkWait      = networkWait,
-                            onClick          = { onNovelClick(entry.novel.slug) },
-                            onPrimary        = null,
-                            onExport         = { requestExport(entry.novel.slug) },
-                            onPickFolder     = requestPickFolder,
-                            onDelete         = { pendingDelete = entry }
-                        )
+                    if (needsAttention.isNotEmpty()) {
+                        item { SectionHeader("Needs attention") }
+                        val shown = if (showAllAttention) needsAttention else needsAttention.take(PREVIEW_COUNT)
+                        itemsIndexed(shown, key = { _, it -> it.novel.slug + "_attention" }) { i, entry ->
+                            DownloadCard(
+                                modifier     = Modifier.staggerIn(i + activeDownloads.size),
+                                item         = entry,
+                                vm           = vm,
+                                networkWait  = networkWait,
+                                onClick      = { onNovelClick(entry.novel.slug) },
+                                onPrimary    = { vm.resume(entry.novel.slug) },
+                                onExport     = { requestExport(entry.novel.slug) },
+                                onPickFolder = requestPickFolder,
+                                onDelete     = { pendingDelete = entry }
+                            )
+                        }
+                        if (needsAttention.size > PREVIEW_COUNT) {
+                            item(key = "attention_more") {
+                                SeeAllRow(expanded = showAllAttention, total = needsAttention.size) {
+                                    showAllAttention = !showAllAttention
+                                }
+                            }
+                        }
+                        item { Spacer(Modifier.height(8.dp)) }
+                    }
+
+                    if (folders.isNotEmpty()) {
+                        item { SectionHeader("Your novels") }
+                        itemsIndexed(folders, key = { _, it -> "folder_" + it.sourceId }) { i, folder ->
+                            SourceFolderCard(
+                                modifier = Modifier.staggerIn(i + activeDownloads.size + needsAttention.size),
+                                folder   = folder,
+                                onClick  = { openSourceId = folder.sourceId }
+                            )
+                        }
                     }
                 }
             }
@@ -251,12 +308,172 @@ private fun SectionHeader(title: String) {
     )
 }
 
+// How many cards the "Downloading" / "Needs attention" sections show before the
+// "See all" arrow — keeps the top of the screen neat.
+private const val PREVIEW_COUNT = 3
+
+// Small translucent pill naming the source ("NovelFull"). Glass-style: a faint tint
+// of the primary colour, no border.
+@Composable
+private fun SourceChip(name: String, modifier: Modifier = Modifier) {
+    Text(
+        name,
+        modifier = modifier
+            .clip(RoundedCornerShape(50))
+            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f))
+            .padding(horizontal = 8.dp, vertical = 2.dp),
+        fontFamily = MontserratFamily,
+        fontWeight = FontWeight.SemiBold,
+        fontSize   = 10.sp,
+        color      = MaterialTheme.colorScheme.primary,
+        maxLines   = 1,
+        overflow   = TextOverflow.Ellipsis
+    )
+}
+
+// "See all 7 >" / "Show less" row under a capped section.
+@Composable
+private fun SeeAllRow(expanded: Boolean, total: Int, onToggle: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .pressable(onClick = onToggle, pressedScale = 0.98f)
+            .padding(vertical = 8.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment     = Alignment.CenterVertically
+    ) {
+        Text(
+            if (expanded) "Show less" else "See all $total",
+            fontFamily = MontserratFamily,
+            fontWeight = FontWeight.SemiBold,
+            fontSize   = 13.sp,
+            color      = MaterialTheme.colorScheme.primary
+        )
+        Icon(
+            SolarArrows.ChevronRight,
+            contentDescription = null,
+            tint     = MaterialTheme.colorScheme.primary,
+            modifier = Modifier
+                .size(16.dp)
+                .graphicsLayer { rotationZ = if (expanded) -90f else 90f }
+        )
+    }
+}
+
+// Rectangle folder for one source: a back panel with a tab, up to 3 covers (the
+// latest) fanned and peeking out above a frosted front panel, plus a blank
+// "there is more" sliver when the source holds more than 3 novels.
+@Composable
+private fun SourceFolderCard(
+    modifier: Modifier = Modifier,
+    folder: SourceFolder,
+    onClick: () -> Unit
+) {
+    val preview  = folder.items.take(3)
+    val hasMore  = folder.items.size > 3
+    val primary  = MaterialTheme.colorScheme.primary
+    val coverW   = 60.dp
+    val coverH   = 84.dp
+    // (x offset, tilt) per slot; the blank sliver is the last slot.
+    val slots    = listOf(18.dp to -7f, 70.dp to 1f, 122.dp to 7f, 172.dp to 12f)
+
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(150.dp)
+            .pressable(onClick = onClick, pressedScale = 0.98f)
+    ) {
+        // Folder tab + back panel
+        Box(
+            modifier = Modifier
+                .padding(start = 8.dp)
+                .width(96.dp)
+                .height(30.dp)
+                .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp))
+                .background(primary.copy(alpha = 0.26f))
+        )
+        Box(
+            modifier = Modifier
+                .padding(top = 22.dp)
+                .fillMaxSize()
+                .clip(RoundedCornerShape(topStart = 4.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 16.dp))
+                .background(primary.copy(alpha = 0.20f))
+        )
+
+        // Peeking covers, tilted around their bottom edge so they fan out
+        preview.forEachIndexed { i, entry ->
+            val (x, tilt) = slots[i]
+            Box(
+                modifier = Modifier
+                    .offset(x = x, y = 22.dp)
+                    .size(coverW, coverH)
+                    .graphicsLayer { rotationZ = tilt; transformOrigin = TransformOrigin(0.5f, 1f) }
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+            ) {
+                CoverImage(
+                    url                = entry.novel.coverUrl,
+                    contentDescription = entry.novel.title,
+                    modifier           = Modifier.fillMaxSize()
+                )
+            }
+        }
+        if (hasMore) {
+            val (x, tilt) = slots[3]
+            Box(
+                modifier = Modifier
+                    .offset(x = x, y = 22.dp)
+                    .size(coverW, coverH)
+                    .graphicsLayer { rotationZ = tilt; transformOrigin = TransformOrigin(0.5f, 1f) }
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f))
+            )
+        }
+
+        // Frosted front panel with the source name
+        Row(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .height(74.dp)
+                .glassCard(RoundedCornerShape(16.dp))
+                .padding(horizontal = 16.dp),
+            verticalAlignment     = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    folder.sourceName,
+                    fontFamily = MontserratFamily,
+                    fontWeight = FontWeight.ExtraBold,
+                    fontSize   = 16.sp,
+                    maxLines   = 1,
+                    overflow   = TextOverflow.Ellipsis
+                )
+                Text(
+                    "${folder.items.size} novel${if (folder.items.size == 1) "" else "s"}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Icon(
+                SolarArrows.ChevronRight,
+                contentDescription = "Open ${folder.sourceName}",
+                tint     = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp)
+            )
+        }
+    }
+}
+
 @Composable
 private fun DownloadCard(
     modifier: Modifier = Modifier,
     item: DownloadItem,
     vm: DownloadsViewModel,
     networkWait: NetworkWait,
+    showSource: Boolean = true,
     onClick: () -> Unit,
     onPrimary: (() -> Unit)?,
     onExport: () -> Unit,
@@ -325,6 +542,11 @@ private fun DownloadCard(
                 }
 
                 Column(modifier = Modifier.weight(1f)) {
+                    // CHANGE (source folders): which site this is downloading from.
+                    if (showSource) {
+                        SourceChip(item.sourceName)
+                        Spacer(Modifier.height(4.dp))
+                    }
                     Text(
                         item.novel.title,
                         style    = MaterialTheme.typography.bodyMedium.copy(
