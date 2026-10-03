@@ -217,21 +217,9 @@ fun BrowseScreen(
             )
         }
 
-        // Status-bar scrim — once the bar has become the capsule, content would run
-        // straight under the system clock/battery icons; this fades the page colour
-        // in behind them (alpha follows the morph, drawn without recomposing).
-        Box(
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .fillMaxWidth()
-                .height(statusBarDp + 16.dp)
-                .graphicsLayer { alpha = morph.value }
-                .background(
-                    Brush.verticalGradient(
-                        listOf(pageBg.copy(alpha = 0.92f), pageBg.copy(alpha = 0f))
-                    )
-                )
-        )
+        // CHANGE: the status-bar scrim (a page-colour gradient behind the clock/battery icons
+        // once the bar became the pill) is gone — on scroll, the pill and the download button
+        // are the ONLY things drawn up top; content scrolls freely behind the status bar.
 
         // ── Top chrome: the glass bar (logo + download button) that morphs into the
         // "Browse" capsule as you scroll, and back (see TopChrome).
