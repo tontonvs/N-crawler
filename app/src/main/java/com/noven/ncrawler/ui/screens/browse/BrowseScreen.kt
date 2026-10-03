@@ -71,6 +71,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.noven.ncrawler.data.db.NovelEntity
+import com.noven.ncrawler.data.repository.SearchSection
+import com.noven.ncrawler.data.repository.SectionState
 import com.noven.ncrawler.ui.components.AppPullToRefresh
 import com.noven.ncrawler.ui.components.AnimatedArrowDownIcon
 import com.noven.ncrawler.ui.components.AnimatedDownloadIcon
@@ -217,9 +219,21 @@ fun BrowseScreen(
             )
         }
 
-        // CHANGE: the status-bar scrim (a page-colour gradient behind the clock/battery icons
-        // once the bar became the pill) is gone — on scroll, the pill and the download button
-        // are the ONLY things drawn up top; content scrolls freely behind the status bar.
+        // Status-bar scrim — once the bar has become the capsule, content would run
+        // straight under the system clock/battery icons; this fades the page colour
+        // in behind them (alpha follows the morph, drawn without recomposing).
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth()
+                .height(statusBarDp + 16.dp)
+                .graphicsLayer { alpha = morph.value }
+                .background(
+                    Brush.verticalGradient(
+                        listOf(pageBg.copy(alpha = 0.92f), pageBg.copy(alpha = 0f))
+                    )
+                )
+        )
 
         // ── Top chrome: the glass bar (logo + download button) that morphs into the
         // "Browse" capsule as you scroll, and back (see TopChrome).
@@ -249,10 +263,8 @@ private fun collapseOf(state: LazyListState, barHeightPx: Float): Float {
 // ── Top chrome: glass bar ⇄ "Browse" capsule ─────────────────────────────────────
 // ONE glass element. At rest it is the full-width bar (66dp under the status bar, with
 // inverted bottom corners). Scroll a little and it shrinks in from both sides to the
-// centre until it is the "Browse" PILL (the logo text crossfades to "Browse"). The
-// download button does NOT go inside it: it slides out of the bar to sit as its own disc
-// right beside the pill, with its own shadow and its progress ring. Scroll back to the top
-// and the pill grows back into the bar while the button slides home.
+// centre until it is the "Browse" capsule — the logo text crossfades to "Browse" and the
+// download button rides along inside it; scroll back to the top and it grows back.
 //
 // MOTION (Jakub primary, Emil secondary — the app's Motion kit):
 //  • Nothing is measured while it moves. The element keeps ONE fixed layout rectangle
@@ -270,14 +282,14 @@ private val BTN_SIZE           = 40.dp      // downloads button
 private val BTN_MARGIN_END     = 14.dp      // open bar: button ↔ screen's right edge
 private val TITLE_INSET        = 36.dp      // open bar: logo ↔ screen's left edge
 private val BAR_FLARE          = 14.dp      // how far the inverted corners reach below the flat edge
-private val CAPSULE_H          = 40.dp      // the pill is as tall as the button
-private val CAPSULE_TOP        = 13.dp      // pill's top edge, below the status bar
-private val CAPSULE_PAD_START  = 20.dp      // pill: left edge ↔ "Browse"
-private val CAPSULE_PAD_END    = 20.dp      // pill: "Browse" ↔ right edge
-private val CAPSULE_GAP        = 8.dp       // pill ↔ the separate download button beside it
+private val CAPSULE_H          = 48.dp      // button 40 + 4 above and below
+private val CAPSULE_TOP        = 10.dp      // capsule's top edge, below the status bar
+private val CAPSULE_PAD_START  = 22.dp      // capsule: left edge ↔ "Browse"
+private val CAPSULE_GAP        = 14.dp      // capsule: "Browse" ↔ button
+private val CAPSULE_PAD_END    = 4.dp       // capsule: button ↔ right edge
 private val RING_STROKE        = 2.7.dp     // download-progress ring around the button
 // The open bar shows the arrow-down icon held STILL (the ring shows progress). Flip to true
-// to make it loop while a download runs; beside the pill the arrow always loops while downloading.
+// to make it loop while a download runs; the capsule's arrow always loops while downloading.
 private const val BAR_ICON_ANIMATES_WHEN_DOWNLOADING = false
 private const val TOP_GLASS_ALPHA = 0.58f   // glass tint over the blur (lower = more of the cover shows)
 
@@ -301,19 +313,15 @@ private class MorphGeometry(private val density: Density, statusDp: Dp, browseTe
     val capTop      = statusPx + px(CAPSULE_TOP)
     val padStart    = px(CAPSULE_PAD_START)
     val padEnd      = px(CAPSULE_PAD_END)
-    val gap         = px(CAPSULE_GAP)
-    val capW        = padStart + browseTextPx + padEnd      // the pill alone
+    val capW        = padStart + browseTextPx + px(CAPSULE_GAP) + btn + padEnd
     val barCenterY  = statusPx + px(BAR_CONTENT_HEIGHT) / 2f
     val capCenterY  = capTop + capH / 2f
 
     /** x of the shape's left edge: 0 = screen edge (bar), centred (capsule). */
     fun bodyLeft(w: Float, p: Float): Float = mix(0f, (w - capW) / 2f, p)
 
-    /**
-     * How far the button travels (px) from its open-bar spot (right edge, [marginEnd]) to
-     * its resting spot right beside the centred pill: [gap] past the pill's right edge.
-     */
-    fun buttonDx(w: Float): Float = (w + capW) / 2f + gap - (w - marginEnd - btn)
+    /** How far the button travels (px) from its open-bar spot to its capsule spot. */
+    fun buttonDx(w: Float): Float = capW / 2f - w / 2f - padEnd + marginEnd
 
     /**
      * The morphing outline. Rect edges: x [bodyLeft … w - bodyLeft], y [0 … barH] (bar)
@@ -361,7 +369,6 @@ private class MorphBarShape(private val geo: MorphGeometry, private val p: Float
 private class BarGlass(
     val tint: Color,        // fill of the glass over the blur
     val ink: Color,         // text colour
-    val paper: Color,       // solid pill colour (the glass turns near-solid as it becomes the pill)
     val discFill: Color,    // download button disc: uniform and opaque
     val discInk: Color      // everything drawn on that disc: icon + progress ring
 )
@@ -376,7 +383,6 @@ private fun rememberBarGlass(): BarGlass {
         BarGlass(
             tint     = (if (dark) GlassBase else Color.White).copy(alpha = TOP_GLASS_ALPHA),
             ink      = ink,
-            paper    = if (dark) GlassBase else Color.White,
             discFill = if (dark) Color(0xFF2A303D) else Color.White,
             discInk  = if (dark) Color(0xFFF2F5FA) else Color(0xFF0D1117)
         )
@@ -429,19 +435,12 @@ private fun TopChrome(
             Box(
                 Modifier
                     .graphicsLayer {
-                        val p = morph()
-                        shape = MorphBarShape(geo, p)
+                        shape = MorphBarShape(geo, morph())
                         clip = true
-                        // the pill floats over the page: a soft shadow fades in with it. Held
-                        // at 0 while the outline still has its (non-convex) inverted corners.
-                        shadowElevation = 6.dp.toPx() * window(p, 0.55f, 1f)
                     }
                     .glassBlur(hazeState, RectangleShape, glass.tint)
                     .drawWithContent {
                         drawContent()
-                        // glass → near-solid as it becomes the pill (the old pill was solid)
-                        val solid = window(morph(), 0.55f, 1f)
-                        if (solid > 0f) drawRect(glass.paper.copy(alpha = 0.94f * solid))
                         // hairline edge so the glass reads against a light page
                         drawPath(
                             geo.path(size.width, morph()),
@@ -472,7 +471,7 @@ private fun TopChrome(
                 softWrap = false
             )
 
-            // 2 — "Browse": waits, then arrives in the pill (fade + settle 0.92 → 1)
+            // 2 — "Browse": waits, then arrives in the capsule (fade + settle 0.92 → 1)
             Text(
                 "Browse",
                 modifier = Modifier
@@ -489,8 +488,8 @@ private fun TopChrome(
                 softWrap = false
             )
 
-            // 3 — the download button, placed at its open-bar spot and carried out to its
-            // own spot beside the pill by translation.
+            // 3 — the download button, placed at its open-bar spot and carried to its
+            // capsule spot by translation.
             DownloadButton(
                 onClick     = onDownloadsClick,
                 downloading = downloading,
@@ -501,10 +500,6 @@ private fun TopChrome(
                     val p = morph()
                     translationX = geo.buttonDx(rootW) * p
                     translationY = (geo.capCenterY - geo.barCenterY) * p
-                    // its own disc beside the pill, so it gets its own soft shadow
-                    shape = CircleShape
-                    clip = false
-                    shadowElevation = 6.dp.toPx() * window(p, 0.55f, 1f)
                 }
             )
         }
@@ -527,8 +522,8 @@ private fun TopChrome(
 
 // The downloads button: a uniform disc with a 2.7dp progress ring on its circumference
 // (no track — just the arc) and the arrow-down icon. Colours follow the theme (see
-// rememberBarGlass). The arrow is held still unless a download is running AND the bar
-// has become the pill (or BAR_ICON_ANIMATES_WHEN_DOWNLOADING is on); then it cross-fades to the
+// rememberBarGlass). The arrow is held still unless a download is running AND it is
+// the capsule (or BAR_ICON_ANIMATES_WHEN_DOWNLOADING is on); then it cross-fades to the
 // looping arrow. The 4s box/wave/checkmark animation lives on the Detail screen.
 @Composable
 private fun DownloadButton(
@@ -631,7 +626,7 @@ fun SearchOverlay(
     hazeState: HazeState? = null
 ) {
     val query          by vm.query.collectAsStateWithLifecycle()
-    val searchState    by vm.searchState.collectAsStateWithLifecycle()
+    val searchSections by vm.searchSections.collectAsStateWithLifecycle()
     val recentSearches by vm.recentSearches.collectAsStateWithLifecycle()
 
     val focusManager    = LocalFocusManager.current
@@ -850,7 +845,7 @@ fun SearchOverlay(
             } else {
                 // ── Live results ─────────────────────────────────────────────
                 SearchContent(
-                    state        = searchState,
+                    sections     = searchSections,
                     query        = query,
                     onNovelClick = { slug ->
                         vm.commitSearch(query)
@@ -1762,42 +1757,136 @@ private fun GenreChip(name: String, isActive: Boolean, onClick: () -> Unit) {
 // carried a hand-copied duplicate that had already drifted from this one.
 
 // ── Search content ────────────────────────────────────────────────────────────
+// CHANGE (grouped search): results are grouped under their SOURCE, in the user's
+// source-priority order. Each source answers on its own, so its section fills in
+// as soon as it can (spinner in the header until then) and a slow or broken
+// source never holds the others up. The same novel found on two sources appears
+// under both — each section is the complete answer from that site.
 @Composable
 private fun SearchContent(
-    state: BrowseUiState,
+    sections: List<SearchSection>,
     query: String,
     onNovelClick: (String) -> Unit
 ) {
-    when (state) {
-        is BrowseUiState.Loading -> ShimmerScope { SearchSkeleton() }
-        is BrowseUiState.Empty   -> SearchEmpty(query)
-        is BrowseUiState.Error   -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-            Text(
-                state.message,
-                modifier   = Modifier.errorShake(trigger = state.message),   // CHANGE (motion)
-                fontFamily = MontserratFamily,
-                color      = MaterialTheme.colorScheme.error
-            )
-        }
-        is BrowseUiState.Success -> LazyColumn(
-            contentPadding      = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp)
-        ) {
-            items(state.novels, key = { it.slug }) { novel ->
-                SearchRow(novel = novel, onClick = { onNovelClick(novel.slug) })
-                HorizontalDivider(
-                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.08f)
+    val allSettled = sections.isNotEmpty() && sections.none { it.state == SectionState.LOADING }
+    val noneFound  = sections.all { it.novels.isEmpty() }
+
+    when {
+        // Blank debounce window / waiting for the first answer.
+        sections.isEmpty() -> ShimmerScope { SearchSkeleton() }
+
+        allSettled && noneFound && sections.all { it.state == SectionState.FAILED } ->
+            Box(Modifier.fillMaxSize(), Alignment.Center) {
+                Text(
+                    "Couldn't reach any source",
+                    modifier   = Modifier.errorShake(trigger = query),
+                    fontFamily = MontserratFamily,
+                    color      = MaterialTheme.colorScheme.error
                 )
+            }
+
+        allSettled && noneFound -> SearchEmpty(query)
+
+        else -> LazyColumn(
+            contentPadding = PaddingValues(start = 16.dp, top = 8.dp, end = 16.dp, bottom = 24.dp)
+        ) {
+            sections.forEach { section ->
+                item(key = "header_" + section.sourceId) { SearchSourceHeader(section) }
+
+                if (section.novels.isEmpty()) {
+                    item(key = "note_" + section.sourceId) {
+                        val text = when (section.state) {
+                            SectionState.LOADING -> "Searching…"
+                            SectionState.FAILED  -> "Couldn't reach ${section.sourceName}"
+                            SectionState.DONE    -> "No results"
+                        }
+                        Text(
+                            text,
+                            modifier   = Modifier.padding(vertical = 10.dp, horizontal = 4.dp),
+                            fontFamily = MontserratFamily,
+                            fontSize   = 13.sp,
+                            color      = if (section.state == SectionState.FAILED)
+                                MaterialTheme.colorScheme.error.copy(alpha = 0.8f)
+                            else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                } else {
+                    items(section.novels, key = { it.slug }) { novel ->
+                        SearchRow(
+                            novel   = novel,
+                            // Stale results from the previous keyword while this source re-searches
+                            dimmed  = section.state == SectionState.LOADING,
+                            onClick = { onNovelClick(novel.slug) }
+                        )
+                        HorizontalDivider(
+                            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.08f)
+                        )
+                    }
+                }
             }
         }
     }
 }
 
+// Source name pill + result count; a small spinner while that source is still answering.
 @Composable
-private fun SearchRow(novel: NovelEntity, onClick: () -> Unit) {
+private fun SearchSourceHeader(section: SearchSection) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .padding(top = 16.dp, bottom = 6.dp),
+        verticalAlignment     = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            section.sourceName,
+            modifier = Modifier
+                .clip(RoundedCornerShape(50))
+                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f))
+                .padding(horizontal = 12.dp, vertical = 4.dp),
+            fontFamily = MontserratFamily,
+            fontWeight = FontWeight.ExtraBold,
+            fontSize   = 12.sp,
+            color      = MaterialTheme.colorScheme.primary,
+            maxLines   = 1,
+            overflow   = TextOverflow.Ellipsis
+        )
+        if (section.state == SectionState.LOADING) {
+            CircularProgressIndicator(
+                modifier    = Modifier.size(12.dp),
+                strokeWidth = 1.5.dp,
+                color       = MaterialTheme.colorScheme.primary
+            )
+        } else if (section.novels.isNotEmpty()) {
+            Text(
+                "${section.novels.size}",
+                fontFamily = MontserratFamily,
+                fontSize   = 12.sp,
+                color      = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+// "Chapter 1234: …" / "Ch.1234" -> 1234. Deliberately needs the word "chapter"/"ch" in
+// front of the number: "Vol 2 Chapter 45" must give 45, not 2.
+private val LATEST_CH_REGEX = Regex("""(?i)\bch(?:apter|\.)?\s*(\d+)""")
+
+// The newest chapter number, only when the source actually supplied one (search
+// results from some sites carry no chapter info — those cards simply show none).
+private fun latestChapterLabel(novel: NovelEntity): String? {
+    if (novel.chapterCount > 0) return "Ch. ${novel.chapterCount}"
+    val n = LATEST_CH_REGEX.find(novel.latestChapter)?.groupValues?.getOrNull(1)
+    return n?.let { "Ch. $it" }
+}
+
+@Composable
+private fun SearchRow(novel: NovelEntity, onClick: () -> Unit, dimmed: Boolean = false) {
+    val chapterLabel = latestChapterLabel(novel)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .graphicsLayer { alpha = if (dimmed) 0.5f else 1f }
             .clickable(onClick = onClick)
             .padding(vertical = 10.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -1833,6 +1922,21 @@ private fun SearchRow(novel: NovelEntity, onClick: () -> Unit) {
                     fontFamily = MontserratFamily,
                     fontSize   = 12.sp,
                     color      = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            // Latest chapter, when the source has one: "Ch. 1234"
+            if (chapterLabel != null) {
+                Spacer(Modifier.height(5.dp))
+                Text(
+                    chapterLabel,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
+                        .padding(horizontal = 8.dp, vertical = 2.dp),
+                    fontFamily = MontserratFamily,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize   = 11.sp,
+                    color      = MaterialTheme.colorScheme.primary
                 )
             }
         }

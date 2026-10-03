@@ -19,6 +19,10 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.channelFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
@@ -45,6 +49,8 @@ class NovelRepository(
     private val context: Context
 ) {
     private val TAG = "NCrawler_Repo"
+    private val PER_SOURCE_LIMIT = 20
+    private val SOURCE_TIMEOUT_MS = 20_000L
 
     private val novelDao            = db.novelDao()
     private val chapterDao          = db.chapterDao()
@@ -187,6 +193,61 @@ class NovelRepository(
 
         val saved = saveNovels(deduped)
         return saved.ifEmpty { local }
+    }
+
+    // CHANGE (grouped search): search results per SOURCE instead of one merged,
+    // title-deduped list. Emits the full list of sections (in the user's source-
+    // priority order) every time one source answers, so a fast source shows its
+    // results while a slow one is still LOADING and never blocks the rest.
+    //  • Each source is capped (PER_SOURCE_LIMIT) and de-duplicated by slug only
+    //    inside its own section — the same novel on two sites shows under both.
+    //  • A source that errors or exceeds SOURCE_TIMEOUT_MS becomes FAILED and shows
+    //    any matches already cached on this phone (works offline).
+    //  • Results are merged into the cache (saveNovels), so a novel opened before
+    //    keeps its chapter count and cover on the card.
+    fun searchBySource(query: String): Flow<List<SearchSection>> = channelFlow {
+        val sources  = enabledSources()
+        val sections = sources.map {
+            SearchSection(it.id, it.displayName, SectionState.LOADING, emptyList())
+        }.toMutableList()
+        val lock = Mutex()
+        send(sections.toList())
+
+        sources.forEachIndexed { index, source ->
+            launch {
+                val result: SearchSection = try {
+                    val found = withTimeoutOrNull(SOURCE_TIMEOUT_MS) {
+                        source.search(query)
+                            .map { rewrapSlug(it, source.id) }
+                            .distinctBy { it.slug }
+                            .take(PER_SOURCE_LIMIT)
+                    }
+                    if (found == null) {
+                        Log.w(TAG, "search('$query') timed out on ${source.id}")
+                        failedSection(source, query)
+                    } else {
+                        SearchSection(source.id, source.displayName, SectionState.DONE, saveNovels(found))
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w(TAG, "search('$query') failed on ${source.id}: ${e.message}")
+                    failedSection(source, query)
+                }
+                lock.withLock {
+                    sections[index] = result
+                    send(sections.toList())
+                }
+            }
+        }
+    }
+
+    // FAILED section: whatever this source already has cached on the phone.
+    private suspend fun failedSection(source: NovelSource, query: String): SearchSection {
+        val cached = try {
+            novelDao.searchLocal(query).filter { it.slug.startsWith("${source.id}::") }.take(PER_SOURCE_LIMIT)
+        } catch (e: Exception) { emptyList() }
+        return SearchSection(source.id, source.displayName, SectionState.FAILED, cached)
     }
 
     // ── Novel detail ──────────────────────────────────────────────────────────
