@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Shape
 import android.provider.Settings
 import com.noven.ncrawler.ui.components.SolarIcons
@@ -800,6 +801,36 @@ private fun ScrollHint(visible: Boolean, modifier: Modifier = Modifier) {
     }
 }
 
+// ── Entrance stagger ──────────────────────────────────────────────────────────
+// After the skeleton, the first screen builds top → bottom: the card, then genre,
+// title, meta, rating and play, each fading up 14dp, 60ms apart (~0.8s in total,
+// ease-out, no bounce). Alpha + translation only — layout never moves. Plays when
+// the content first appears and again each time a refresh hands back from the
+// skeleton. Reduced motion: everything is simply there.
+
+private const val ENTRANCE_START_MS = 80
+private const val ENTRANCE_STEP_MS  = 60
+private const val ENTRANCE_MS       = 450
+
+@Composable
+private fun staggerProgress(go: Boolean, index: Int): State<Float> {
+    val reduced = rememberReducedMotion()
+    return animateFloatAsState(
+        targetValue   = if (go) 1f else 0f,
+        // in: staggered ease-out. out (a refresh starting under the skeleton): instant.
+        animationSpec = if (go && !reduced)
+            tween(ENTRANCE_MS, delayMillis = ENTRANCE_START_MS + index * ENTRANCE_STEP_MS, easing = Motion.EaseOut)
+        else snap(),
+        label         = "stagger$index",
+    )
+}
+
+private fun Modifier.staggerIn(progress: State<Float>): Modifier = this.graphicsLayer {
+    val p = progress.value
+    alpha        = p
+    translationY = (1f - p) * 14.dp.toPx()
+}
+
 // ── Skeleton ──────────────────────────────────────────────────────────────────
 // One shared pulse for every block (a single transition, read in the DRAW phase,
 // so the skeleton never recomposes per frame).
@@ -986,9 +1017,9 @@ private fun RefreshButton(refreshing: Boolean, onClick: () -> Unit) {
 }
 
 // ── "Downloading <novel>" banner ──────────────────────────────────────────────
-// Shown when a download is started. Same glass pill as the rest of the screen,
-// Solar icons, Montserrat. Motion: enter = fade + slide down from just above
-// (critically damped spring, no bounce, ~400ms); exit = fade + a 12dp lift, 200ms
+// Shown when a download is started, at the bottom above the snackbar spot. Solid
+// dark card, Solar icons, Montserrat. Motion: enter = fade + slide up from below
+// (critically damped spring, no bounce, ~400ms); exit = fade + a 12dp drop, 200ms
 // — subtler than the enter. Auto-dismisses after 4.5s; "View" opens Downloads.
 // Reduced motion: fade only.
 
@@ -1019,31 +1050,30 @@ private fun DownloadBanner(
         modifier = modifier,
         enter = if (reduced) fadeIn(tween(120)) else
             fadeIn(tween(300, easing = Motion.EaseOut)) +
-                slideInVertically(spring(dampingRatio = 1f, stiffness = Spring.StiffnessMediumLow)) { -it },
+                slideInVertically(spring(dampingRatio = 1f, stiffness = Spring.StiffnessMediumLow)) { it },
         exit = if (reduced) fadeOut(tween(120)) else
             fadeOut(tween(200, easing = Motion.EaseOut)) +
-                slideOutVertically(tween(200, easing = Motion.EaseOut)) { with(density) { -12.dp.roundToPx() } },
+                slideOutVertically(tween(200, easing = Motion.EaseOut)) { with(density) { 12.dp.roundToPx() } },
     ) {
         val shape = RoundedCornerShape(20.dp)
         Row(
             modifier = Modifier
                 .padding(horizontal = 12.dp)
                 .fillMaxWidth()
-                .then(
-                    if (GlassMode.enabled) Modifier.glassFill(shape, dark = true)
-                    else Modifier
-                        .clip(shape)
-                        .background(Color.Black.copy(alpha = 0.62f))
-                        .border(1.dp, Color.White.copy(alpha = 0.08f), shape)
-                )
-                .padding(start = 12.dp, end = 6.dp, top = 10.dp, bottom = 10.dp),
+                // Near-opaque dark surface in BOTH modes: a transparent glass pill
+                // disappeared over the cover. Shadow + hairline lift it off the page.
+                .shadow(16.dp, shape)
+                .clip(shape)
+                .background(Color(0xFF12151C).copy(alpha = 0.97f))
+                .border(1.dp, Color.White.copy(alpha = 0.14f), shape)
+                .padding(start = 12.dp, end = 6.dp, top = 12.dp, bottom = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
                 modifier = Modifier
                     .size(40.dp)
                     .clip(CircleShape)
-                    .background(accent.copy(alpha = 0.18f)),
+                    .background(accent.copy(alpha = 0.22f)),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
@@ -1326,6 +1356,7 @@ fun DetailScreen(
             else -> (state as? DetailUiState.Success)?.let { s ->
                 CinematicDetail(
                     novel           = s.novel,
+                    entered         = !refreshing,
                     chapters        = s.chapters,
                     chaptersLoading = s.chaptersLoading,
                     lastReadChapter = s.lastReadChapter,
@@ -1427,9 +1458,9 @@ fun DetailScreen(
             onView    = onDownloadsClick,
             onDismiss = vm::clearDownloadNotice,
             modifier  = Modifier
-                .align(Alignment.TopCenter)
-                .statusBarsPadding()
-                .padding(top = 64.dp),
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(bottom = 84.dp),   // sits above the snackbar's spot
         )
 
         // Snackbar — custom content so its text is Montserrat too
@@ -1474,8 +1505,21 @@ private fun CinematicDetail(
     accent: Color,
     onReadChapter: (Int) -> Unit,
     onCoverLoaded: (android.graphics.drawable.Drawable) -> Unit,
+    entered: Boolean = true,          // false while a refresh skeleton covers the screen
 ) {
     val listState = rememberLazyListState()
+
+    // Entrance: starts one frame after first composition (so frame 0 is the hidden
+    // state), and re-arms whenever `entered` flips back on after a refresh.
+    var started by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { started = true }
+    val go = started && entered
+    val pCard   = staggerProgress(go, 0)
+    val pGenre  = staggerProgress(go, 1)
+    val pTitle  = staggerProgress(go, 2)
+    val pMeta   = staggerProgress(go, 3)
+    val pRating = staggerProgress(go, 4)
+    val pPlay   = staggerProgress(go, 5)
 
     // Chapter list state: order (newest first by default) and how many rows are
     // composed. Only `visibleCount` rows ever exist — that's the freeze fix.
@@ -1585,7 +1629,8 @@ private fun CinematicDetail(
                             .align(Alignment.TopCenter)
                             .padding(top = CARD_TOP_PADDING, start = 16.dp, end = 16.dp)
                             .fillMaxWidth()
-                            .fillParentMaxHeight(CARD_HEIGHT_FRACTION),
+                            .fillParentMaxHeight(CARD_HEIGHT_FRACTION)
+                            .staggerIn(pCard),
                     ) {
                         Column(
                             modifier = Modifier
@@ -1606,7 +1651,8 @@ private fun CinematicDetail(
                                 textAlign     = TextAlign.Center,
                                 modifier      = Modifier
                                     .fillMaxWidth()
-                                    .padding(horizontal = 12.dp),
+                                    .padding(horizontal = 12.dp)
+                                    .staggerIn(pGenre),
                             )
 
                             Spacer(Modifier.height(8.dp))
@@ -1629,7 +1675,8 @@ private fun CinematicDetail(
                                 ),
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(horizontal = 8.dp),
+                                    .padding(horizontal = 8.dp)
+                                    .staggerIn(pTitle),
                             )
 
                             Spacer(Modifier.height(20.dp))
@@ -1638,7 +1685,7 @@ private fun CinematicDetail(
                             // columns so long text wraps/ellipsizes inside its
                             // own slot instead of widening the row.
                             Row(
-                                modifier          = Modifier.fillMaxWidth(),
+                                modifier          = Modifier.fillMaxWidth().staggerIn(pMeta),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 MetaChip(
@@ -1666,7 +1713,7 @@ private fun CinematicDetail(
                             Spacer(Modifier.height(20.dp))
 
                             // Star rating
-                            StarRating(rawRating = novel.rating)
+                            StarRating(rawRating = novel.rating, modifier = Modifier.staggerIn(pRating))
 
                             Spacer(Modifier.height(22.dp))
 
@@ -1682,10 +1729,12 @@ private fun CinematicDetail(
                                 ?: chapters.minOfOrNull { it.num }
                                 ?: 1
 
-                            PlayButton(
-                                label   = readLabel,
-                                onClick = { onReadChapter(targetChapter) },
-                            )
+                            Box(Modifier.staggerIn(pPlay)) {
+                                PlayButton(
+                                    label   = readLabel,
+                                    onClick = { onReadChapter(targetChapter) },
+                                )
+                            }
                         }
                     }
                 }
