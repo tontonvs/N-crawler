@@ -143,7 +143,47 @@ class DownloadPreferences(context: Context) {
     private fun selectionKey(slug: String) = "selection_$slug"
 
     /**
-     * CHANGE (TXT export): the folder the user picked (Storage Access
+     * CHANGE (EPUB export): which chapters of a novel are already inside an exported
+     * EPUB, so the next export only packs what's new (as a separate file). Same
+     * run-length encoding as saveSelection ("1-1200,1205").
+     */
+    fun saveExported(slug: String, nums: Collection<Int>) {
+        prefs.edit().putString(exportedKey(slug), encodeRuns(nums)).apply()
+    }
+
+    fun getExported(slug: String): Set<Int> =
+        decodeRuns(prefs.getString(exportedKey(slug), null))
+
+    private fun exportedKey(slug: String) = "exported_$slug"
+
+    private fun encodeRuns(nums: Collection<Int>): String {
+        val sorted = nums.distinct().sorted()
+        val sb = StringBuilder()
+        var i = 0
+        while (i < sorted.size) {
+            var j = i
+            while (j + 1 < sorted.size && sorted[j + 1] == sorted[j] + 1) j++
+            if (sb.isNotEmpty()) sb.append(',')
+            if (j == i) sb.append(sorted[i]) else sb.append(sorted[i]).append('-').append(sorted[j])
+            i = j + 1
+        }
+        return sb.toString()
+    }
+
+    private fun decodeRuns(raw: String?): Set<Int> {
+        if (raw.isNullOrBlank()) return emptySet()
+        val out = HashSet<Int>()
+        for (part in raw.split(",")) {
+            val bits = part.split("-")
+            val a = bits.getOrNull(0)?.toIntOrNull() ?: continue
+            val b = bits.getOrNull(1)?.toIntOrNull() ?: a
+            if (b >= a && b - a < 100_000) for (n in a..b) out.add(n)
+        }
+        return out
+    }
+
+    /**
+     * CHANGE (export): the folder the user picked (Storage Access
      * Framework tree URI, stored as a string). Access is persisted by
      * DownloadsViewModel.onExportFolderChosen(), so this survives restarts.
      */

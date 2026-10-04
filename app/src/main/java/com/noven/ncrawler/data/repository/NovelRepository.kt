@@ -14,7 +14,7 @@ import com.noven.ncrawler.data.scraper.NovelSource
 import com.noven.ncrawler.data.scraper.SourcePreferences
 import com.noven.ncrawler.data.scraper.SourceRegistry
 import com.noven.ncrawler.data.worker.ChapterDownloadWorker
-import com.noven.ncrawler.data.worker.TxtExportWorker
+import com.noven.ncrawler.data.worker.EpubExportWorker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
@@ -404,18 +404,18 @@ class NovelRepository(
         startNextQueued()
     }
 
-    // ── TXT export (see TxtExportWorker) ──────────────────────────────────────
+    // ── EPUB export (see EpubExportWorker) ──────────────────────────────────────
     fun hasExportFolder(): Boolean = downloadPrefs.getExportTreeUri() != null
 
     fun setExportFolder(treeUri: String) = downloadPrefs.setExportTreeUri(treeUri)
 
     // KEEP: tapping Export twice while one is running must not restart it.
     // A finished export doesn't block a new one.
-    fun enqueueTxtExport(slug: String) {
+    fun enqueueEpubExport(slug: String) {
         workManager.enqueueUniqueWork(
             "export_$slug",
             ExistingWorkPolicy.KEEP,
-            TxtExportWorker.buildRequest(slug)
+            EpubExportWorker.buildRequest(slug)
         )
     }
 

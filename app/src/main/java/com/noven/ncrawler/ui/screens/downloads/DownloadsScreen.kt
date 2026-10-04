@@ -92,7 +92,7 @@ fun DownloadsScreen(
 
     var pendingDelete by remember { mutableStateOf<DownloadItem?>(null) }
 
-    // CHANGE (TXT export, restored): folder picker + export entry point. The
+    // CHANGE (EPUB export): folder picker + export entry point. The
     // first Export tap (no folder saved yet) opens the system folder picker,
     // remembers the choice, then starts the export for the novel that was
     // tapped. The folder icon on each card re-opens the picker any time.
@@ -106,8 +106,8 @@ fun DownloadsScreen(
         if (uri != null) {
             if (vm.onExportFolderChosen(uri)) {
                 if (slug != null) {
-                    vm.exportTxt(slug)
-                    Toast.makeText(context, "Exporting TXT files — progress is in the notification", Toast.LENGTH_SHORT).show()
+                    vm.exportEpub(slug)
+                    Toast.makeText(context, "Building EPUB — progress is in the notification", Toast.LENGTH_SHORT).show()
                 } else {
                     Toast.makeText(context, "Export folder saved", Toast.LENGTH_SHORT).show()
                 }
@@ -118,8 +118,8 @@ fun DownloadsScreen(
     }
     val requestExport: (String) -> Unit = { slug ->
         if (vm.hasExportFolder()) {
-            vm.exportTxt(slug)
-            Toast.makeText(context, "Exporting TXT files — progress is in the notification", Toast.LENGTH_SHORT).show()
+            vm.exportEpub(slug)
+            Toast.makeText(context, "Building EPUB — progress is in the notification", Toast.LENGTH_SHORT).show()
         } else {
             pendingExportSlug = slug
             folderPicker.launch(null)
@@ -597,7 +597,7 @@ private fun DownloadCard(
                         Text(primaryLabel(progress.status))
                     }
                 }
-                // CHANGE (TXT export, restored): only offered when there is
+                // CHANGE (EPUB export): only offered when there is
                 // something on disk to export, and not while merely queued.
                 if (progress.downloadedChapters > 0 && progress.status != DownloadStatus.QUEUED) {
                     TextButton(onClick = onExport) {
@@ -607,7 +607,7 @@ private fun DownloadCard(
                             modifier = Modifier.size(18.dp)
                         )
                         Spacer(Modifier.width(6.dp))
-                        Text("Export TXT")
+                        Text("Export EPUB")
                     }
                     IconButton(onClick = onPickFolder) {
                         Icon(

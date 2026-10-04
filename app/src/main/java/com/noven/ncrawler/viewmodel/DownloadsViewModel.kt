@@ -174,8 +174,8 @@ class DownloadsViewModel(app: Application) : AndroidViewModel(app) {
 
     suspend fun sizeBytesFor(slug: String): Long = repo.downloadedSizeBytes(slug)
 
-    // ── TXT export ────────────────────────────────────────────────────────────
-    // CHANGE (TXT export): the folder is chosen once with the system folder
+    // ── EPUB export ────────────────────────────────────────────────────────────
+    // CHANGE (export): the folder is chosen once with the system folder
     // picker and remembered. takePersistableUriPermission() is what makes the
     // grant survive an app restart — without it the export would work once and
     // then fail with a SecurityException next launch.
@@ -197,6 +197,6 @@ class DownloadsViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Starts (or, if already running, leaves running) a TXT export for a novel. */
-    fun exportTxt(slug: String) = repo.enqueueTxtExport(slug)
+    /** Starts (or, if already running, leaves running) an EPUB export for a novel. */
+    fun exportEpub(slug: String) = repo.enqueueEpubExport(slug)
 }
