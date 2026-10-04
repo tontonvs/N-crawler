@@ -13,6 +13,14 @@ class UpdateCheckStore(context: Context) {
 
     fun lastChecked(slug: String): Long = prefs.getLong("last_$slug", 0L)
 
+    // When the user last opened the Library tab — the nav-bar badge counts only updates
+    // found after this, so it clears once you have looked.
+    fun librarySeenAt(): Long = prefs.getLong("library_seen_at", 0L)
+
+    fun markLibrarySeen(at: Long = System.currentTimeMillis()) {
+        prefs.edit().putLong("library_seen_at", at).apply()
+    }
+
     fun markChecked(slug: String) {
         prefs.edit().putLong("last_$slug", System.currentTimeMillis()).apply()
     }

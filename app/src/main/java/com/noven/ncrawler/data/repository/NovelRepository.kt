@@ -113,7 +113,8 @@ class NovelRepository(
             // @Upsert replaces the whole row — carry the pending-update range over
             newFromChapter = old.newFromChapter,
             newToChapter   = old.newToChapter,
-            updateFoundAt  = old.updateFoundAt
+            updateFoundAt  = old.updateFoundAt,
+            lastActivityAt = old.lastActivityAt
         )
     }
 
@@ -517,6 +518,7 @@ class NovelRepository(
             "(${requestedNums.size} requested, ${existingNums.size} already done, $unionSize total once complete)"
         )
 
+        novelDao.touch(slug, System.currentTimeMillis())   // recent-first ordering
         downloadProgressDao.upsert(
             DownloadProgress(
                 novelSlug          = slug,
@@ -724,8 +726,11 @@ class NovelRepository(
     fun isInLibraryFlow(slug: String): Flow<Boolean> = novelDao.isInLibraryFlow(slug).map { it ?: false }
     fun downloadedNovelsFlow(): Flow<List<NovelEntity>> = novelDao.downloadedNovelsFlow()
     fun downloadedNumsFlow(slug: String): Flow<List<Int>> = chapterDao.downloadedNumsFlow(slug)
-    suspend fun setLibrary(slug: String, inLibrary: Boolean) =
+    suspend fun setLibrary(slug: String, inLibrary: Boolean) {
         novelDao.setLibrary(slug, inLibrary)
+        // A fresh favourite goes to the top of Library (recent-first).
+        if (inLibrary) novelDao.touch(slug, System.currentTimeMillis())
+    }
 
     // ── Download progress ─────────────────────────────────────────────────────
     fun downloadProgressFlow(slug: String) = downloadProgressDao.observe(slug)

@@ -14,6 +14,14 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.noven.ncrawler.NCrawlerApp
+import com.noven.ncrawler.data.local.UpdateCheckStore
+import com.noven.ncrawler.ui.components.BookmarkGold
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -212,6 +220,23 @@ fun NCrawlerNavGraph() {
         }
     }
 
+    // CHANGE (updates): gold badge on the Library tab = novels with new chapters found since
+    // you last opened Library. Opening the tab marks them seen (the "New chapters" strip in
+    // Library itself keeps listing them until read or dismissed).
+    val appContext = LocalContext.current.applicationContext
+    val updateNovels by remember { (appContext as NCrawlerApp).repository.updatesFlow() }
+        .collectAsStateWithLifecycle(initialValue = emptyList())
+    val seenStore = remember { UpdateCheckStore(appContext) }
+    var librarySeenAt by remember { mutableStateOf(seenStore.librarySeenAt()) }
+    LaunchedEffect(currentRoute, updateNovels) {
+        if (currentRoute == Routes.LIBRARY) {
+            val now = System.currentTimeMillis()
+            seenStore.markLibrarySeen(now)
+            librarySeenAt = now
+        }
+    }
+    val libraryBadge = updateNovels.count { it.updateFoundAt > librarySeenAt }
+
     // Which pill tab is highlighted (-1 = none: overlay open, or a screen with
     // no tab of its own such as Downloads)
     val selectedIndex = when {
@@ -384,6 +409,7 @@ fun NCrawlerNavGraph() {
                 hazeState     = hazeState,
                 selectedIndex = selectedIndex,
                 searchOpen    = showSearchOverlay,
+                badges        = mapOf(Routes.LIBRARY to libraryBadge),
                 onTab         = ::openTab,
                 onSearchClick = {
                     if (showSearchOverlay) {
@@ -409,6 +435,7 @@ private fun FloatingNavBar(
     hazeState: HazeState,
     selectedIndex: Int,
     searchOpen: Boolean,
+    badges: Map<String, Int>,
     onTab: (String) -> Unit,
     onSearchClick: () -> Unit
 ) {
@@ -416,7 +443,7 @@ private fun FloatingNavBar(
         verticalAlignment     = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        PillNav(hazeState = hazeState, selectedIndex = selectedIndex, onTab = onTab)
+        PillNav(hazeState = hazeState, selectedIndex = selectedIndex, badges = badges, onTab = onTab)
         SearchFab(hazeState = hazeState, active = searchOpen, onClick = onSearchClick)
     }
 }
@@ -489,7 +516,7 @@ private fun navPalette(): NavPalette = when {
 }
 
 @Composable
-private fun PillNav(hazeState: HazeState, selectedIndex: Int, onTab: (String) -> Unit) {
+private fun PillNav(hazeState: HazeState, selectedIndex: Int, badges: Map<String, Int>, onTab: (String) -> Unit) {
     val palette = navPalette()
     val shape   = RoundedCornerShape(50)
     val glass   = GlassMode.enabled
@@ -545,6 +572,7 @@ private fun PillNav(hazeState: HazeState, selectedIndex: Int, onTab: (String) ->
                     tab      = tab,
                     selected = index == selectedIndex,
                     palette  = palette,
+                    badge    = badges[tab.route] ?: 0,
                     onClick  = { onTab(tab.route) }
                 )
             }
@@ -560,6 +588,7 @@ private fun PillNavItem(
     tab: NavTab,
     selected: Boolean,
     palette: NavPalette,
+    badge: Int,
     onClick: () -> Unit
 ) {
     val interactionSource = remember { MutableInteractionSource() }
@@ -604,6 +633,28 @@ private fun PillNavItem(
                 .size(NavIconSize)
                 .graphicsLayer { alpha = fill; scaleX = pressScale; scaleY = pressScale }
         )
+        // Gold count badge (e.g. new chapters in Library). The ring in the pill's colour
+        // keeps it readable against the icon.
+        if (badge > 0) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .offset(x = 8.dp, y = (-8).dp)
+                    .defaultMinSize(minWidth = 17.dp, minHeight = 17.dp)
+                    .border(1.5.dp, palette.pill, CircleShape)
+                    .clip(CircleShape)
+                    .background(BookmarkGold)
+                    .padding(horizontal = 3.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text       = if (badge > 9) "9+" else badge.toString(),
+                    color      = Color(0xFF1B1405),
+                    fontSize   = 9.sp,
+                    fontWeight = FontWeight.ExtraBold
+                )
+            }
+        }
     }
 }
 

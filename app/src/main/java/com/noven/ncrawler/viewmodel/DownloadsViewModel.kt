@@ -14,6 +14,8 @@ import com.noven.ncrawler.NCrawlerApp
 import com.noven.ncrawler.data.db.DownloadProgress
 import com.noven.ncrawler.data.db.DownloadStatus
 import com.noven.ncrawler.data.db.NovelEntity
+import com.noven.ncrawler.data.db.activityAt
+import com.noven.ncrawler.data.db.newChapterCount
 import com.noven.ncrawler.data.scraper.SourceRegistry
 import com.noven.ncrawler.data.local.DownloadNetwork
 import kotlinx.coroutines.channels.awaitClose
@@ -30,7 +32,10 @@ data class DownloadItem(
     val progress: DownloadProgress,
     // CHANGE (source folders): which site this novel came from, derived from its slug.
     val sourceId: String = SourceRegistry.DEFAULT_SOURCE_ID,
-    val sourceName: String = ""
+    val sourceName: String = "",
+    // CHANGE (recent-first): last download / update activity, and unread new chapters.
+    val activityAt: Long = 0L,
+    val newCount: Int = 0
 )
 
 // CHANGE (source folders): completed downloads of one source, newest first —
@@ -38,7 +43,9 @@ data class DownloadItem(
 data class SourceFolder(
     val sourceId: String,
     val sourceName: String,
-    val items: List<DownloadItem>
+    val items: List<DownloadItem>,
+    // novels in this folder with unread new chapters
+    val updatedCount: Int = 0
 )
 
 // CHANGE (network choice): why a QUEUED download isn't moving. Replaces the old
@@ -69,9 +76,19 @@ class DownloadsViewModel(app: Application) : AndroidViewModel(app) {
                 novel      = novel,
                 progress   = progress,
                 sourceId   = sourceId,
-                sourceName = SourceRegistry.displayNameOf(sourceId)
+                sourceName = SourceRegistry.displayNameOf(sourceId),
+                activityAt = novel.activityAt(progress),
+                newCount   = novel.newChapterCount()
             )
         }
+            // Recent-first. A running download stays put (its timestamp changes every
+            // chapter, which would make the cards swap places constantly), so those sort
+            // first, in a fixed order; everything else by last activity.
+            .sortedWith(
+                compareByDescending<DownloadItem> { it.progress.status == DownloadStatus.DOWNLOADING }
+                    .thenByDescending { if (it.progress.status == DownloadStatus.DOWNLOADING) 0L else it.activityAt }
+                    .thenBy { it.novel.slug }
+            )
     }.stateIn(
         scope        = viewModelScope,
         started      = SharingStarted.WhileSubscribed(5000),
@@ -91,7 +108,8 @@ class DownloadsViewModel(app: Application) : AndroidViewModel(app) {
                     SourceFolder(
                         sourceId   = id,
                         sourceName = SourceRegistry.displayNameOf(id),
-                        items      = list.sortedByDescending { it.progress.lastUpdated }
+                        items      = list.sortedByDescending { it.activityAt },
+                        updatedCount = list.count { it.newCount > 0 }
                     )
                 }
                 .sortedBy { order.indexOf(it.sourceId) }

@@ -18,6 +18,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
@@ -299,6 +300,25 @@ fun DownloadsScreen(
     }
 }
 
+// Small gold pill ("+3 new", "2 updated") — same gold as the reader bookmark.
+@Composable
+private fun GoldTag(text: String) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(com.noven.ncrawler.ui.components.BookmarkGold)
+            .padding(horizontal = 6.dp, vertical = 1.dp)
+    ) {
+        Text(
+            text,
+            color      = Color(0xFF1B1405),
+            fontFamily = MontserratFamily,
+            fontWeight = FontWeight.ExtraBold,
+            fontSize   = 10.sp
+        )
+    }
+}
+
 @Composable
 private fun SectionHeader(title: String) {
     Text(
@@ -401,6 +421,17 @@ private fun SourceFolderCard(
                 .background(primary.copy(alpha = 0.20f))
         )
 
+        // Gold dot on the folder tab when something inside has new chapters
+        if (folder.updatedCount > 0) {
+            Box(
+                modifier = Modifier
+                    .padding(start = 8.dp + 96.dp - 22.dp, top = 10.dp)
+                    .size(10.dp)
+                    .clip(androidx.compose.foundation.shape.CircleShape)
+                    .background(com.noven.ncrawler.ui.components.BookmarkGold)
+            )
+        }
+
         // Peeking covers, tilted around their bottom edge so they fan out
         preview.forEachIndexed { i, entry ->
             val (x, tilt) = slots[i]
@@ -451,11 +482,17 @@ private fun SourceFolderCard(
                     maxLines   = 1,
                     overflow   = TextOverflow.Ellipsis
                 )
-                Text(
-                    "${folder.items.size} novel${if (folder.items.size == 1) "" else "s"}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment     = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "${folder.items.size} novel${if (folder.items.size == 1) "" else "s"}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (folder.updatedCount > 0) GoldTag("${folder.updatedCount} updated")
+                }
             }
             Icon(
                 SolarArrows.ChevronRight,
@@ -542,9 +579,16 @@ private fun DownloadCard(
                 }
 
                 Column(modifier = Modifier.weight(1f)) {
-                    // CHANGE (source folders): which site this is downloading from.
-                    if (showSource) {
-                        SourceChip(item.sourceName)
+                    // CHANGE (source folders): which site this is downloading from,
+                    // plus a gold tag when the novel has unread new chapters.
+                    if (showSource || item.newCount > 0) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment     = Alignment.CenterVertically
+                        ) {
+                            if (showSource) SourceChip(item.sourceName)
+                            if (item.newCount > 0) GoldTag("+${item.newCount} new")
+                        }
                         Spacer(Modifier.height(4.dp))
                     }
                     Text(

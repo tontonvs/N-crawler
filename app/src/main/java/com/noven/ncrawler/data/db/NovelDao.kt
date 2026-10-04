@@ -66,6 +66,9 @@ interface NovelDao {
     @Query("UPDATE novels SET newFromChapter = :from, newToChapter = :to, updateFoundAt = :at WHERE slug = :slug")
     suspend fun setUpdate(slug: String, from: Int, to: Int, at: Long)
 
+    @Query("UPDATE novels SET lastActivityAt = :at WHERE slug = :slug")
+    suspend fun touch(slug: String, at: Long)
+
     @Query("UPDATE novels SET newFromChapter = 0, newToChapter = 0, updateFoundAt = 0 WHERE slug = :slug")
     suspend fun clearUpdate(slug: String)
 

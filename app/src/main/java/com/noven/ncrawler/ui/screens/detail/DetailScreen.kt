@@ -159,6 +159,7 @@ import com.noven.ncrawler.ui.theme.MontserratFamily
 import com.noven.ncrawler.ui.theme.StarGold
 import com.noven.ncrawler.viewmodel.DetailUiState
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.shape.GenericShape
 import androidx.compose.ui.graphics.TransformOrigin
 import com.noven.ncrawler.viewmodel.DetailViewModel
@@ -410,9 +411,14 @@ private fun DownloadCircleBtn(
     // sheet (all / last N / by volume / custom range) regardless of the
     // current status — lets you top up an already-partial download too.
     onLongPress: () -> Unit,
+    // CHANGE (updates): > 0 while a COMPLETE download has new chapters not on the phone yet.
+    // The button then shows the "update" icon, and tapping it downloads just those chapters.
+    updateCount: Int = 0,
+    onUpdate: () -> Unit = {},
 ) {
     val status = progress?.status
-    val action = when (status) {
+    val showUpdate = status == DownloadStatus.COMPLETE && updateCount > 0
+    val action = if (showUpdate) onUpdate else when (status) {
         null, DownloadStatus.PAUSED, DownloadStatus.ERROR -> onStart
         DownloadStatus.QUEUED, DownloadStatus.DOWNLOADING  -> onPause
         DownloadStatus.COMPLETE                            -> onManage
@@ -425,14 +431,16 @@ private fun DownloadCircleBtn(
         // look like a glitch every time a chapter finishes. Exit (120ms) is
         // deliberately quicker/subtler than enter (200ms); no overshoot.
         AnimatedContent(
-            targetState   = status,
+            targetState   = status to showUpdate,
             transitionSpec = {
                 (fadeIn(tween(200)) + scaleIn(initialScale = 0.85f, animationSpec = tween(200)))
                     .togetherWith(fadeOut(tween(120)) + scaleOut(targetScale = 0.85f, animationSpec = tween(120)))
             },
             label = "downloadStatusIcon",
-        ) { s ->
-            when (s) {
+        ) { (s, upd) ->
+            if (upd) {
+                UpdateDownloadIcon(count = updateCount)
+            } else when (s) {
                 DownloadStatus.DOWNLOADING -> {
                     // CHANGE (animated download icon): the plain spinner is replaced by the
                     // animated download icon (box draws, wave fills, checkmark, arrow
@@ -489,6 +497,37 @@ private fun DownloadCircleBtn(
                     )
                 }
             }
+        }
+    }
+}
+
+// The "update novel" icon: the download arrow in gold with a small count badge.
+@Composable
+private fun UpdateDownloadIcon(count: Int) {
+    Box(modifier = Modifier.size(28.dp), contentAlignment = Alignment.Center) {
+        Icon(
+            SolarIcons.Download,
+            contentDescription = "Download $count new chapter${if (count == 1) "" else "s"}",
+            tint               = BookmarkGold,
+            modifier           = Modifier.size(24.dp),
+        )
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .offset(x = 5.dp, y = (-5).dp)
+                .defaultMinSize(minWidth = 15.dp, minHeight = 15.dp)
+                .clip(CircleShape)
+                .background(BookmarkGold)
+                .padding(horizontal = 3.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text       = if (count > 9) "9+" else count.toString(),
+                color      = Color(0xFF1B1405),
+                fontFamily = MontserratFamily,
+                fontSize   = 9.sp,
+                fontWeight = FontWeight.ExtraBold,
+            )
         }
     }
 }
@@ -734,11 +773,12 @@ private val BubbleTail: Shape = GenericShape { size, _ ->
 }
 
 // Cartoon speech bubble hanging under the download button. A gentle bob keeps it
-// noticeable without being loud. Tapping the body runs [onTap]; the ✕ dismisses.
+// noticeable without being loud. INFO ONLY: it says how many chapters are new; the ✕
+// dismisses it. (The download button itself switches to an update icon — that is what
+// downloads the new chapters.)
 @Composable
 private fun NewChaptersBubble(
     label: String,
-    onTap: () -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -764,7 +804,6 @@ private fun NewChaptersBubble(
             modifier = Modifier
                 .clip(RoundedCornerShape(18.dp))
                 .background(Color.White)
-                .clickable(onClick = onTap)
                 .padding(start = 14.dp, top = 7.dp, bottom = 7.dp, end = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -1408,6 +1447,14 @@ fun DetailScreen(
     val successState = state as? DetailUiState.Success
     var showDownloadSheet by remember { mutableStateOf(false) }
 
+    // New chapters (unread range) and how many of them are still missing from the phone.
+    val hasDownload = downloadProgress != null
+    val missingNew = remember(newRange, successState?.chapters, downloadedNums) {
+        val r = newRange
+        if (r == null) 0
+        else successState?.chapters?.count { it.num in r.from..r.to && it.num !in downloadedNums } ?: 0
+    }
+
     val context = LocalContext.current
     // Each new heart increments this; HeartBurst replays its animation per change.
     var heartBurst by remember { mutableStateOf(0) }
@@ -1574,6 +1621,8 @@ fun DetailScreen(
                     onLongPress = {
                         if (successState != null && !successState.chaptersLoading) showDownloadSheet = true
                     },
+                    updateCount = if (hasDownload) missingNew else 0,
+                    onUpdate    = vm::downloadNewChapters,
                 )
                 // Favourite heart (was a bookmark). Reddish pink when filled; adding one
                 // plays the big heart pop (HeartBurst below), then the notice.
@@ -1590,15 +1639,10 @@ fun DetailScreen(
         }
         }
 
-        // "Download N new ch." speech bubble under the download button. With a download
-        // it shows while some new chapters are still missing from the device; without
-        // one it just tells you how many are new (tap = dismiss).
+        // Info bubble under the download button: how many chapters are new. With a download
+        // it shows while some new chapters are still missing from the device (the button
+        // beside it turns into the update icon); without one it just informs.
         val range = newRange
-        val hasDownload = downloadProgress != null
-        val missingNew = remember(range, successState?.chapters, downloadedNums) {
-            if (range == null) 0
-            else successState?.chapters?.count { it.num in range.from..range.to && it.num !in downloadedNums } ?: 0
-        }
         val showBubble = range != null && successState != null && !refreshing && !showDownloadSheet &&
             (if (hasDownload) missingNew > 0 else true)
         AnimatedVisibility(
@@ -1613,8 +1657,7 @@ fun DetailScreen(
         ) {
             val n = range?.size ?: 0
             NewChaptersBubble(
-                label     = if (hasDownload) "Download $missingNew new ch." else "$n new ch.",
-                onTap     = if (hasDownload) vm::downloadNewChapters else vm::dismissUpdate,
+                label     = "$n new chapter${if (n == 1) "" else "s"}",
                 onDismiss = vm::dismissUpdate,
             )
         }

@@ -27,8 +27,18 @@ data class NovelEntity(
     // Library, Detail and the notification all read one source of truth.
     val newFromChapter: Int = 0,
     val newToChapter: Int = 0,
-    val updateFoundAt: Long = 0L
+    val updateFoundAt: Long = 0L,
+    // CHANGE (recent-first): bumped when the novel is favourited or a download is queued,
+    // so Library/Downloads can sort the most recently touched novel first.
+    val lastActivityAt: Long = 0L
 )
+
+/**
+ * When this novel was last "touched": favourited, download queued/progressed, update found
+ * (and, when [reading] is given, last read). Drives the recent-first ordering.
+ */
+fun NovelEntity.activityAt(download: DownloadProgress? = null, reading: ReadingProgress? = null): Long =
+    maxOf(lastActivityAt, updateFoundAt, download?.lastUpdated ?: 0L, reading?.lastReadAt ?: 0L)
 
 /** How many chapters the pending update covers (0 when there is none). */
 fun NovelEntity.newChapterCount(): Int =

@@ -8,6 +8,7 @@ import com.noven.ncrawler.data.db.DownloadProgress
 import com.noven.ncrawler.data.db.NovelEntity
 import com.noven.ncrawler.data.db.ReadingProgress
 import com.noven.ncrawler.data.db.newChapterCount
+import com.noven.ncrawler.data.db.activityAt
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
@@ -36,6 +37,12 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
                 downloadProgress = downloadList.find { it.novelSlug == novel.slug }
             )
         }
+            // Recent-first: newest favourite / download / update / read on top, then A-Z.
+            .sortedWith(
+                compareByDescending<LibraryItem> {
+                    it.novel.activityAt(it.downloadProgress, it.readingProgress)
+                }.thenBy { it.novel.title.lowercase() }
+            )
     }.stateIn(
         scope         = viewModelScope,
         started       = SharingStarted.WhileSubscribed(5000),
