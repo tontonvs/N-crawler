@@ -16,19 +16,32 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
@@ -179,14 +192,22 @@ private fun HintLine(icon: androidx.compose.ui.graphics.vector.ImageVector, text
     }
 }
 
+// Auto-pilot explanations (kept to one short line each).
+internal const val AUTO_PILOT_TIP_INTRO = "Auto-pilot opens the next chapter by itself when this one ends."
+internal const val AUTO_PILOT_TIP_ON    = "Auto-pilot on · the next chapter opens by itself."
+internal const val AUTO_PILOT_TIP_OFF   = "Auto-pilot off · you'll be asked before the next chapter."
+
 // Small bar shown while auto-scroll runs: current speed, the auto-pilot switch,
-// and a stop button. (Tapping anywhere else on the page stops it too.)
+// and a stop button. (A tap anywhere else on the page asks whether to stop.)
+// `tip` non-null → a speech bubble above the bar points at the auto-pilot chip.
 @Composable
 internal fun AutoScrollHud(
     level: Int,
     autoPilot: Boolean,
     fg: Color,
+    bg: Color,
     accent: Color,
+    tip: String?,
     onToggleAutoPilot: () -> Unit,
     onStop: () -> Unit,
     modifier: Modifier = Modifier
@@ -197,8 +218,15 @@ internal fun AutoScrollHud(
         pop.snapTo(0.4f)
         pop.animateTo(1f, spring(dampingRatio = 0.6f, stiffness = Spring.StiffnessMedium))
     }
+    // Window-space x of the chip's centre: where the bubble's tail points.
+    var chipCenterX by remember { mutableStateOf(0f) }
+    Column(
+        modifier            = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+    AutoPilotTip(text = tip, fg = fg, bg = bg, chipCenterX = { chipCenterX })
     Row(
-        modifier = modifier
+        modifier = Modifier
             .readerGlass(fg, RoundedCornerShape(50), strength = 0.6f, classic = 0.16f)
             .padding(start = 16.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
         verticalAlignment     = Alignment.CenterVertically,
@@ -222,7 +250,15 @@ internal fun AutoScrollHud(
             )
         }
 
-        AutoPilotChip(on = autoPilot, fg = fg, accent = accent, onClick = onToggleAutoPilot)
+        AutoPilotChip(
+            on       = autoPilot,
+            fg       = fg,
+            accent   = accent,
+            onClick  = onToggleAutoPilot,
+            modifier = Modifier.onGloballyPositioned {
+                chipCenterX = it.positionInWindow().x + it.size.width / 2f
+            }
+        )
 
         Box(
             modifier = Modifier
@@ -233,6 +269,144 @@ internal fun AutoScrollHud(
             contentAlignment = Alignment.Center
         ) {
             Icon(SolarIcons.PauseBold, "Stop auto scroll", tint = fg, modifier = Modifier.size(18.dp))
+        }
+    }
+    }
+}
+
+// Speech bubble with a tail, drawn in the inverted page colours so it reads on any
+// theme. Slides/fades in above the bar; the tail is aimed at the auto-pilot chip.
+@Composable
+private fun AutoPilotTip(
+    text: String?,
+    fg: Color,
+    bg: Color,
+    chipCenterX: () -> Float
+) {
+    // Keep the last text while the bubble fades out.
+    var last by remember { mutableStateOf("") }
+    LaunchedEffect(text) { if (text != null) last = text }
+    val shown = text ?: last
+
+    AnimatedVisibility(
+        visible = text != null,
+        enter   = fadeIn(tween(160)) + slideInVertically(tween(200)) { it / 3 },
+        exit    = fadeOut(tween(160))
+    ) {
+        var centerX by remember { mutableStateOf(0f) }
+        val fill = fg.copy(alpha = 0.92f)
+        Box(
+            modifier = Modifier
+                .padding(bottom = 8.dp)
+                .widthIn(max = 264.dp)
+                .onGloballyPositioned { centerX = it.positionInWindow().x + it.size.width / 2f }
+                .drawBehind {
+                    val tailH = 7.dp.toPx()
+                    val tailW = 7.dp.toPx()
+                    val reach = (size.width / 2f - 22.dp.toPx()).coerceAtLeast(0f)
+                    val cx    = size.width / 2f + (chipCenterX() - centerX).coerceIn(-reach, reach)
+                    val tail  = Path().apply {
+                        moveTo(cx - tailW, size.height - tailH - 1f)
+                        lineTo(cx + tailW, size.height - tailH - 1f)
+                        lineTo(cx, size.height)
+                        close()
+                    }
+                    drawPath(tail, fill)
+                }
+                .padding(bottom = 7.dp)
+        ) {
+            Text(
+                shown,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(fill)
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                fontFamily = MontserratFamily,
+                fontWeight = FontWeight.SemiBold,
+                fontSize   = 12.sp,
+                color      = bg,
+                textAlign  = TextAlign.Center
+            )
+        }
+    }
+}
+
+// "Stop auto scroll?" — the answer to a screen tap while it runs. It swallows its
+// own touches (so tapping the card doesn't count as "tap elsewhere").
+@Composable
+internal fun AutoScrollStopConfirm(
+    fg: Color,
+    accent: Color,
+    onKeep: () -> Unit,
+    onStop: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .widthIn(min = 248.dp)
+            .readerGlass(fg, RoundedCornerShape(26.dp), strength = 0.75f, classic = 0.16f)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication        = null,
+                onClick           = {}
+            )
+            .padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(
+            "Stop auto scroll?",
+            fontFamily = MontserratFamily,
+            fontWeight = FontWeight.ExtraBold,
+            fontSize   = 16.sp,
+            color      = fg
+        )
+        Spacer(Modifier.height(3.dp))
+        Text(
+            "You'll stay right where you are",
+            fontFamily = MontserratFamily,
+            fontWeight = FontWeight.SemiBold,
+            fontSize   = 12.sp,
+            color      = fg.copy(alpha = 0.6f)
+        )
+        Spacer(Modifier.height(14.dp))
+        Row(
+            modifier              = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(50))
+                    .background(fg.copy(alpha = 0.12f))
+                    .clickable(onClick = onKeep)
+                    .padding(vertical = 12.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "Keep going",
+                    fontFamily = MontserratFamily,
+                    fontWeight = FontWeight.Bold,
+                    fontSize   = 13.sp,
+                    color      = fg
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(50))
+                    .background(accent)
+                    .clickable(onClick = onStop)
+                    .padding(vertical = 12.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "Stop",
+                    fontFamily = MontserratFamily,
+                    fontWeight = FontWeight.ExtraBold,
+                    fontSize   = 13.sp,
+                    color      = Color.White
+                )
+            }
         }
     }
 }

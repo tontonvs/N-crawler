@@ -13,6 +13,7 @@ import com.noven.ncrawler.ui.theme.GlassBase
 import com.noven.ncrawler.viewmodel.AUTO_SPEED_MAX
 import com.noven.ncrawler.viewmodel.AUTO_SPEED_MIN
 import kotlin.math.exp
+import kotlin.math.abs
 import com.noven.ncrawler.ui.components.rememberReducedMotion
 import androidx.compose.ui.draw.drawBehind
 import com.noven.ncrawler.ui.components.SolarIcons
@@ -276,12 +277,24 @@ fun ReaderScreen(
         derivedStateOf { autoSpeedLevel(autoSpeed, AUTO_SPEED_MIN, AUTO_SPEED_MAX) }
     }
 
+    // A tap while auto-scroll runs no longer stops it outright: it asks first
+    // ("Stop auto scroll?"). The page keeps moving until the answer is "Stop".
+    var confirmStop by remember { mutableStateOf(false) }
+    // The little bubble above the speed bar that explains auto-pilot. Shown once
+    // ever (first auto-scroll), then again whenever the chip is toggled.
+    var autoPilotTip by remember { mutableStateOf<String?>(null) }
+    val hintPrefs = remember {
+        hostView.context.getSharedPreferences("reader_hints", android.content.Context.MODE_PRIVATE)
+    }
+
     fun stopAuto() {
         if (!autoScroll) return
-        autoScroll   = false
-        autoHint     = false
-        atChapterEnd = false
-        showControls = true            // show where you stopped
+        autoScroll    = false
+        autoHint      = false
+        atChapterEnd  = false
+        confirmStop   = false
+        autoPilotTip  = null
+        showControls  = true            // show where you stopped
         vm.saveAutoSpeed(autoSpeed)
     }
 
@@ -289,9 +302,30 @@ fun ReaderScreen(
         if (state !is ReaderUiState.Success) return
         atChapterEnd = false
         autoHint     = true
+        confirmStop  = false
         showControls = false
         autoScroll   = true
+        if (!hintPrefs.getBoolean("autopilot_tip_seen", false)) {
+            autoPilotTip = AUTO_PILOT_TIP_INTRO
+            hintPrefs.edit().putBoolean("autopilot_tip_seen", true).apply()
+        }
     }
+
+    // The confirm question and the tip close themselves.
+    LaunchedEffect(confirmStop) {
+        if (confirmStop) {
+            delay(4500)
+            confirmStop = false           // no answer = keep going
+        }
+    }
+    LaunchedEffect(autoPilotTip) {
+        if (autoPilotTip != null) {
+            delay(4200)
+            autoPilotTip = null
+        }
+    }
+    // A new chapter (auto-pilot, or the end-bar button) starts clean.
+    LaunchedEffect(currentNum) { confirmStop = false }
 
     // Auto-scroll with a screen that times out after 30s is useless.
     DisposableEffect(autoScroll) {
@@ -447,8 +481,10 @@ fun ReaderScreen(
         }
 
         // ── Top header ────────────────────────────────────────────────────
+        // Hidden while a sheet (Settings / Contents) is open: its buttons used to
+        // sit over / through the sheet, looking tappable while the scrim ate the tap.
         AnimatedVisibility(
-            visible  = showControls,
+            visible  = showControls && !sheetOpen,
             enter    = fadeIn(tween(220)) + slideInVertically(tween(220, easing = FastOutSlowInEasing)),
             exit     = fadeOut(tween(160)) + slideOutVertically(tween(160, easing = FastOutSlowInEasing)),
             modifier = Modifier.align(Alignment.TopCenter)
@@ -496,8 +532,9 @@ fun ReaderScreen(
         )
 
         // ── Bottom chapter nav bar ────────────────────────────────────────
+        // Same rule as the header: out of the way while a sheet is open.
         AnimatedVisibility(
-            visible  = showControls,
+            visible  = showControls && !sheetOpen,
             enter    = fadeIn(tween(220)) + slideInVertically(tween(220, easing = FastOutSlowInEasing)) { it },
             exit     = fadeOut(tween(160)) + slideOutVertically(tween(160, easing = FastOutSlowInEasing)) { it },
             modifier = Modifier.align(Alignment.BottomCenter)
@@ -522,20 +559,51 @@ fun ReaderScreen(
         // vertical swipe sets the speed — up = faster, down = slower (multiplicative,
         // so it feels the same at slow and fast; one screen-height swipe ≈ ×4.5).
         // Page scrolling by hand is switched off meanwhile (see ReaderContent).
+        // ONE gesture handler for both jobs (two stacked detectors could fight over
+        // the same touch): finger lifts before moving past the touch slop → a tap
+        // (asks "Stop auto scroll?"); moves past it → a swipe that sets the speed.
         if (autoScroll) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .pointerInput(Unit) { detectTapGestures(onTap = { stopAuto() }) }
                     .pointerInput(Unit) {
-                        detectVerticalDragGestures(
-                            onDragStart  = { autoHint = false },
-                            onDragEnd    = { vm.saveAutoSpeed(autoSpeed) },
-                            onDragCancel = { vm.saveAutoSpeed(autoSpeed) }
-                        ) { change, dragY ->
-                            change.consume()
-                            val factor = exp(-dragY / screenHeightPx * 1.5f)
-                            autoSpeed = (autoSpeed * factor).coerceIn(AUTO_SPEED_MIN, AUTO_SPEED_MAX)
+                        awaitEachGesture {
+                            val down     = awaitFirstDown(requireUnconsumed = false)
+                            val slop     = viewConfiguration.touchSlop
+                            var moved    = 0f
+                            var dragging = false
+                            while (true) {
+                                val event  = awaitPointerEvent()
+                                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                if (change.isConsumed) break
+                                if (!change.pressed) {                        // finger up
+                                    if (!dragging) {
+                                        if (confirmStop) {
+                                            confirmStop = false              // tap elsewhere = keep going
+                                        } else {
+                                            autoHint    = false
+                                            confirmStop = true
+                                        }
+                                    }
+                                    break
+                                }
+                                val dy = change.position.y - change.previousPosition.y
+                                if (!dragging) {
+                                    moved += dy
+                                    if (abs(moved) > slop) {
+                                        dragging    = true
+                                        autoHint    = false
+                                        confirmStop = false
+                                    }
+                                } else {
+                                    // Multiplicative, so it feels the same slow or fast:
+                                    // one screen-height swipe ≈ ×4.5 (up = faster).
+                                    val factor = exp(-dy / screenHeightPx * 1.5f)
+                                    autoSpeed = (autoSpeed * factor).coerceIn(AUTO_SPEED_MIN, AUTO_SPEED_MAX)
+                                }
+                                if (dragging) change.consume()
+                            }
+                            if (dragging) vm.saveAutoSpeed(autoSpeed)
                         }
                     }
             )
@@ -570,9 +638,33 @@ fun ReaderScreen(
                     level             = speedLevel,
                     autoPilot         = settings.autoPilot,
                     fg                = fg,
+                    bg                = bg,
                     accent            = accent,
-                    onToggleAutoPilot = { vm.setAutoPilot(!settings.autoPilot) },
+                    tip               = autoPilotTip,
+                    onToggleAutoPilot = {
+                        val on = !settings.autoPilot
+                        vm.setAutoPilot(on)
+                        autoPilotTip = if (on) AUTO_PILOT_TIP_ON else AUTO_PILOT_TIP_OFF
+                    },
                     onStop            = { stopAuto() }
+                )
+            }
+        }
+
+        // "Stop auto scroll?" — answers a screen tap. Centre of the page, so it can
+        // never sit on the speed bar / end bar; Keep going (or any tap) closes it.
+        AnimatedVisibility(
+            visible  = autoScroll && confirmStop,
+            enter    = fadeIn(tween(160)) + scaleIn(tween(200, easing = Motion.EaseOut), initialScale = 0.92f),
+            exit     = fadeOut(tween(140)),
+            modifier = Modifier.align(Alignment.Center)
+        ) {
+            CompositionLocalProvider(LocalReaderHaze provides readerHaze) {
+                AutoScrollStopConfirm(
+                    fg     = fg,
+                    accent = accent,
+                    onKeep = { confirmStop = false },
+                    onStop = { stopAuto() }
                 )
             }
         }
@@ -645,7 +737,7 @@ fun ReaderScreen(
 
         // ── Toast (bookmark added/removed, up to date) — text only, above the chapter bar ──
         AnimatedVisibility(
-            visible  = toastVisible,
+            visible  = toastVisible && !sheetOpen,
             enter    = fadeIn(tween(160)) + slideInVertically(tween(200)) { it / 2 },
             exit     = fadeOut(tween(220)),
             modifier = Modifier
