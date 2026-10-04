@@ -9,8 +9,6 @@ import com.noven.ncrawler.data.db.DownloadStatus
 import com.noven.ncrawler.data.db.NovelEntity
 import com.noven.ncrawler.data.db.ReadingProgress
 import com.noven.ncrawler.data.local.RecentSearchStore
-import com.noven.ncrawler.data.repository.SearchSection
-import com.noven.ncrawler.data.repository.SectionState
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 
@@ -43,10 +41,8 @@ class BrowseViewModel(app: Application) : AndroidViewModel(app) {
     private val _popularState = MutableStateFlow<BrowseUiState>(BrowseUiState.Loading)
     val popularState: StateFlow<BrowseUiState> = _popularState.asStateFlow()
 
-    // CHANGE (grouped search): one section per enabled source, in priority order.
-    // Empty list = nothing to show yet (blank query, or the 350ms debounce).
-    private val _searchSections = MutableStateFlow<List<SearchSection>>(emptyList())
-    val searchSections: StateFlow<List<SearchSection>> = _searchSections.asStateFlow()
+    private val _searchState = MutableStateFlow<BrowseUiState>(BrowseUiState.Empty)
+    val searchState: StateFlow<BrowseUiState> = _searchState.asStateFlow()
 
     private val _query = MutableStateFlow("")
     val query: StateFlow<String> = _query.asStateFlow()
@@ -227,26 +223,25 @@ class BrowseViewModel(app: Application) : AndroidViewModel(app) {
     fun onQueryChange(q: String) {
         _query.value = q
         searchJob?.cancel()
-        if (q.isBlank()) { _searchSections.value = emptyList(); return }
+        if (q.isBlank()) { _searchState.value = BrowseUiState.Empty; return }
+        // FIX: the state stayed Empty through the 350ms debounce, so the first
+        // keystroke flashed "No results". Show loading straight away instead
+        // (leave existing results on screen while refining a query).
+        if (_searchState.value !is BrowseUiState.Success) _searchState.value = BrowseUiState.Loading
         searchJob = viewModelScope.launch {
             delay(350)
-            // Sections of the previous query stay on screen (dimmed by the UI via their
-            // LOADING state) until each source's new answer arrives — refining a query
-            // never blanks the list.
-            val before = _searchSections.value
+            _searchState.value = BrowseUiState.Loading
             try {
                 Log.d(TAG, "search('$q') started")
-                repo.searchBySource(q).collect { fresh ->
-                    _searchSections.value = fresh.map { section ->
-                        if (section.state != SectionState.LOADING) section
-                        else before.firstOrNull { it.sourceId == section.sourceId }
-                            ?.copy(state = SectionState.LOADING) ?: section
-                    }
-                }
+                val results = repo.search(q)
+                Log.d(TAG, "search('$q') returned ${results.size} results")
+                _searchState.value = if (results.isEmpty()) BrowseUiState.Empty
+                                     else BrowseUiState.Success(results)
             } catch (e: CancellationException) {
                 throw e   // a newer keystroke replaced this search
             } catch (e: Exception) {
                 Log.e(TAG, "search('$q') FAILED: ${e.message}", e)
+                _searchState.value = BrowseUiState.Error(friendlyError(e, "Search failed"))
             }
         }
     }
@@ -254,7 +249,7 @@ class BrowseViewModel(app: Application) : AndroidViewModel(app) {
     fun clearSearch() {
         searchJob?.cancel()
         _query.value = ""
-        _searchSections.value = emptyList()
+        _searchState.value = BrowseUiState.Empty
     }
 
     // Records a term into recent searches (max 5, deduped, most-recent-first).
