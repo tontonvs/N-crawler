@@ -1,13 +1,18 @@
 package com.noven.ncrawler.ui.screens.reader
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -16,41 +21,34 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.width
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -70,8 +68,12 @@ import kotlin.math.ln
 // ReaderScreen (it needs the chapter's ScrollState).
 //
 // Motion weighting: Jakub primary (shipped consumer app), Emil secondary (the
-// speed bar is touched constantly, so it only fades), Jhey for the one
+// control bar is touched constantly, so it only fades), Jhey for the one
 // delighter (the hand). Everything honours system "Remove animations".
+//
+// The control bar is ONE row at all times. At the end of a chapter it does not
+// grow a second card over the text — it morphs in place into
+// [Auto-pilot] [Ch. N →] [✕], so nothing extra ever covers the page.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Speed → a 1..10 label on a log scale (speed is multiplicative, so is the swipe). */
@@ -167,7 +169,7 @@ internal fun AutoScrollHint(
             HintLine(SolarIcons.ArrowDown, "Swipe down · slower", fg)
             Spacer(Modifier.height(3.dp))
             Text(
-                "Tap to stop",
+                "Tap to pause",
                 fontFamily = MontserratFamily,
                 fontWeight = FontWeight.SemiBold,
                 fontSize   = 12.sp,
@@ -197,18 +199,28 @@ internal const val AUTO_PILOT_TIP_INTRO = "Auto-pilot opens the next chapter by 
 internal const val AUTO_PILOT_TIP_ON    = "Auto-pilot on · the next chapter opens by itself."
 internal const val AUTO_PILOT_TIP_OFF   = "Auto-pilot off · you'll be asked before the next chapter."
 
-// Small bar shown while auto-scroll runs: current speed, the auto-pilot switch,
-// and a stop button. (A tap anywhere else on the page asks whether to stop.)
+// The one control bar that lives at the bottom for the whole auto-scroll session.
+//   normal   : [ ▼ speed ] [ Auto-pilot ] [ ⏸ / ▶ ] [ ✕ ]
+//   chapter end (endMode): [ Auto-pilot ] [ Ch. N → ] [ ✕ ]
+//     – auto-pilot ON : the Ch. N button fills left → right (countdown), then opens
+//     – auto-pilot OFF: it waits; tapping it opens the next chapter
+// Pause keeps the bar on screen (the play/pause button just swaps). ✕ ends the session.
 // `tip` non-null → a speech bubble above the bar points at the auto-pilot chip.
 @Composable
 internal fun AutoScrollHud(
     level: Int,
+    paused: Boolean,
     autoPilot: Boolean,
+    endMode: Boolean,
+    nextNum: Int,
+    countdown: () -> Float,          // 0..1, read in the draw phase
     fg: Color,
     bg: Color,
     accent: Color,
     tip: String?,
+    onTogglePause: () -> Unit,
     onToggleAutoPilot: () -> Unit,
+    onOpenNext: () -> Unit,
     onStop: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -220,57 +232,142 @@ internal fun AutoScrollHud(
     }
     // Window-space x of the chip's centre: where the bubble's tail points.
     var chipCenterX by remember { mutableStateOf(0f) }
+
     Column(
         modifier            = modifier,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-    AutoPilotTip(text = tip, fg = fg, bg = bg, chipCenterX = { chipCenterX })
-    Row(
-        modifier = Modifier
-            .readerGlass(fg, RoundedCornerShape(50), strength = 0.6f, classic = 0.16f)
-            .padding(start = 16.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
-        verticalAlignment     = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.graphicsLayer {
-                val s = 0.94f + 0.06f * pop.value
-                scaleX = s; scaleY = s
-            }
-        ) {
-            Icon(SolarIcons.ArrowDown, null, tint = fg.copy(alpha = 0.85f), modifier = Modifier.size(16.dp))
-            Spacer(Modifier.width(6.dp))
-            Text(
-                "Speed $level",
-                fontFamily = MontserratFamily,
-                fontWeight = FontWeight.Bold,
-                fontSize   = 13.sp,
-                color      = fg
-            )
-        }
+        AutoPilotTip(text = tip, fg = fg, bg = bg, chipCenterX = { chipCenterX })
 
-        AutoPilotChip(
-            on       = autoPilot,
-            fg       = fg,
-            accent   = accent,
-            onClick  = onToggleAutoPilot,
-            modifier = Modifier.onGloballyPositioned {
-                chipCenterX = it.positionInWindow().x + it.size.width / 2f
-            }
-        )
+        Crossfade(targetState = endMode, animationSpec = tween(160), label = "hudMode") { end ->
+            Row(
+                modifier = Modifier
+                    .readerGlass(fg, RoundedCornerShape(50), strength = 0.6f, classic = 0.16f)
+                    .padding(start = 14.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+                verticalAlignment     = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (!end) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.graphicsLayer {
+                            val s = 0.94f + 0.06f * pop.value
+                            scaleX = s; scaleY = s
+                        }
+                    ) {
+                        Icon(SolarIcons.ArrowDown, null, tint = fg.copy(alpha = 0.85f), modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            "$level",
+                            fontFamily = MontserratFamily,
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize   = 15.sp,
+                            color      = fg
+                        )
+                    }
+                }
 
-        Box(
-            modifier = Modifier
-                .size(40.dp)
-                .clip(CircleShape)
-                .background(fg.copy(alpha = 0.14f))
-                .clickable(onClickLabel = "Stop auto scroll", onClick = onStop),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(SolarIcons.PauseBold, "Stop auto scroll", tint = fg, modifier = Modifier.size(18.dp))
+                AutoPilotChip(
+                    on       = autoPilot,
+                    fg       = fg,
+                    accent   = accent,
+                    onClick  = onToggleAutoPilot,
+                    modifier = Modifier.onGloballyPositioned {
+                        chipCenterX = it.positionInWindow().x + it.size.width / 2f
+                    }
+                )
+
+                if (!end) {
+                    HudCircleButton(
+                        fg           = fg,
+                        label        = if (paused) "Resume auto scroll" else "Pause auto scroll",
+                        onClick      = onTogglePause
+                    ) {
+                        Icon(
+                            if (paused) SolarIcons.PlayBold else SolarIcons.PauseBold,
+                            contentDescription = null,
+                            tint     = fg,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                } else {
+                    NextChapterButton(
+                        nextNum   = nextNum,
+                        autoPilot = autoPilot,
+                        countdown = countdown,
+                        accent    = accent,
+                        onClick   = onOpenNext
+                    )
+                }
+
+                HudCircleButton(fg = fg, label = "Stop auto scroll", onClick = onStop) {
+                    Icon(SolarIcons.Close, contentDescription = null, tint = fg, modifier = Modifier.size(16.dp))
+                }
+            }
         }
     }
+}
+
+@Composable
+private fun HudCircleButton(
+    fg: Color,
+    label: String,
+    onClick: () -> Unit,
+    content: @Composable () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .size(40.dp)
+            .clip(CircleShape)
+            .background(fg.copy(alpha = 0.14f))
+            .clickable(onClickLabel = label, onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) { content() }
+}
+
+// "Ch. N →". With auto-pilot the button is its own countdown: a brighter fill
+// grows left → right over a dim base, and the chapter opens when it is full.
+@Composable
+private fun NextChapterButton(
+    nextNum: Int,
+    autoPilot: Boolean,
+    countdown: () -> Float,
+    accent: Color,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .height(40.dp)
+            .clip(RoundedCornerShape(50))
+            .background(if (autoPilot) accent.copy(alpha = 0.38f) else accent)
+            .clickable(onClickLabel = "Open next chapter", onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        if (autoPilot) {
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .graphicsLayer {
+                        scaleX = countdown().coerceIn(0f, 1f)
+                        transformOrigin = TransformOrigin(0f, 0.5f)
+                    }
+                    .background(accent)
+            )
+        }
+        Row(
+            modifier          = Modifier.padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "Ch. $nextNum",
+                fontFamily = MontserratFamily,
+                fontWeight = FontWeight.ExtraBold,
+                fontSize   = 14.sp,
+                color      = Color.White
+            )
+            Spacer(Modifier.width(6.dp))
+            Icon(SolarIcons.ArrowRight, null, tint = Color.White, modifier = Modifier.size(16.dp))
+        }
     }
 }
 
@@ -331,86 +428,6 @@ private fun AutoPilotTip(
     }
 }
 
-// "Stop auto scroll?" — the answer to a screen tap while it runs. It swallows its
-// own touches (so tapping the card doesn't count as "tap elsewhere").
-@Composable
-internal fun AutoScrollStopConfirm(
-    fg: Color,
-    accent: Color,
-    onKeep: () -> Unit,
-    onStop: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Column(
-        modifier = modifier
-            .widthIn(min = 248.dp)
-            .readerGlass(fg, RoundedCornerShape(26.dp), strength = 0.75f, classic = 0.16f)
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication        = null,
-                onClick           = {}
-            )
-            .padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text(
-            "Stop auto scroll?",
-            fontFamily = MontserratFamily,
-            fontWeight = FontWeight.ExtraBold,
-            fontSize   = 16.sp,
-            color      = fg
-        )
-        Spacer(Modifier.height(3.dp))
-        Text(
-            "You'll stay right where you are",
-            fontFamily = MontserratFamily,
-            fontWeight = FontWeight.SemiBold,
-            fontSize   = 12.sp,
-            color      = fg.copy(alpha = 0.6f)
-        )
-        Spacer(Modifier.height(14.dp))
-        Row(
-            modifier              = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(50))
-                    .background(fg.copy(alpha = 0.12f))
-                    .clickable(onClick = onKeep)
-                    .padding(vertical = 12.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    "Keep going",
-                    fontFamily = MontserratFamily,
-                    fontWeight = FontWeight.Bold,
-                    fontSize   = 13.sp,
-                    color      = fg
-                )
-            }
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(50))
-                    .background(accent)
-                    .clickable(onClick = onStop)
-                    .padding(vertical = 12.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    "Stop",
-                    fontFamily = MontserratFamily,
-                    fontWeight = FontWeight.ExtraBold,
-                    fontSize   = 13.sp,
-                    color      = Color.White
-                )
-            }
-        }
-    }
-}
-
 @Composable
 internal fun AutoPilotChip(
     on: Boolean,
@@ -444,141 +461,73 @@ internal fun AutoPilotChip(
     }
 }
 
-// The end-of-chapter step. Auto-scroll stops at the last line and asks:
-//   • auto-pilot OFF → a button; nothing opens until it is tapped (the confirm).
-//   • auto-pilot ON  → the same bar counts down and opens the next chapter by
-//     itself; Cancel (or a tap) stops auto-scroll instead.
+// The big on-page speed readout, like a countdown: it pops in the middle of the
+// screen while you swipe and fades ~1s after you stop. Not interactive (touches
+// pass through to the gesture layer), so a swipe never gets blocked by it.
 @Composable
-internal fun AutoScrollEndBar(
-    nextNum: Int,
-    autoPilot: Boolean,
-    countdown: () -> Float,          // 0..1, read in the draw phase
+internal fun AutoSpeedReadout(
+    level: Int,
     fg: Color,
-    accent: Color,
-    onConfirm: () -> Unit,
-    onToggleAutoPilot: () -> Unit,
-    onStop: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val currentConfirm by rememberUpdatedState(onConfirm)
+    val pop = remember { Animatable(1f) }
+    LaunchedEffect(level) {
+        pop.snapTo(0.82f)
+        pop.animateTo(1f, spring(dampingRatio = 0.55f, stiffness = Spring.StiffnessMedium))
+    }
     Column(
         modifier = modifier
-            .fillMaxWidth()
-            .readerGlass(fg, RoundedCornerShape(26.dp), strength = 0.7f, classic = 0.16f)
-            .padding(16.dp)
+            .graphicsLayer { scaleX = pop.value; scaleY = pop.value }
+            .readerGlass(fg, RoundedCornerShape(36.dp), strength = 0.8f, classic = 0.18f)
+            .padding(horizontal = 38.dp, vertical = 18.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Row(
-            modifier              = Modifier.fillMaxWidth(),
-            verticalAlignment     = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    "END OF CHAPTER",
-                    fontFamily    = MontserratFamily,
-                    fontWeight    = FontWeight.ExtraBold,
-                    fontSize      = 10.sp,
-                    letterSpacing = 1.sp,
-                    color         = fg.copy(alpha = 0.6f)
-                )
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    "Next · Ch. $nextNum",
-                    fontFamily = MontserratFamily,
-                    fontWeight = FontWeight.ExtraBold,
-                    fontSize   = 16.sp,
-                    color      = fg
-                )
-            }
-            AutoPilotChip(on = autoPilot, fg = fg, accent = accent, onClick = onToggleAutoPilot)
-        }
-
-        Spacer(Modifier.height(14.dp))
-
-        if (autoPilot) {
-            // Countdown line: fills left → right, then the chapter opens.
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(5.dp)
-                    .clip(RoundedCornerShape(50))
-                    .background(fg.copy(alpha = 0.16f))
-            ) {
+        Text(
+            "SPEED",
+            fontFamily    = MontserratFamily,
+            fontWeight    = FontWeight.ExtraBold,
+            fontSize      = 11.sp,
+            letterSpacing = 2.sp,
+            color         = fg.copy(alpha = 0.6f)
+        )
+        Text(
+            "$level",
+            fontFamily = MontserratFamily,
+            fontWeight = FontWeight.ExtraBold,
+            fontSize   = 88.sp,
+            color      = fg
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+            repeat(10) { i ->
                 Box(
                     Modifier
-                        .fillMaxHeight()
-                        .fillMaxWidth()
-                        .graphicsLayer {
-                            // scaleX from the left edge — no layout, read in draw
-                            scaleX = countdown().coerceIn(0.02f, 1f)
-                            transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0f, 0.5f)
-                        }
-                        .clip(RoundedCornerShape(50))
-                        .background(accent)
+                        .size(7.dp)
+                        .clip(CircleShape)
+                        .background(fg.copy(alpha = if (i < level) 0.9f else 0.2f))
                 )
-            }
-            Spacer(Modifier.height(10.dp))
-            Row(
-                modifier              = Modifier.fillMaxWidth(),
-                verticalAlignment     = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(
-                    "Opening next chapter…",
-                    fontFamily = MontserratFamily,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize   = 13.sp,
-                    color      = fg.copy(alpha = 0.8f)
-                )
-                Text(
-                    "Cancel",
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(50))
-                        .clickable(onClick = onStop)
-                        .padding(horizontal = 12.dp, vertical = 6.dp),
-                    fontFamily = MontserratFamily,
-                    fontWeight = FontWeight.Bold,
-                    fontSize   = 13.sp,
-                    color      = fg
-                )
-            }
-        } else {
-            Row(
-                modifier              = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalAlignment     = Alignment.CenterVertically
-            ) {
-                Text(
-                    "Stop",
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(50))
-                        .background(fg.copy(alpha = 0.12f))
-                        .clickable(onClick = onStop)
-                        .padding(horizontal = 18.dp, vertical = 13.dp),
-                    fontFamily = MontserratFamily,
-                    fontWeight = FontWeight.Bold,
-                    fontSize   = 14.sp,
-                    color      = fg
-                )
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(50))
-                        .background(accent)
-                        .clickable { currentConfirm() }
-                        .padding(vertical = 13.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        "Open next chapter",
-                        fontFamily = MontserratFamily,
-                        fontWeight = FontWeight.ExtraBold,
-                        fontSize   = 14.sp,
-                        color      = Color.White,
-                        textAlign  = TextAlign.Center
-                    )
-                }
             }
         }
+    }
+}
+
+// A brief big ⏸ / ▶ in the middle of the page when a tap pauses or resumes.
+@Composable
+internal fun AutoPauseFlash(
+    paused: Boolean,
+    fg: Color,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .size(96.dp)
+            .readerGlass(fg, CircleShape, strength = 0.8f, classic = 0.18f),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            if (paused) SolarIcons.PauseBold else SolarIcons.PlayBold,
+            contentDescription = null,
+            tint     = fg,
+            modifier = Modifier.size(44.dp)
+        )
     }
 }

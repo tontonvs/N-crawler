@@ -259,10 +259,10 @@ fun ReaderScreen(
     val bodyFg = if (darkBg) lerp(bg, fg, DARK_BODY_TEXT_STRENGTH) else fg
 
     // ── Auto scroll ──────────────────────────────────────────────────────────
-    // Settings → "Auto scroll": the sheet slides away, a hand shows how to set the
-    // speed (swipe up = faster, down = slower), the page eases into motion, and a
-    // tap anywhere stops it. At the end of a chapter it stops and asks to open
-    // the next one (button) — or does it itself in auto-pilot.
+    // Header → "Auto scroll": a hand shows how to set the speed (swipe up = faster,
+    // down = slower, shown as a big number), the page eases into motion, and a tap
+    // anywhere pauses / resumes it (the control bar stays). At the end of a chapter
+    // the bar turns into a "Ch. N →" button — or opens it itself in auto-pilot.
     // autoSpeed is deliberately NOT read in composition (only inside gestures and
     // the scroll loop) so a swipe never recomposes the whole reader.
     var autoScroll   by remember { mutableStateOf(false) }
@@ -277,9 +277,13 @@ fun ReaderScreen(
         derivedStateOf { autoSpeedLevel(autoSpeed, AUTO_SPEED_MIN, AUTO_SPEED_MAX) }
     }
 
-    // A tap while auto-scroll runs no longer stops it outright: it asks first
-    // ("Stop auto scroll?"). The page keeps moving until the answer is "Stop".
-    var confirmStop by remember { mutableStateOf(false) }
+    // A tap while auto-scroll runs PAUSES it (controls stay up, the ⏸ button turns
+    // into ▶); another tap resumes. Only ✕ / Back end the session.
+    var autoPaused by remember { mutableStateOf(false) }
+    // Big on-page feedback: the speed number while you swipe, ⏸/▶ when a tap toggles.
+    var speedStamp by remember { mutableStateOf(0L) }
+    var speedFlash by remember { mutableStateOf(false) }
+    var pauseFlash by remember { mutableStateOf(false) }
     // The little bubble above the speed bar that explains auto-pilot. Shown once
     // ever (first auto-scroll), then again whenever the chip is toggled.
     var autoPilotTip by remember { mutableStateOf<String?>(null) }
@@ -292,7 +296,9 @@ fun ReaderScreen(
         autoScroll    = false
         autoHint      = false
         atChapterEnd  = false
-        confirmStop   = false
+        autoPaused    = false
+        speedFlash    = false
+        pauseFlash    = false
         autoPilotTip  = null
         showControls  = true            // show where you stopped
         vm.saveAutoSpeed(autoSpeed)
@@ -302,7 +308,7 @@ fun ReaderScreen(
         if (state !is ReaderUiState.Success) return
         atChapterEnd = false
         autoHint     = true
-        confirmStop  = false
+        autoPaused   = false
         showControls = false
         autoScroll   = true
         if (!hintPrefs.getBoolean("autopilot_tip_seen", false)) {
@@ -311,21 +317,29 @@ fun ReaderScreen(
         }
     }
 
-    // The confirm question and the tip close themselves.
-    LaunchedEffect(confirmStop) {
-        if (confirmStop) {
-            delay(4500)
-            confirmStop = false           // no answer = keep going
-        }
-    }
+    // The tip and the big on-page readouts close themselves.
     LaunchedEffect(autoPilotTip) {
         if (autoPilotTip != null) {
             delay(4200)
             autoPilotTip = null
         }
     }
-    // A new chapter (auto-pilot, or the end-bar button) starts clean.
-    LaunchedEffect(currentNum) { confirmStop = false }
+    // Every speed change restarts this, so the number stays up while you swipe
+    // and fades ~0.9s after the last movement.
+    LaunchedEffect(speedStamp) {
+        if (speedStamp != 0L) {
+            speedFlash = true
+            delay(900)
+            speedFlash = false
+        }
+    }
+    LaunchedEffect(autoPaused) {
+        if (autoScroll) {
+            pauseFlash = true
+            delay(650)
+            pauseFlash = false
+        }
+    }
 
     // Auto-scroll with a screen that times out after 30s is useless.
     DisposableEffect(autoScroll) {
@@ -347,10 +361,11 @@ fun ReaderScreen(
     // The engine. Waits for a revealed, restored chapter (canSave), takes a beat
     // (to read the hint / see the new chapter), eases up to speed over 700ms, then
     // moves the page by speed × frame time (sub-pixel safe) until the last line.
-    LaunchedEffect(autoScroll, canSave) {
-        if (!autoScroll || !canSave) return@LaunchedEffect
+    // Pausing cancels the loop; resuming restarts it with a short beat + ease-in.
+    LaunchedEffect(autoScroll, autoPaused, canSave) {
+        if (!autoScroll || autoPaused || !canSave) return@LaunchedEffect
         atChapterEnd = false
-        delay(if (autoHint) 1100L else 500L)
+        delay(if (autoHint) 1100L else 400L)
         var last = withFrameNanos { it }
         var ramp = 0f
         while (true) {
@@ -506,6 +521,7 @@ fun ReaderScreen(
                             vm.toggleBookmark(progress, chapterTitle ?: "Chapter $currentNum")
                         }
                     },
+                    onAutoScrollClick = { startAuto() },
                     settingsOpen    = showSettings,
                     onSettingsClick = { showToc = false; showSettings = !showSettings }
                 )
@@ -561,7 +577,8 @@ fun ReaderScreen(
         // Page scrolling by hand is switched off meanwhile (see ReaderContent).
         // ONE gesture handler for both jobs (two stacked detectors could fight over
         // the same touch): finger lifts before moving past the touch slop → a tap
-        // (asks "Stop auto scroll?"); moves past it → a swipe that sets the speed.
+        // (pause / resume); moves past it → a swipe that sets the speed (or, while
+        // paused, scrolls the page by hand).
         if (autoScroll) {
             Box(
                 modifier = Modifier
@@ -577,13 +594,11 @@ fun ReaderScreen(
                                 val change = event.changes.firstOrNull { it.id == down.id } ?: break
                                 if (change.isConsumed) break
                                 if (!change.pressed) {                        // finger up
-                                    if (!dragging) {
-                                        if (confirmStop) {
-                                            confirmStop = false              // tap elsewhere = keep going
-                                        } else {
-                                            autoHint    = false
-                                            confirmStop = true
-                                        }
+                                    // A tap pauses / resumes. (Not at the end-of-chapter
+                                    // step: there the bar's own buttons decide.)
+                                    if (!dragging && !atChapterEnd) {
+                                        autoHint   = false
+                                        autoPaused = !autoPaused
                                     }
                                     break
                                 }
@@ -591,15 +606,18 @@ fun ReaderScreen(
                                 if (!dragging) {
                                     moved += dy
                                     if (abs(moved) > slop) {
-                                        dragging    = true
-                                        autoHint    = false
-                                        confirmStop = false
+                                        dragging = true
+                                        autoHint = false
                                     }
-                                } else {
+                                } else if (autoPaused) {
+                                    // Paused: a swipe moves the page by hand instead.
+                                    scrollState.dispatchRawDelta(-dy)
+                                } else if (!atChapterEnd) {
                                     // Multiplicative, so it feels the same slow or fast:
                                     // one screen-height swipe ≈ ×4.5 (up = faster).
                                     val factor = exp(-dy / screenHeightPx * 1.5f)
-                                    autoSpeed = (autoSpeed * factor).coerceIn(AUTO_SPEED_MIN, AUTO_SPEED_MAX)
+                                    autoSpeed  = (autoSpeed * factor).coerceIn(AUTO_SPEED_MIN, AUTO_SPEED_MAX)
+                                    speedStamp = System.nanoTime()
                                 }
                                 if (dragging) change.consume()
                             }
@@ -622,9 +640,35 @@ fun ReaderScreen(
             }
         }
 
-        // Speed / auto-pilot / stop bar while it runs
+        // ── Big on-page feedback (middle of the screen, never interactive) ──
+        // The speed as a big number while you swipe, like a countdown…
         AnimatedVisibility(
-            visible  = autoScroll && !atChapterEnd,
+            visible  = autoScroll && speedFlash && !autoPaused && !atChapterEnd,
+            enter    = fadeIn(tween(120)) + scaleIn(tween(160, easing = Motion.EaseOut), initialScale = 0.9f),
+            exit     = fadeOut(tween(260)),
+            modifier = Modifier.align(Alignment.Center)
+        ) {
+            CompositionLocalProvider(LocalReaderHaze provides readerHaze) {
+                AutoSpeedReadout(level = speedLevel, fg = fg)
+            }
+        }
+        // …and a quick ⏸ / ▶ when a tap pauses or resumes.
+        AnimatedVisibility(
+            visible  = autoScroll && pauseFlash && !atChapterEnd,
+            enter    = fadeIn(tween(100)) + scaleIn(tween(160, easing = Motion.EaseOut), initialScale = 0.8f),
+            exit     = fadeOut(tween(220)),
+            modifier = Modifier.align(Alignment.Center)
+        ) {
+            CompositionLocalProvider(LocalReaderHaze provides readerHaze) {
+                AutoPauseFlash(paused = autoPaused, fg = fg)
+            }
+        }
+
+        // ── The one control bar for the whole auto-scroll session ─────────
+        // Pausing keeps it up (⏸ becomes ▶). At the end of a chapter the SAME bar
+        // morphs into [Auto-pilot] [Ch. N →] [✕] — nothing taller ever covers text.
+        AnimatedVisibility(
+            visible  = autoScroll,
             enter    = fadeIn(tween(220, delayMillis = 200)) +
                        slideInVertically(tween(260, delayMillis = 200, easing = Motion.EaseOut)) { it / 2 },
             exit     = fadeOut(tween(160)),
@@ -636,58 +680,22 @@ fun ReaderScreen(
             CompositionLocalProvider(LocalReaderHaze provides readerHaze) {
                 AutoScrollHud(
                     level             = speedLevel,
+                    paused            = autoPaused,
                     autoPilot         = settings.autoPilot,
+                    endMode           = atChapterEnd && hasNext,
+                    nextNum           = currentNum + 1,
+                    countdown         = { endCountdown.value },
                     fg                = fg,
                     bg                = bg,
                     accent            = accent,
                     tip               = autoPilotTip,
+                    onTogglePause     = { autoHint = false; autoPaused = !autoPaused },
                     onToggleAutoPilot = {
                         val on = !settings.autoPilot
                         vm.setAutoPilot(on)
                         autoPilotTip = if (on) AUTO_PILOT_TIP_ON else AUTO_PILOT_TIP_OFF
                     },
-                    onStop            = { stopAuto() }
-                )
-            }
-        }
-
-        // "Stop auto scroll?" — answers a screen tap. Centre of the page, so it can
-        // never sit on the speed bar / end bar; Keep going (or any tap) closes it.
-        AnimatedVisibility(
-            visible  = autoScroll && confirmStop,
-            enter    = fadeIn(tween(160)) + scaleIn(tween(200, easing = Motion.EaseOut), initialScale = 0.92f),
-            exit     = fadeOut(tween(140)),
-            modifier = Modifier.align(Alignment.Center)
-        ) {
-            CompositionLocalProvider(LocalReaderHaze provides readerHaze) {
-                AutoScrollStopConfirm(
-                    fg     = fg,
-                    accent = accent,
-                    onKeep = { confirmStop = false },
-                    onStop = { stopAuto() }
-                )
-            }
-        }
-
-        // End of chapter: confirm (or auto-pilot countdown)
-        AnimatedVisibility(
-            visible  = autoScroll && atChapterEnd && hasNext,
-            enter    = fadeIn(tween(220)) + slideInVertically(tween(280, easing = Motion.EaseOut)) { it / 2 },
-            exit     = fadeOut(tween(160)),
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .navigationBarsPadding()
-                .padding(start = 20.dp, end = 20.dp, bottom = 20.dp)
-        ) {
-            CompositionLocalProvider(LocalReaderHaze provides readerHaze) {
-                AutoScrollEndBar(
-                    nextNum           = currentNum + 1,
-                    autoPilot         = settings.autoPilot,
-                    countdown         = { endCountdown.value },
-                    fg                = fg,
-                    accent            = accent,
-                    onConfirm         = { atChapterEnd = false; vm.loadNext() },
-                    onToggleAutoPilot = { vm.setAutoPilot(!settings.autoPilot) },
+                    onOpenNext        = { atChapterEnd = false; vm.loadNext() },
                     onStop            = { stopAuto() }
                 )
             }
@@ -706,8 +714,7 @@ fun ReaderScreen(
                 onSelectSwatch    = vm::selectSwatch,
                 onDecreaseFont    = vm::decreaseFontSize,
                 onIncreaseFont    = vm::increaseFontSize,
-                onSetAlign        = vm::setTextAlign,
-                onStartAutoScroll = { startAuto() }
+                onSetAlign        = vm::setTextAlign
             )
         }
 
@@ -1323,6 +1330,7 @@ private fun ReaderHeader(
     onTextClick: () -> Unit,
     bookmarked: Boolean,
     onBookmarkClick: () -> Unit,
+    onAutoScrollClick: () -> Unit,
     settingsOpen: Boolean,
     onSettingsClick: () -> Unit
 ) {
@@ -1369,16 +1377,26 @@ private fun ReaderHeader(
                 ReaderIconButton(fg = fg, onClick = onBack) {
                     Icon(SolarIcons.ArrowLeft, "Back", tint = fg, modifier = Modifier.size(24.dp))
                 }
-                // Bookmark sits next to Settings. Gold + filled when this chapter has one.
+                // Bookmark | Auto scroll | Settings. A bookmarked page is shown as a
+                // FILLED icon in the page's own text colour (light on dark pages, dark
+                // on light ones) on a slightly stronger circle — no more yellow.
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    ReaderIconButton(fg = fg, onClick = onBookmarkClick) {
+                    ReaderIconButton(fg = fg, active = bookmarked, onClick = onBookmarkClick) {
                         Icon(
                             if (bookmarked) SolarIcons.BookmarkBold else SolarIcons.Bookmark,
                             contentDescription = if (bookmarked) "Remove bookmark" else "Bookmark this page",
-                            tint     = if (bookmarked) BookmarkGold else fg,
+                            tint     = fg,
                             modifier = Modifier
                                 .size(24.dp)
                                 .graphicsLayer { scaleX = pop.value; scaleY = pop.value }
+                        )
+                    }
+                    ReaderIconButton(fg = fg, onClick = onAutoScrollClick) {
+                        Icon(
+                            SolarIcons.ArrowDown,
+                            contentDescription = "Auto scroll",
+                            tint     = fg,
+                            modifier = Modifier.size(24.dp)
                         )
                     }
                     ReaderIconButton(fg = fg, onClick = onSettingsClick) {
@@ -1401,12 +1419,14 @@ private fun ReaderHeader(
 private fun ReaderIconButton(
     fg: Color,
     onClick: () -> Unit,
+    active: Boolean = false,
     content: @Composable () -> Unit
 ) {
     Box(
         modifier = Modifier
             .size(48.dp)
             .readerGlass(fg, CircleShape)
+            .then(if (active) Modifier.clip(CircleShape).background(fg.copy(alpha = 0.16f)) else Modifier)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center
     ) { content() }
@@ -1861,10 +1881,9 @@ private fun DraggableSettingsSheet(
     onSelectSwatch: (Int) -> Unit,
     onDecreaseFont: () -> Unit,
     onIncreaseFont: () -> Unit,
-    onSetAlign: (ReaderTextAlign) -> Unit,
-    onStartAutoScroll: () -> Unit
+    onSetAlign: (ReaderTextAlign) -> Unit
 ) {
-    ReaderSheet(accent = accent, palette = palette, haze = haze, onDismiss = onDismiss) { dismiss ->
+    ReaderSheet(accent = accent, palette = palette, haze = haze, onDismiss = onDismiss) { _ ->
         val p = LocalSheetPalette.current
 
         Text(
@@ -1944,25 +1963,20 @@ private fun DraggableSettingsSheet(
             FontSizeButton("+", onIncreaseFont)
         }
 
-        // Text alignment (left / center / right) + Auto scroll in the freed slot
+        // Text alignment — a full-width segmented control now that Auto scroll
+        // lives in the reader header (three equal cells, selected one highlighted).
         Row(
-            modifier              = Modifier.fillMaxWidth().padding(bottom = 12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment     = Alignment.CenterVertically
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 12.dp)
+                .clip(RoundedCornerShape(18.dp))
+                .background(p.chip)
+                .padding(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            Row {
-                AlignButton(SolarIcons.AlignLeft,   settings.textAlign == ReaderTextAlign.LEFT)   { onSetAlign(ReaderTextAlign.LEFT) }
-                AlignButton(SolarIcons.AlignCenter, settings.textAlign == ReaderTextAlign.CENTER) { onSetAlign(ReaderTextAlign.CENTER) }
-                AlignButton(SolarIcons.AlignRight,  settings.textAlign == ReaderTextAlign.RIGHT)  { onSetAlign(ReaderTextAlign.RIGHT) }
-            }
-            AutoScrollButton(
-                onClick = {
-                    // The sheet slides away on its own animation while auto
-                    // scroll starts behind it.
-                    onStartAutoScroll()
-                    dismiss()
-                }
-            )
+            AlignSegment(SolarIcons.AlignLeft,   settings.textAlign == ReaderTextAlign.LEFT,   Modifier.weight(1f)) { onSetAlign(ReaderTextAlign.LEFT) }
+            AlignSegment(SolarIcons.AlignCenter, settings.textAlign == ReaderTextAlign.CENTER, Modifier.weight(1f)) { onSetAlign(ReaderTextAlign.CENTER) }
+            AlignSegment(SolarIcons.AlignRight,  settings.textAlign == ReaderTextAlign.RIGHT,  Modifier.weight(1f)) { onSetAlign(ReaderTextAlign.RIGHT) }
         }
     }
 }
@@ -1983,38 +1997,24 @@ private fun FontSizeButton(label: String, onClick: () -> Unit) {
 }
 
 @Composable
-private fun AlignButton(
+private fun AlignSegment(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     selected: Boolean,
+    modifier: Modifier,
     onClick: () -> Unit
 ) {
     val p = LocalSheetPalette.current
-    IconButton(onClick = onClick) {
-        Icon(icon, contentDescription = null,
-            tint = if (selected) p.ink else p.ink.copy(alpha = 0.30f))
-    }
-}
-
-@Composable
-private fun AutoScrollButton(onClick: () -> Unit) {
-    val p = LocalSheetPalette.current
-    Row(
-        modifier = Modifier
-            .clip(RoundedCornerShape(50))
-            .background(p.chipStrong)
-            .clickable(onClickLabel = "Start auto scroll", onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 11.dp),
-        verticalAlignment = Alignment.CenterVertically
+    Box(
+        modifier = modifier
+            .height(44.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(if (selected) p.chipStrong else Color.Transparent)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
     ) {
-        Icon(SolarIcons.ArrowDown, contentDescription = null, tint = p.ink, modifier = Modifier.size(18.dp))
-        Spacer(Modifier.width(7.dp))
-        Text(
-            "Auto scroll",
-            fontFamily = MontserratFamily,
-            fontWeight = FontWeight.Bold,
-            fontSize   = 13.sp,
-            color      = p.ink
-        )
+        Icon(icon, contentDescription = null,
+            tint = if (selected) p.ink else p.ink.copy(alpha = 0.35f),
+            modifier = Modifier.size(22.dp))
     }
 }
 
