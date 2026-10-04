@@ -7,6 +7,7 @@ import com.noven.ncrawler.NCrawlerApp
 import com.noven.ncrawler.data.db.DownloadProgress
 import com.noven.ncrawler.data.db.NovelEntity
 import com.noven.ncrawler.data.db.ReadingProgress
+import com.noven.ncrawler.data.db.newChapterCount
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
@@ -15,6 +16,9 @@ data class LibraryItem(
     val readingProgress: ReadingProgress?,
     val downloadProgress: DownloadProgress?
 )
+
+// A novel with unread new chapters (favourite or downloaded).
+data class UpdateItem(val novel: NovelEntity, val newCount: Int)
 
 class LibraryViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -37,6 +41,32 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
         started       = SharingStarted.WhileSubscribed(5000),
         initialValue  = emptyList()
     )
+
+    val updates: StateFlow<List<UpdateItem>> = repo.updatesFlow()
+        .map { list -> list.map { UpdateItem(it, it.newChapterCount()) } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // Pull-to-refresh: checks every favourite / downloaded novel for new chapters.
+    private val _refreshing = MutableStateFlow(false)
+    val refreshing: StateFlow<Boolean> = _refreshing.asStateFlow()
+
+    private val _refreshFailed = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val refreshFailed: SharedFlow<Unit> = _refreshFailed.asSharedFlow()
+
+    fun checkForUpdates() {
+        if (_refreshing.value) return
+        viewModelScope.launch {
+            _refreshing.value = true
+            try {
+                // Skip novels checked in the last 10 minutes (the background job just ran, say).
+                repo.checkAllForUpdates(minIntervalMs = 10 * 60 * 1000L)
+            } catch (e: Exception) {
+                _refreshFailed.tryEmit(Unit)
+            } finally {
+                _refreshing.value = false
+            }
+        }
+    }
 
     fun removeFromLibrary(slug: String) {
         viewModelScope.launch {

@@ -7,6 +7,7 @@ import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import com.noven.ncrawler.data.db.*
 import com.noven.ncrawler.data.local.DownloadPreferences
+import com.noven.ncrawler.data.local.UpdateCheckStore
 import com.noven.ncrawler.data.scraper.ChapterLink
 import com.noven.ncrawler.data.scraper.HomeSection
 import com.noven.ncrawler.data.scraper.NovelSource
@@ -16,6 +17,7 @@ import com.noven.ncrawler.data.worker.ChapterDownloadWorker
 import com.noven.ncrawler.data.worker.TxtExportWorker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.Flow
@@ -51,6 +53,7 @@ class NovelRepository(
     private val TAG = "NCrawler_Repo"
     private val PER_SOURCE_LIMIT = 20
     private val SOURCE_TIMEOUT_MS = 20_000L
+    private val UPDATE_CHECK_GAP_MS = 1_500L
 
     private val novelDao            = db.novelDao()
     private val chapterDao          = db.chapterDao()
@@ -60,6 +63,7 @@ class NovelRepository(
     private val workManager         = WorkManager.getInstance(context)
 
     private val sourcePrefs   = SourcePreferences(context)
+    private val updateChecks  = UpdateCheckStore(context)
 
     // CHANGE (Downloads overhaul): same pattern as sourcePrefs above.
     private val downloadPrefs = DownloadPreferences(context)
@@ -105,7 +109,11 @@ class NovelRepository(
             latestChapter = fresh.latestChapter.ifBlank { old.latestChapter },
             author        = fresh.author.ifBlank { old.author },
             chapterUrls   = fresh.chapterUrls.ifBlank { old.chapterUrls },
-            isInLibrary   = old.isInLibrary
+            isInLibrary   = old.isInLibrary,
+            // @Upsert replaces the whole row — carry the pending-update range over
+            newFromChapter = old.newFromChapter,
+            newToChapter   = old.newToChapter,
+            updateFoundAt  = old.updateFoundAt
         )
     }
 
@@ -618,34 +626,97 @@ class NovelRepository(
     fun downloadPreferences(): DownloadPreferences = downloadPrefs
 
     // ── Check for new chapters ────────────────────────────────────────────────
-    // FIX: "new" used to mean "every chapter not on disk", so after "Last 50"
-    // an update check reported (and queued) the whole rest of the novel. It now
-    // means chapters newer than the list we already knew about, and they are
-    // only auto-downloaded when the user already has a download for this novel.
-    suspend fun checkForUpdates(slug: String): Int {
+    // CHANGE (updates): a check no longer downloads anything. "New" = chapters newer
+    // than the list we already knew about. The range is stored on the novel row
+    // (newFrom/newTo) and shown as NEW badges + a "download new ch." bubble; the
+    // user decides whether to download. A later check only widens the range.
+    data class UpdateCheckResult(
+        val pending: Int,      // chapters in the unread new range (0 = none)
+        val grew: Boolean      // true when THIS check found chapters not seen before
+    )
+
+    suspend fun checkForUpdates(slug: String): Int = checkForUpdatesDetailed(slug).pending
+
+    suspend fun checkForUpdatesDetailed(slug: String): UpdateCheckResult {
         val (source, realSlug) = sourceFor(slug)
 
-        val previousMax = novelDao.getBySlug(slug)?.chapterUrls
+        val old = novelDao.getBySlug(slug)
+        val previousMax = old?.chapterUrls
             ?.takeIf { it.isNotBlank() }
             ?.let { raw -> parseChapterUrls(raw).maxOfOrNull { it.num } }
 
-        val result = source.fetchDetail(realSlug) ?: return 0
+        val result = source.fetchDetail(realSlug)
+            ?: return UpdateCheckResult(old?.newChapterCount() ?: 0, false)
         val (fresh, chapters) = result
-        saveNovel(rewrapSlug(fresh, source.id))
+        val saved = saveNovel(rewrapSlug(fresh, source.id))
+        updateChecks.markChecked(slug)
 
         // No earlier chapter list to compare against — nothing can be "new".
-        if (previousMax == null) return 0
+        if (previousMax == null) return UpdateCheckResult(saved.newChapterCount(), false)
 
         val newChapters = chapters.filter { it.num > previousMax }
         Log.d(TAG, "Update check $slug: ${chapters.size} total, previous newest $previousMax, ${newChapters.size} new")
-        if (newChapters.isEmpty()) return 0
+        if (newChapters.isEmpty()) return UpdateCheckResult(saved.newChapterCount(), false)
 
-        if (downloadProgressDao.get(slug) != null) {
-            val have  = chapterDao.downloadedChapterNums(slug).toSet()
-            val toGet = newChapters.filter { it.num !in have }
-            if (toGet.isNotEmpty()) queueDownloadRange(slug, toGet.minOf { it.num }, toGet.maxOf { it.num })
+        // Only novels the user keeps (favourite or downloaded) carry an update flag.
+        val tracked = saved.isInLibrary || downloadProgressDao.get(slug) != null
+        if (!tracked) return UpdateCheckResult(newChapters.size, false)
+
+        val prevTo = old?.newToChapter ?: 0
+        val from = if (prevTo > 0) minOf(old!!.newFromChapter, newChapters.minOf { it.num })
+                   else newChapters.minOf { it.num }
+        val to   = maxOf(prevTo, newChapters.maxOf { it.num })
+        novelDao.setUpdate(slug, from, to, System.currentTimeMillis())
+        return UpdateCheckResult(to - from + 1, grew = true)
+    }
+
+    /**
+     * Checks every favourite / downloaded novel, one at a time with a pause between
+     * (kind to the sources). Novels checked within [minIntervalMs] are skipped, and
+     * novels marked Completed are not polled. Returns the novels that gained new
+     * chapters during THIS run (so a notification isn't repeated for old news).
+     */
+    suspend fun checkAllForUpdates(minIntervalMs: Long): List<NovelEntity> = withContext(Dispatchers.IO) {
+        val grown = ArrayList<NovelEntity>()
+        var first = true
+        for (n in novelDao.trackedNovels()) {
+            if (n.status.contains("complet", ignoreCase = true)) continue
+            if (System.currentTimeMillis() - updateChecks.lastChecked(n.slug) < minIntervalMs) continue
+            if (!first) delay(UPDATE_CHECK_GAP_MS)
+            first = false
+            try {
+                if (checkForUpdatesDetailed(n.slug).grew) {
+                    novelDao.getBySlug(n.slug)?.let { grown.add(it) }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "Update check failed for ${n.slug}: ${e.message}")
+            }
         }
-        return newChapters.size
+        grown
+    }
+
+    fun novelFlow(slug: String): Flow<NovelEntity?> = novelDao.observeBySlug(slug)
+    fun updatesFlow(): Flow<List<NovelEntity>> = novelDao.updatesFlow()
+
+    /** "Seen it" — drops the NEW badges and removes the novel from Library > Updates. */
+    suspend fun clearUpdate(slug: String) = novelDao.clearUpdate(slug)
+
+    /**
+     * Queues the pending new chapters that aren't on disk yet. Returns how many were
+     * queued (0 = nothing to download). The update flag stays until the user reads
+     * them or dismisses it, so the NEW badges keep showing.
+     */
+    suspend fun downloadNewChapters(slug: String): Int {
+        val novel = novelDao.getBySlug(slug) ?: return 0
+        if (novel.newToChapter <= 0) return 0
+        val inList = getChapterList(slug).map { it.num }.toSet()
+        val have   = chapterDao.downloadedChapterNums(slug).toSet()
+        val toGet  = (novel.newFromChapter..novel.newToChapter).filter { it in inList && it !in have }
+        if (toGet.isEmpty()) return 0
+        queueDownloadChapters(slug, toGet.toSet())
+        return toGet.size
     }
 
     // ── Library ───────────────────────────────────────────────────────────────
@@ -663,6 +734,8 @@ class NovelRepository(
 
     // ── Reading progress ──────────────────────────────────────────────────────
     suspend fun saveReadingProgress(slug: String, chapterNum: Int, chapterTitle: String, scrollPos: Int = 0) {
+        // Reached the newest "new" chapter → the update has been seen.
+        novelDao.clearUpdateIfRead(slug, chapterNum)
         readingProgressDao.upsert(
             ReadingProgress(
                 novelSlug        = slug,

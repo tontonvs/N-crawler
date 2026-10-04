@@ -35,6 +35,11 @@ private const val REFRESH_SKELETON_MIN_MS = 1600L
 // Gap between the heart animation starting and the "Added to favourites" notice.
 private const val HEART_NOTICE_DELAY_MS   = 700L
 
+// CHANGE (updates): the unread new-chapter range found by an update check (inclusive).
+data class NewRange(val from: Int, val to: Int) {
+    val size: Int get() = to - from + 1
+}
+
 // "Downloading <novel>" banner on the Detail screen. `id` makes every tap a new
 // event, so tapping again re-shows the banner even if the title is the same.
 data class DownloadNotice(val novelTitle: String, val id: Long)
@@ -70,6 +75,11 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _downloadNotice = MutableStateFlow<DownloadNotice?>(null)
     val downloadNotice: StateFlow<DownloadNotice?> = _downloadNotice.asStateFlow()
+
+    // Pending new chapters for this novel (null = none). Fed by the novel row, so a
+    // background check, a refresh, reading and dismissing all update it live.
+    private val _newRange = MutableStateFlow<NewRange?>(null)
+    val newRange: StateFlow<NewRange?> = _newRange.asStateFlow()
 
     private val _updateMessage = MutableStateFlow<String?>(null)
     val updateMessage: StateFlow<String?> = _updateMessage.asStateFlow()
@@ -142,6 +152,15 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
 
         viewModelScope.launch {
             repo.isInLibraryFlow(slug).collect { _inLibrary.value = it }
+        }
+
+        viewModelScope.launch {
+            repo.novelFlow(slug).collect { n ->
+                _newRange.value =
+                    if (n != null && n.newToChapter > 0 && n.newToChapter >= n.newFromChapter)
+                        NewRange(n.newFromChapter, n.newToChapter)
+                    else null
+            }
         }
 
         // The table changes on every saved chapter (several a second while
@@ -266,6 +285,26 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // The speech bubble: download the new chapters that aren't on disk yet.
+    fun downloadNewChapters() {
+        viewModelScope.launch {
+            try {
+                val queued = repo.downloadNewChapters(currentSlug)
+                if (queued == 0) {
+                    _updateMessage.value = "New chapters are already downloaded"
+                } else {
+                    announceDownload()
+                    _updateMessage.value = "Queued $queued new chapter${if (queued == 1) "" else "s"}"
+                }
+            } catch (e: Exception) { _updateMessage.value = "Couldn't start download" }
+        }
+    }
+
+    // "Got it": removes the NEW badges and takes the novel out of Library > Updates.
+    fun dismissUpdate() {
+        viewModelScope.launch { repo.clearUpdate(currentSlug) }
+    }
+
     fun cancelDownload() {
         viewModelScope.launch {
             repo.cancelDownload(currentSlug)
@@ -291,11 +330,9 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
                 (_state.value as? DetailUiState.Success)?.let {
                     _state.value = it.copy(novel = novel ?: it.novel, chapters = chapters)
                 }
-                message = when {
-                    newCount <= 0                   -> "Already up to date"
-                    _downloadProgress.value != null -> "$newCount new · downloading"
-                    else                            -> "$newCount new chapters"
-                }
+                // Nothing is downloaded automatically any more — the bubble offers it.
+                message = if (newCount <= 0) "Already up to date"
+                          else "$newCount new chapter${if (newCount == 1) "" else "s"}"
             } catch (e: Exception) {
                 message = "Couldn't check updates"
             }

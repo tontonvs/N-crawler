@@ -32,6 +32,12 @@ import com.noven.ncrawler.ui.components.staggerIn
 import com.noven.ncrawler.ui.theme.MontserratFamily
 import com.noven.ncrawler.viewmodel.LibraryItem
 import com.noven.ncrawler.viewmodel.LibraryViewModel
+import com.noven.ncrawler.viewmodel.UpdateItem
+import com.noven.ncrawler.ui.components.AppPullToRefresh
+import com.noven.ncrawler.ui.components.BookmarkGold
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -41,6 +47,8 @@ fun LibraryScreen(
     vm: LibraryViewModel = viewModel()
 ) {
     val items by vm.libraryItems.collectAsStateWithLifecycle()
+    val updates by vm.updates.collectAsStateWithLifecycle()
+    val refreshing by vm.refreshing.collectAsStateWithLifecycle()
 
     // FIX: header used the stock Material bar + default font; now matches the
     // Discover/Settings look (Montserrat, background-coloured bar).
@@ -62,28 +70,130 @@ fun LibraryScreen(
             )
         }
     ) { padding ->
-        if (items.isEmpty()) {
+        if (items.isEmpty() && updates.isEmpty()) {
             LibraryEmptyState(modifier = Modifier.padding(padding))
         } else {
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding),
-                // 120dp bottom so the last card clears the floating nav (was 16dp).
-                contentPadding = PaddingValues(start = 16.dp, top = 8.dp, end = 16.dp, bottom = 120.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+            // Pull down to check every favourite / downloaded novel for new chapters.
+            AppPullToRefresh(
+                isRefreshing = refreshing,
+                onRefresh    = vm::checkForUpdates,
+                failures     = vm.refreshFailed,
+                modifier     = Modifier.fillMaxSize().padding(padding)
             ) {
-                // CHANGE (motion): cards stack in (first screenful, once).
-                itemsIndexed(items, key = { _, it -> it.novel.slug }) { index, item ->
-                    LibraryCard(
-                        modifier = Modifier.staggerIn(index),
-                        item     = item,
-                        onClick  = { onNovelClick(item.novel.slug) },
-                        onContinue = {
-                            val chapter = item.readingProgress?.lastChapterNum ?: 1
-                            onContinueReading(item.novel.slug, chapter)
-                        },
-                        onRemove = { vm.removeFromLibrary(item.novel.slug) }
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    // 120dp bottom so the last card clears the floating nav (was 16dp).
+                    contentPadding = PaddingValues(start = 16.dp, top = 8.dp, end = 16.dp, bottom = 120.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    // CHANGE (updates): novels with unread new chapters, newest find first.
+                    if (updates.isNotEmpty()) {
+                        item(key = "updates-section") {
+                            UpdatesSection(updates = updates, onNovelClick = onNovelClick)
+                        }
+                    }
+                    if (items.isNotEmpty() && updates.isNotEmpty()) {
+                        item(key = "favourites-header") {
+                            Text(
+                                "Favourites",
+                                modifier   = Modifier.padding(top = 4.dp),
+                                fontFamily = MontserratFamily,
+                                fontWeight = FontWeight.Bold,
+                                fontSize   = 18.sp
+                            )
+                        }
+                    }
+                    // CHANGE (motion): cards stack in (first screenful, once).
+                    itemsIndexed(items, key = { _, it -> it.novel.slug }) { index, item ->
+                        LibraryCard(
+                            modifier = Modifier.staggerIn(index),
+                            item     = item,
+                            onClick  = { onNovelClick(item.novel.slug) },
+                            onContinue = {
+                                val chapter = item.readingProgress?.lastChapterNum ?: 1
+                                onContinueReading(item.novel.slug, chapter)
+                            },
+                            onRemove = { vm.removeFromLibrary(item.novel.slug) }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── Updates section ───────────────────────────────────────────────────────────
+// A horizontal strip of covers, each with a gold "+N new" tag. Tapping opens the
+// Detail screen, where the new chapters carry NEW badges and the download bubble.
+@Composable
+private fun UpdatesSection(updates: List<UpdateItem>, onNovelClick: (String) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                "New chapters",
+                fontFamily = MontserratFamily,
+                fontWeight = FontWeight.Bold,
+                fontSize   = 18.sp
+            )
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(BookmarkGold)
+                    .padding(horizontal = 7.dp, vertical = 2.dp)
+            ) {
+                Text(
+                    "${updates.size}",
+                    color      = Color(0xFF1B1405),
+                    fontFamily = MontserratFamily,
+                    fontWeight = FontWeight.ExtraBold,
+                    fontSize   = 11.sp
+                )
+            }
+        }
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            items(updates, key = { it.novel.slug }) { u ->
+                Column(
+                    modifier = Modifier
+                        .width(112.dp)
+                        .clickable { onNovelClick(u.novel.slug) },
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(156.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                    ) {
+                        CoverImage(
+                            url                = u.novel.coverUrl,
+                            contentDescription = u.novel.title,
+                            modifier           = Modifier.fillMaxSize()
+                        )
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(6.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(BookmarkGold)
+                                .padding(horizontal = 7.dp, vertical = 3.dp)
+                        ) {
+                            Text(
+                                "+${u.newCount} new",
+                                color      = Color(0xFF1B1405),
+                                fontFamily = MontserratFamily,
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize   = 11.sp
+                            )
+                        }
+                    }
+                    Text(
+                        u.novel.title,
+                        fontFamily = MontserratFamily,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize   = 12.sp,
+                        maxLines   = 2,
+                        overflow   = TextOverflow.Ellipsis
                     )
                 }
             }

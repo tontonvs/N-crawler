@@ -21,5 +21,15 @@ data class NovelEntity(
     val cachedAt: Long = System.currentTimeMillis(),
     // CHANGE (Detail redesign): shown in the meta row where "Latest" used to be.
     // Defaulted so every existing NovelEntity(...) call keeps compiling.
-    val author: String = ""
+    val author: String = "",
+    // CHANGE (updates): the range of chapters found by an update check that the user
+    // hasn't read through / dismissed yet. 0/0 = nothing new. Kept on the novel row so
+    // Library, Detail and the notification all read one source of truth.
+    val newFromChapter: Int = 0,
+    val newToChapter: Int = 0,
+    val updateFoundAt: Long = 0L
 )
+
+/** How many chapters the pending update covers (0 when there is none). */
+fun NovelEntity.newChapterCount(): Int =
+    if (newToChapter > 0 && newToChapter >= newFromChapter) newToChapter - newFromChapter + 1 else 0

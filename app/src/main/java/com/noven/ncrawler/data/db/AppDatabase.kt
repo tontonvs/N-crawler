@@ -15,7 +15,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ReadingProgress::class,
         ReaderBookmark::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -50,6 +50,17 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        // 5 -> 6: pending new-chapter range on novels. A real migration (the destructive
+        // fallback would wipe downloads). Same pattern as `author`: DEFAULT 0 in SQL,
+        // `= 0` on the entity, so Room's schema check matches.
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE novels ADD COLUMN newFromChapter INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE novels ADD COLUMN newToChapter INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE novels ADD COLUMN updateFoundAt INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         fun get(context: Context): AppDatabase =
             INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -57,7 +68,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "ncrawler.db"
                 )
-                .addMigrations(MIGRATION_3_4, MIGRATION_4_5)
+                .addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                 .fallbackToDestructiveMigration()
                 .build()
                 .also { INSTANCE = it }

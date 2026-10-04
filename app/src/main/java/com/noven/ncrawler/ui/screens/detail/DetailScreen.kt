@@ -90,6 +90,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import com.noven.ncrawler.ui.components.FavouritePink
+import com.noven.ncrawler.ui.components.BookmarkGold
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Schedule
@@ -157,6 +158,9 @@ import com.noven.ncrawler.ui.components.pressable
 import com.noven.ncrawler.ui.theme.MontserratFamily
 import com.noven.ncrawler.ui.theme.StarGold
 import com.noven.ncrawler.viewmodel.DetailUiState
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.shape.GenericShape
+import androidx.compose.ui.graphics.TransformOrigin
 import com.noven.ncrawler.viewmodel.DetailViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -700,10 +704,96 @@ private fun MetaSeparator() {
     )
 }
 
+// ── New-chapter pill + "download new ch." speech bubble ───────────────────────
+
+// Small filled "NEW" tag on every chapter in the unread new range.
+@Composable
+private fun NewPill() {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(BookmarkGold)
+            .padding(horizontal = 6.dp, vertical = 2.dp),
+    ) {
+        Text(
+            text       = "NEW",
+            color      = Color(0xFF1B1405),
+            fontFamily = MontserratFamily,
+            fontSize   = 10.sp,
+            fontWeight = FontWeight.ExtraBold,
+            letterSpacing = 0.6.sp,
+        )
+    }
+}
+
+private val BubbleTail: Shape = GenericShape { size, _ ->
+    moveTo(0f, size.height)
+    lineTo(size.width / 2f, 0f)
+    lineTo(size.width, size.height)
+    close()
+}
+
+// Cartoon speech bubble hanging under the download button. A gentle bob keeps it
+// noticeable without being loud. Tapping the body runs [onTap]; the ✕ dismisses.
+@Composable
+private fun NewChaptersBubble(
+    label: String,
+    onTap: () -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val bob by rememberInfiniteTransition(label = "bubbleBob").animateFloat(
+        initialValue  = 0f,
+        targetValue   = 1f,
+        animationSpec = infiniteRepeatable(tween(1100, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+        label         = "bob",
+    )
+    val ink = Color(0xFF14161A)
+    Column(
+        modifier            = modifier.graphicsLayer { translationY = bob * 4.dp.toPx() },
+        horizontalAlignment = Alignment.End,
+    ) {
+        // Tail points up at the download button (its centre is 24dp from the bubble's right edge).
+        Box(
+            Modifier
+                .padding(end = 16.dp)
+                .size(width = 16.dp, height = 9.dp)
+                .background(Color.White, BubbleTail)
+        )
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(18.dp))
+                .background(Color.White)
+                .clickable(onClick = onTap)
+                .padding(start = 14.dp, top = 7.dp, bottom = 7.dp, end = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text       = label,
+                color      = ink,
+                fontFamily = MontserratFamily,
+                fontSize   = 13.sp,
+                fontWeight = FontWeight.ExtraBold,
+            )
+            Spacer(Modifier.width(8.dp))
+            Box(
+                modifier = Modifier
+                    .size(24.dp)
+                    .clip(CircleShape)
+                    .background(ink.copy(alpha = 0.08f))
+                    .clickable(onClick = onDismiss),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("✕", color = ink.copy(alpha = 0.6f), fontSize = 11.sp)
+            }
+        }
+    }
+}
+
 // ── Chapter row ───────────────────────────────────────────────────────────────
 
 @Composable
-private fun ChapterRow(chapter: ChapterLink, accent: Color, onClick: () -> Unit) {
+private fun ChapterRow(chapter: ChapterLink, accent: Color, onClick: () -> Unit, isNew: Boolean = false) {
     Row(
         modifier          = Modifier
             .fillMaxWidth()
@@ -727,6 +817,10 @@ private fun ChapterRow(chapter: ChapterLink, accent: Color, onClick: () -> Unit)
             overflow   = TextOverflow.Ellipsis,
             modifier   = Modifier.weight(1f),
         )
+        if (isNew) {
+            Spacer(Modifier.width(8.dp))
+            NewPill()
+        }
         Spacer(Modifier.width(8.dp))
         Text(
             text       = "Ch.${chapter.num}",
@@ -1305,6 +1399,8 @@ fun DetailScreen(
     val updateMessage   by vm.updateMessage.collectAsStateWithLifecycle()
     val refreshing      by vm.refreshing.collectAsStateWithLifecycle()
     val downloadNotice  by vm.downloadNotice.collectAsStateWithLifecycle()
+    val newRange        by vm.newRange.collectAsStateWithLifecycle()
+    val downloadedNums  by vm.downloadedNums.collectAsStateWithLifecycle()
 
     // CHANGE (partial downloads): only non-null once the novel and its
     // chapter list have actually loaded — the download-options sheet needs
@@ -1400,6 +1496,8 @@ fun DetailScreen(
                     chapters        = s.chapters,
                     chaptersLoading = s.chaptersLoading,
                     lastReadChapter = s.lastReadChapter,
+                    newFrom         = newRange?.from ?: 0,
+                    newTo           = newRange?.to ?: 0,
                     bgTop          = bgTop,
                     accent         = accent,
                     onReadChapter  = onReadChapter,
@@ -1492,6 +1590,35 @@ fun DetailScreen(
         }
         }
 
+        // "Download N new ch." speech bubble under the download button. With a download
+        // it shows while some new chapters are still missing from the device; without
+        // one it just tells you how many are new (tap = dismiss).
+        val range = newRange
+        val hasDownload = downloadProgress != null
+        val missingNew = remember(range, successState?.chapters, downloadedNums) {
+            if (range == null) 0
+            else successState?.chapters?.count { it.num in range.from..range.to && it.num !in downloadedNums } ?: 0
+        }
+        val showBubble = range != null && successState != null && !refreshing && !showDownloadSheet &&
+            (if (hasDownload) missingNew > 0 else true)
+        AnimatedVisibility(
+            visible  = showBubble,
+            enter    = fadeIn(tween(220)) + scaleIn(initialScale = 0.8f, transformOrigin = TransformOrigin(1f, 0f)),
+            exit     = fadeOut(tween(150)),
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .statusBarsPadding()
+                // below the 56dp button row; right edge lines up with the download button
+                .padding(top = 58.dp, end = 124.dp),
+        ) {
+            val n = range?.size ?: 0
+            NewChaptersBubble(
+                label     = if (hasDownload) "Download $missingNew new ch." else "$n new ch.",
+                onTap     = if (hasDownload) vm::downloadNewChapters else vm::dismissUpdate,
+                onDismiss = vm::dismissUpdate,
+            )
+        }
+
         // Big heart pop in the middle of the screen when a novel is favourited.
         HeartBurst(
             trigger  = heartBurst,
@@ -1548,6 +1675,8 @@ private fun CinematicDetail(
     chapters: List<ChapterLink>,
     chaptersLoading: Boolean,
     lastReadChapter: Int?,
+    newFrom: Int,
+    newTo: Int,
     bgTop: Color,
     accent: Color,
     onReadChapter: (Int) -> Unit,
@@ -1835,13 +1964,32 @@ private fun CinematicDetail(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment     = Alignment.CenterVertically,
                         ) {
-                            Text(
-                                text       = "Chapters",
-                                color      = Color.White,
-                                fontFamily = MontserratFamily,
-                                fontSize   = 18.sp,
-                                fontWeight = FontWeight.Bold,
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text       = "Chapters",
+                                    color      = Color.White,
+                                    fontFamily = MontserratFamily,
+                                    fontSize   = 18.sp,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                                if (newTo > 0) {
+                                    Spacer(Modifier.width(8.dp))
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(BookmarkGold)
+                                            .padding(horizontal = 7.dp, vertical = 2.dp),
+                                    ) {
+                                        Text(
+                                            text       = "${newTo - newFrom + 1} new",
+                                            color      = Color(0xFF1B1405),
+                                            fontFamily = MontserratFamily,
+                                            fontSize   = 11.sp,
+                                            fontWeight = FontWeight.ExtraBold,
+                                        )
+                                    }
+                                }
+                            }
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
                                     text       = if (chaptersLoading && chapters.isEmpty())
@@ -1889,6 +2037,7 @@ private fun CinematicDetail(
                             chapter = chapter,
                             accent  = accent,
                             onClick = { onReadChapter(chapter.num) },
+                            isNew   = newTo > 0 && chapter.num in newFrom..newTo,
                         )
                     }
                 }

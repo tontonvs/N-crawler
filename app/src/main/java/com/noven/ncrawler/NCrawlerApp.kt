@@ -11,6 +11,7 @@ import androidx.work.Configuration
 import com.noven.ncrawler.data.db.AppDatabase
 import com.noven.ncrawler.data.local.ForegroundBudget
 import com.noven.ncrawler.data.repository.NovelRepository
+import com.noven.ncrawler.data.worker.UpdateCheckWorker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -27,6 +28,9 @@ class NCrawlerApp : Application(), Configuration.Provider {
         // first setForeground() call, so it's created here at app startup
         // rather than lazily inside the worker.
         const val DOWNLOAD_CHANNEL_ID = "chapter_downloads"
+
+        // CHANGE (updates): "new chapters available" notifications from UpdateCheckWorker.
+        const val UPDATES_CHANNEL_ID = "chapter_updates"
     }
 
     // CHANGE (download fix): app-lifetime scope for launch-time housekeeping.
@@ -36,6 +40,9 @@ class NCrawlerApp : Application(), Configuration.Provider {
     override fun onCreate() {
         super.onCreate()
         createDownloadNotificationChannel()
+        createUpdatesNotificationChannel()
+        // Twice-daily background check for new chapters (KEEP: no-op if already scheduled).
+        UpdateCheckWorker.schedule(this)
 
         // CHANGE (Android 15): the system restarts its 6-hour dataSync timer when
         // the user brings the app to the foreground, so our own ledger does too.
@@ -77,6 +84,19 @@ class NCrawlerApp : Application(), Configuration.Provider {
             }
             val manager = getSystemService(NotificationManager::class.java)
             manager.createNotificationChannel(channel)
+        }
+    }
+
+    private fun createUpdatesNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                UPDATES_CHANNEL_ID,
+                "New chapters",
+                NotificationManager.IMPORTANCE_DEFAULT
+            ).apply {
+                description = "Tells you when favourites or downloaded novels get new chapters"
+            }
+            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
     }
 

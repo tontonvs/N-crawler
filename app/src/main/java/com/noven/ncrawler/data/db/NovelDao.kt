@@ -43,6 +43,39 @@ interface NovelDao {
     """)
     suspend fun searchLocal(q: String): List<NovelEntity>
 
+    // ── Updates (new chapters) ───────────────────────────────────────────
+    @Query("SELECT * FROM novels WHERE slug = :slug LIMIT 1")
+    fun observeBySlug(slug: String): Flow<NovelEntity?>
+
+    // Novels worth checking: favourites plus anything with a download.
+    @Query("""
+        SELECT * FROM novels
+        WHERE isInLibrary = 1 OR slug IN (SELECT novelSlug FROM download_progress)
+    """)
+    suspend fun trackedNovels(): List<NovelEntity>
+
+    // Library "Updates" section: tracked novels with an unread new-chapter range.
+    @Query("""
+        SELECT * FROM novels
+        WHERE newToChapter > 0
+          AND (isInLibrary = 1 OR slug IN (SELECT novelSlug FROM download_progress))
+        ORDER BY updateFoundAt DESC
+    """)
+    fun updatesFlow(): Flow<List<NovelEntity>>
+
+    @Query("UPDATE novels SET newFromChapter = :from, newToChapter = :to, updateFoundAt = :at WHERE slug = :slug")
+    suspend fun setUpdate(slug: String, from: Int, to: Int, at: Long)
+
+    @Query("UPDATE novels SET newFromChapter = 0, newToChapter = 0, updateFoundAt = 0 WHERE slug = :slug")
+    suspend fun clearUpdate(slug: String)
+
+    // Reading up to (or past) the newest new chapter counts as "seen".
+    @Query("""
+        UPDATE novels SET newFromChapter = 0, newToChapter = 0, updateFoundAt = 0
+        WHERE slug = :slug AND newToChapter > 0 AND newToChapter <= :readChapter
+    """)
+    suspend fun clearUpdateIfRead(slug: String, readChapter: Int)
+
     // ── Library ──────────────────────────────────────────────────────────
     @Query("UPDATE novels SET isInLibrary = :inLibrary WHERE slug = :slug")
     suspend fun setLibrary(slug: String, inLibrary: Boolean)
