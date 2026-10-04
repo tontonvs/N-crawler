@@ -5,7 +5,8 @@ import android.content.Context
 // Persists reader reading-experience settings across app restarts. Colors
 // themselves are NOT stored here (they're derived per-novel from its cover
 // at read time) — only which swatch slot (0-4) the user last picked, plus
-// the generic settings (font size, line height, alignment, brightness).
+// the generic settings (font size, line height, alignment, brightness) and
+// the auto-scroll preferences (speed + auto-pilot).
 class ReaderPrefsStore(context: Context) {
 
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -16,12 +17,19 @@ class ReaderPrefsStore(context: Context) {
     fun getBrightness(default: Float): Float = prefs.getFloat(KEY_BRIGHTNESS, default)
     fun getSwatchIndex(default: Int): Int = prefs.getInt(KEY_SWATCH, default)
 
+    // Auto-scroll: speed in dp per second, and whether the next chapter opens
+    // by itself (auto-pilot) when the end of a chapter is reached.
+    fun getAutoSpeed(default: Float): Float = prefs.getFloat(KEY_AUTO_SPEED, default)
+    fun getAutoPilot(default: Boolean): Boolean = prefs.getBoolean(KEY_AUTO_PILOT, default)
+
     fun save(
         fontSize: Float,
         lineHeight: Float,
         textAlignOrdinal: Int,
         brightness: Float,
-        swatchIndex: Int
+        swatchIndex: Int,
+        autoSpeed: Float,
+        autoPilot: Boolean
     ) {
         prefs.edit()
             .putFloat(KEY_FONT_SIZE, fontSize)
@@ -29,6 +37,8 @@ class ReaderPrefsStore(context: Context) {
             .putInt(KEY_TEXT_ALIGN, textAlignOrdinal)
             .putFloat(KEY_BRIGHTNESS, brightness)
             .putInt(KEY_SWATCH, swatchIndex)
+            .putFloat(KEY_AUTO_SPEED, autoSpeed)
+            .putBoolean(KEY_AUTO_PILOT, autoPilot)
             .apply()
     }
 
@@ -39,5 +49,7 @@ class ReaderPrefsStore(context: Context) {
         private const val KEY_TEXT_ALIGN  = "text_align"
         private const val KEY_BRIGHTNESS  = "brightness"
         private const val KEY_SWATCH      = "swatch_index"
+        private const val KEY_AUTO_SPEED  = "auto_speed"
+        private const val KEY_AUTO_PILOT  = "auto_pilot"
     }
 }

@@ -42,16 +42,32 @@ sealed interface ReaderUiState {
     data class Success(val chapter: ChapterEntity) : ReaderUiState
 }
 
-// Mirrors the mockup's 4 left/center/right/justify options exactly (not
-// Start/End, which would be RTL-relative — the mockup is literal L/C/R/J).
-enum class ReaderTextAlign { LEFT, CENTER, RIGHT, JUSTIFY }
+// Left / center / right (literal, not Start/End which would be RTL-relative).
+// JUSTIFY was removed — its slot in the settings sheet is now Auto scroll. A
+// saved "justify" (ordinal 3) falls back to LEFT via getOrElse below.
+enum class ReaderTextAlign { LEFT, CENTER, RIGHT }
+
+// Auto-scroll speed is in dp per second. Slow enough to read a line at a time at
+// the bottom, fast enough to skim at the top; the swipe gesture scales it
+// smoothly between the two.
+const val AUTO_SPEED_MIN = 6f
+const val AUTO_SPEED_MAX = 260f
+const val AUTO_SPEED_DEFAULT = 24f
+
+// A chapter you only jumped to (TOC, far from where you are) becomes "your
+// place" once you have really read into it: past this fraction AND scrolled
+// at least COMMIT_MOVE since it opened (so a restored spot alone doesn't count).
+private const val COMMIT_FRACTION = 0.25f
+private const val COMMIT_MOVE     = 0.03f
 
 data class ReaderSettings(
     val fontSize: Float = 17f,
     val lineHeight: Float = 1.8f,
     val textAlign: ReaderTextAlign = ReaderTextAlign.LEFT,
     val brightness: Float = 0f,   // 0..1 — alpha of the screen-dimming overlay
-    val swatchIndex: Int = 4      // default: plain Dark (index 4, last swatch)
+    val swatchIndex: Int = 4,     // default: plain Dark (index 4, last swatch)
+    val autoSpeed: Float = AUTO_SPEED_DEFAULT,   // auto-scroll, dp per second
+    val autoPilot: Boolean = false               // auto-open the next chapter at the end
 )
 
 // One reading background option. Indices 0-2 are derived from the current
@@ -90,7 +106,9 @@ class ReaderViewModel(app: Application) : AndroidViewModel(app) {
             lineHeight  = prefs.getLineHeight(1.8f),
             textAlign   = ReaderTextAlign.entries.getOrElse(prefs.getTextAlignOrdinal(0)) { ReaderTextAlign.LEFT },
             brightness  = prefs.getBrightness(0f),
-            swatchIndex = prefs.getSwatchIndex(4)
+            swatchIndex = prefs.getSwatchIndex(4),
+            autoSpeed   = prefs.getAutoSpeed(AUTO_SPEED_DEFAULT).coerceIn(AUTO_SPEED_MIN, AUTO_SPEED_MAX),
+            autoPilot   = prefs.getAutoPilot(false)
         )
     )
     val settings: StateFlow<ReaderSettings> = _settings.asStateFlow()
@@ -113,6 +131,22 @@ class ReaderViewModel(app: Application) : AndroidViewModel(app) {
 
     private var currentSlug    = ""
     private var currentChapter = 0
+
+    // ── "Your place" vs "the chapter that's open" ────────────────────────────
+    // FIX: every chapter that loaded used to overwrite the saved progress, so a
+    // quick look at the newest chapter (78) while really on 56 made the novel
+    // reopen at 78 forever. Now the saved place only moves when you actually
+    // continue from it:
+    //   • the chapter is next to your place (previous / same / next), or there is
+    //     no place yet, or you opened a bookmark → it becomes your place at once;
+    //   • any other jump is a PEEK: the place stays put until you really read
+    //     into the peeked chapter (COMMIT_FRACTION), and its spot is saved in a
+    //     separate slot so the place's own spot isn't lost either.
+    private val _placeChapter = MutableStateFlow(0)
+    val placeChapter: StateFlow<Int> = _placeChapter.asStateFlow()
+    private var placeLoadedFor = ""
+    private var provisional    = false
+    private var baseline: Float? = null
 
     // ── Page bookmarks (one per chapter) ─────────────────────────────────────
     // Follows whichever novel is open; the list is empty until load() sets a slug.
@@ -137,7 +171,7 @@ class ReaderViewModel(app: Application) : AndroidViewModel(app) {
     private var swatchJob: Job? = null
     private var listJob: Job? = null
 
-    fun load(slug: String, chapterNum: Int) {
+    fun load(slug: String, chapterNum: Int, forceCommit: Boolean = false) {
         val novelChanged = slug != currentSlug
         currentSlug    = slug
         currentChapter = chapterNum
@@ -159,6 +193,8 @@ class ReaderViewModel(app: Application) : AndroidViewModel(app) {
             _chapterList.value  = emptyList()
             _novelTitle.value   = ""
             _readChapters.value = readStore.getRead(slug)
+            _placeChapter.value = 0
+            placeLoadedFor      = ""
             loadSwatches(slug)
             loadChapterList(slug)
         }
@@ -167,8 +203,20 @@ class ReaderViewModel(app: Application) : AndroidViewModel(app) {
             _state.value = ReaderUiState.Loading
             _state.value = try {
                 val chapter = repo.downloadChapter(slug, chapterNum)
-                // Auto-save reading progress whenever a chapter loads
-                repo.saveReadingProgress(slug, chapterNum, chapter.title)
+                // Decide whether this chapter is "your place" or only a peek
+                // (see the note on _placeChapter).
+                if (placeLoadedFor != slug) {
+                    _placeChapter.value = repo.getReadingProgress(slug)?.lastChapterNum ?: 0
+                    placeLoadedFor = slug
+                }
+                val place      = _placeChapter.value
+                val sequential = forceCommit || place == 0 || chapterNum in (place - 1)..(place + 1)
+                if (sequential) {
+                    commitPlace(slug, chapterNum, chapter.title)
+                } else {
+                    provisional = true
+                    baseline    = null
+                }
                 // Opening a chapter marks it read
                 _readChapters.value = readStore.markRead(slug, chapterNum)
 
@@ -185,6 +233,13 @@ class ReaderViewModel(app: Application) : AndroidViewModel(app) {
                 ReaderUiState.Error(friendlyError(e, "Couldn't load chapter"))
             }
         }
+    }
+
+    private suspend fun commitPlace(slug: String, chapterNum: Int, title: String) {
+        provisional = false
+        baseline    = null
+        repo.saveReadingProgress(slug, chapterNum, title)
+        _placeChapter.value = chapterNum
     }
 
     private fun loadSwatches(slug: String) {
@@ -299,12 +354,30 @@ class ReaderViewModel(app: Application) : AndroidViewModel(app) {
     // Remember the reading spot (fraction of the chapter) for the chapter that is
     // currently open.
     fun saveReadingFraction(fraction: Float) {
-        if (currentSlug.isNotEmpty() && currentChapter > 0) {
+        if (currentSlug.isEmpty() || currentChapter <= 0) return
+        if (!provisional) {
             positionStore.save(currentSlug, currentChapter, fraction)
+            return
+        }
+        // A peeked chapter: its spot goes in the peek slot (the place's own spot
+        // stays safe) until the reader has really read into it.
+        val base = baseline ?: fraction.also { baseline = it }
+        if (fraction >= COMMIT_FRACTION && fraction - base >= COMMIT_MOVE) {
+            val slug  = currentSlug
+            val num   = currentChapter
+            val title = (state.value as? ReaderUiState.Success)?.chapter?.title ?: ""
+            provisional = false          // synchronously, so a second call can't commit twice
+            baseline    = null
+            positionStore.save(slug, num, fraction)
+            viewModelScope.launch { commitPlace(slug, num, title) }
+        } else {
+            positionStore.savePeek(currentSlug, currentChapter, fraction)
         }
     }
 
     fun saveScrollPosition(scrollPos: Int) {
+        // A peek must not touch the saved place (this call rewrites the progress row).
+        if (provisional) return
         viewModelScope.launch {
             repo.saveReadingProgress(
                 slug         = currentSlug,
@@ -334,7 +407,8 @@ class ReaderViewModel(app: Application) : AndroidViewModel(app) {
     /** Opens a bookmark: loads its chapter and scrolls to the saved spot. */
     fun jumpToBookmark(bookmark: ReaderBookmark) {
         pendingJump = bookmark.chapterNum to bookmark.fraction
-        load(currentSlug, bookmark.chapterNum)
+        // A bookmark is a deliberate "this is my spot" — it becomes the place at once.
+        load(currentSlug, bookmark.chapterNum, forceCommit = true)
     }
 
     /** The bookmarked spot to scroll to for [chapterNum], consumed on read; null if none. */
@@ -354,6 +428,11 @@ class ReaderViewModel(app: Application) : AndroidViewModel(app) {
     fun setTextAlign(align: ReaderTextAlign) = updateSettings { it.copy(textAlign = align) }
     fun setBrightness(value: Float) = updateSettings { it.copy(brightness = value.coerceIn(0f, 1f)) }
     fun selectSwatch(index: Int) = updateSettings { it.copy(swatchIndex = index) }
+    fun setAutoPilot(on: Boolean) = updateSettings { it.copy(autoPilot = on) }
+
+    // Called when a swipe ends / auto-scroll stops — not on every drag event.
+    fun saveAutoSpeed(speed: Float) =
+        updateSettings { it.copy(autoSpeed = speed.coerceIn(AUTO_SPEED_MIN, AUTO_SPEED_MAX)) }
 
     private inline fun updateSettings(transform: (ReaderSettings) -> ReaderSettings) {
         val updated = transform(_settings.value)
@@ -363,7 +442,9 @@ class ReaderViewModel(app: Application) : AndroidViewModel(app) {
             lineHeight       = updated.lineHeight,
             textAlignOrdinal = updated.textAlign.ordinal,
             brightness       = updated.brightness,
-            swatchIndex      = updated.swatchIndex
+            swatchIndex      = updated.swatchIndex,
+            autoSpeed        = updated.autoSpeed,
+            autoPilot        = updated.autoPilot
         )
     }
 
