@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.noven.ncrawler.NCrawlerApp
 import com.noven.ncrawler.data.local.UpdateCheckStore
+import com.noven.ncrawler.ui.components.BookmarkGold
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -42,7 +43,6 @@ import androidx.navigation.NavType
 import androidx.navigation.compose.*
 import androidx.navigation.navArgument
 import com.noven.ncrawler.ui.components.Motion
-import com.noven.ncrawler.ui.components.rememberReducedMotion
 import com.noven.ncrawler.ui.components.glassBlur
 import com.noven.ncrawler.ui.components.glassSource
 import com.noven.ncrawler.ui.theme.GlassBase
@@ -206,29 +206,20 @@ fun NCrawlerNavGraph() {
     //    tab's root screen is always what you get.
     fun openTab(route: String) {
         if (showSearchOverlay) closeSearch()
-        if (route == currentRoute) return
-        if (route == Routes.BROWSE) {
-            // CHANGE (Home from Genre): Home now goes through navigate + popUpTo — the
-            // standard "go to the start destination" move — instead of popBackStack(route),
-            // whose only fallback covered "Home not in the stack", not "the pop didn't land
-            // on Home". Either way, Home is guaranteed to end up as the screen you see:
-            //  - Home in the stack (the normal case, e.g. Home → Genre, Discover → Genre):
-            //    everything above it is dropped and Home itself is kept as it was (scroll
-            //    position included) — launchSingleTop stops a second Home being created;
-            //  - Home somehow missing from the stack: the stack is rebuilt from scratch with
-            //    Home as its only entry, so a stale Genre can never be left underneath.
-            val homeInStack = runCatching { nav.getBackStackEntry(Routes.BROWSE) }.isSuccess
-            nav.navigate(Routes.BROWSE) {
-                if (homeInStack) popUpTo(Routes.BROWSE) { inclusive = false }
-                else             popUpTo(nav.graph.id)   { inclusive = true }
-                launchSingleTop = true
-            }
-        } else {
-            nav.navigate(route) {
-                popUpTo(Routes.BROWSE) { saveState = false }
-                launchSingleTop = true
-                restoreState    = false
-            }
+        // Read the route NOW, from the controller. The `currentRoute` captured when
+        // this function was created can be one recomposition old — and Home is the
+        // only tab whose route is the one the app starts on, so a stale value made
+        // `route == currentRoute` swallow the Home tap (every other tab still worked).
+        val liveRoute = nav.currentBackStackEntry?.destination?.route
+        if (route == liveRoute) return
+        // Home goes through the same navigate + popUpTo path as the other tabs
+        // (which work) instead of popBackStack(), whose "nothing to pop" / "route
+        // not found" cases silently did nothing. popUpTo(BROWSE) drops everything
+        // above Home; launchSingleTop reuses the Home entry that is left on top.
+        nav.navigate(route) {
+            popUpTo(Routes.BROWSE) { inclusive = false; saveState = false }
+            launchSingleTop = true
+            restoreState    = false
         }
     }
 
@@ -547,10 +538,6 @@ private fun PillNav(hazeState: HazeState, selectedIndex: Int, badges: Map<String
         label         = "navSelectorAlpha"
     )
 
-    // CHANGE (badge): the pill is wrapped in a Box that does NOT clip, with the count
-    // badges drawn in an overlay on top of it — the pill's own clip (and each button's
-    // circle clip) used to trim the badge to the icon's circle; now it can poke out.
-    Box {
     Box(
         modifier = Modifier
             .shadow(
@@ -588,29 +575,11 @@ private fun PillNav(hazeState: HazeState, selectedIndex: Int, badges: Map<String
                     tab      = tab,
                     selected = index == selectedIndex,
                     palette  = palette,
+                    badge    = badges[tab.route] ?: 0,
                     onClick  = { onTab(tab.route) }
                 )
             }
         }
-    }
-
-    // Badge overlay — same inset and spacing as the buttons, so each slot lines up with
-    // its button; drawn after (above) the pill and never clipped. It has no pointer
-    // handling, so taps fall straight through to the buttons underneath.
-    Row(
-        modifier              = Modifier.padding(horizontal = NavPadH, vertical = NavPadV),
-        horizontalArrangement = Arrangement.spacedBy(NavItemGap)
-    ) {
-        navTabs.forEach { tab ->
-            Box(Modifier.size(NavItemSize), contentAlignment = Alignment.Center) {
-                NavBadge(
-                    count    = badges[tab.route] ?: 0,
-                    ring     = palette.pill,
-                    modifier = Modifier.offset(x = BadgeDx, y = BadgeDy)
-                )
-            }
-        }
-    }
     }
 }
 
@@ -622,6 +591,7 @@ private fun PillNavItem(
     tab: NavTab,
     selected: Boolean,
     palette: NavPalette,
+    badge: Int,
     onClick: () -> Unit
 ) {
     val interactionSource = remember { MutableInteractionSource() }
@@ -666,51 +636,30 @@ private fun PillNavItem(
                 .size(NavIconSize)
                 .graphicsLayer { alpha = fill; scaleX = pressScale; scaleY = pressScale }
         )
-    }
-}
-
-// ── Count badge (e.g. new chapters in Library) ───────────────────────────────
-// CHANGE: pinkish-red with a white number (was gold with a dark number), and it is no
-// longer confined to the button's circle: it sits on the icon's top-right corner and
-// pokes out above and beside it, like a native app-icon badge. The ring is in the pill's
-// colour so the badge stays crisp against the icon where they overlap. Pops in once when
-// it first appears (scale 0.5 → 1 + fade, 240ms ease-out; instant with reduced motion).
-private val BadgeRed  = Color(0xFFFF3B5C)
-private val BadgeSize = 18.dp
-// Offset from the button's centre. The icon's top-right corner is at (+12, -12); this puts
-// the badge's lower-left over that corner and its top ~2dp above the pill's top edge.
-private val BadgeDx   = 14.dp
-private val BadgeDy   = (-20).dp
-
-@Composable
-private fun NavBadge(count: Int, ring: Color, modifier: Modifier = Modifier) {
-    if (count <= 0) return
-    val reduced = rememberReducedMotion()
-    val pop = remember { Animatable(if (reduced) 1f else 0f) }
-    LaunchedEffect(Unit) {
-        if (reduced) pop.snapTo(1f) else pop.animateTo(1f, tween(240, easing = Motion.EaseOut))
-    }
-    Box(
-        modifier = modifier
-            .graphicsLayer {
-                val p = pop.value
-                alpha  = p
-                scaleX = 0.5f + 0.5f * p
-                scaleY = 0.5f + 0.5f * p
+        // Gold count badge (e.g. new chapters in Library): a plain 16dp circle, no
+        // border. It overlaps the icon's top-right corner but stays inside this
+        // 44dp button (so inside the pill) — never peeks outside the nav.
+        if (badge > 0) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .offset(x = 9.dp, y = (-9).dp)
+                    .size(16.dp)
+                    .clip(CircleShape)
+                    .background(BookmarkGold),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text       = if (badge > 9) "9+" else badge.toString(),
+                    color      = Color(0xFF1B1405),
+                    fontSize   = 9.sp,
+                    lineHeight = 10.sp,
+                    maxLines   = 1,
+                    softWrap   = false,
+                    fontWeight = FontWeight.ExtraBold
+                )
             }
-            .defaultMinSize(minWidth = BadgeSize, minHeight = BadgeSize)
-            .border(1.5.dp, ring, CircleShape)
-            .clip(CircleShape)
-            .background(BadgeRed)
-            .padding(horizontal = 4.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text       = if (count > 9) "9+" else count.toString(),
-            color      = Color.White,
-            fontSize   = 10.sp,
-            fontWeight = FontWeight.ExtraBold
-        )
+        }
     }
 }
 
