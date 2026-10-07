@@ -82,6 +82,7 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -147,13 +148,28 @@ fun ReaderScreen(
     // Real chapter title if we have one, else null → callers show "Chapter N".
     // The scraped page heading can be the NOVEL's name, so it's only trusted
     // once the novel title is known (and isn't equal to it).
-    val chapterTitle: String? = remember(chapterList, novelTitle, state, currentNum) {
+    // Continuous auto-pilot: the next chapter is appended under the current one and,
+    // once the page has scrolled into it, swapped in as THE chapter (see "swap" in the
+    // auto-scroll section). `swapped` carries it for the frames until the ViewModel's
+    // own state catches up, so the swap is never a Loading flash.
+    var swapped  by remember { mutableStateOf<ChapterEntity?>(null) }
+    var appended by remember { mutableStateOf<ChapterEntity?>(null) }
+    val shownChapter: ChapterEntity? = swapped ?: (state as? ReaderUiState.Success)?.chapter
+
+    val chapterTitle: String? = remember(chapterList, novelTitle, shownChapter, currentNum) {
         resolveChapterTitle(
             listTitle  = chapterList.firstOrNull { it.num == currentNum }?.title,
-            pageTitle  = if (novelTitle.isBlank()) null
-                         else (state as? ReaderUiState.Success)?.chapter?.title,
+            pageTitle  = if (novelTitle.isBlank()) null else shownChapter?.title,
             novelTitle = novelTitle
         )
+    }
+    val appendedTitle: String = remember(chapterList, novelTitle, appended) {
+        val a = appended
+        if (a == null) "" else resolveChapterTitle(
+            listTitle  = chapterList.firstOrNull { it.num == a.chapterNum }?.title,
+            pageTitle  = if (novelTitle.isBlank()) null else a.title,
+            novelTitle = novelTitle
+        ) ?: "Chapter ${a.chapterNum}"
     }
 
     val swatch = swatches.getOrElse(settings.swatchIndex) { swatches.last() }
@@ -198,9 +214,22 @@ fun ReaderScreen(
     // Saving is paused (canSave = false) while a chapter loads and is being
     // scrolled to its spot, so the transient position 0 can't overwrite it.
     var canSave by remember { mutableStateOf(false) }
+    // Bumped once per chapter that was really (re)loaded. The auto-scroll engine is
+    // keyed on it: canSave can go false→true between two compositions (a cached
+    // chapter loads in a blink), which used to leave the engine's key unchanged — the
+    // old loop had ended, nothing restarted it, and the bar still said "active".
+    var engineGen by remember { mutableStateOf(0) }
 
     LaunchedEffect(state) {
+        val loaded = (state as? ReaderUiState.Success)?.chapter
+        if (loaded != null && swapped != null && loaded === swapped) {
+            // The chapter that auto-pilot already scrolled into: nothing to restore,
+            // the page is exactly where it should be. (canSave stays true.)
+            swapped = null
+            return@LaunchedEffect
+        }
         if (state is ReaderUiState.Success) {
+            appended = null
             canSave = false
             // A tapped bookmark wins over the saved reading spot (consumed once).
             val jump  = vm.takePendingJump(currentNum)
@@ -218,13 +247,17 @@ fun ReaderScreen(
                 scrollState.scrollTo((saved * scrollState.maxValue).roundToInt())
             }
             canSave = true
+            engineGen++
         } else {
             canSave = false
         }
     }
 
-    LaunchedEffect(scrollState.value, canSave) {
-        if (!canSave) return@LaunchedEffect
+    // While the next chapter is appended below, scrollState.value / maxValue span BOTH
+    // chapters, so a fraction taken now would be wrong for the open chapter — saving
+    // pauses for that stretch (the finished chapter is stored as 100% on the swap).
+    LaunchedEffect(scrollState.value, canSave, appended) {
+        if (!canSave || appended != null) return@LaunchedEffect
         kotlinx.coroutines.delay(600)
         vm.saveScrollPosition(scrollState.value)
         if (scrollState.maxValue > 0 && scrollState.maxValue != Int.MAX_VALUE) {
@@ -236,7 +269,7 @@ fun ReaderScreen(
     // scrolling — save once more on the way out.
     DisposableEffect(Unit) {
         onDispose {
-            if (canSave && scrollState.maxValue > 0 && scrollState.maxValue != Int.MAX_VALUE) {
+            if (canSave && appended == null && scrollState.maxValue > 0 && scrollState.maxValue != Int.MAX_VALUE) {
                 vm.saveReadingFraction(scrollState.value.toFloat() / scrollState.maxValue)
             }
         }
@@ -300,6 +333,7 @@ fun ReaderScreen(
         speedFlash    = false
         pauseFlash    = false
         autoPilotTip  = null
+        appended      = null            // the pre-loaded next chapter goes away with the session
         showControls  = true            // show where you stopped
         vm.saveAutoSpeed(autoSpeed)
     }
@@ -362,24 +396,92 @@ fun ReaderScreen(
     // (to read the hint / see the new chapter), eases up to speed over 700ms, then
     // moves the page by speed × frame time (sub-pixel safe) until the last line.
     // Pausing cancels the loop; resuming restarts it with a short beat + ease-in.
-    LaunchedEffect(autoScroll, autoPaused, canSave) {
+    //
+    // FIX (stopped on new chapters while still "active"): two causes.
+    //  1. The page was moved with scrollState.scrollBy(), which takes the scroll
+    //     mutex — the restore effect's scrollTo(0) on a freshly loaded chapter
+    //     pre-empts it and cancels THIS coroutine without a trace. It now uses
+    //     dispatchRawDelta (never cancelled by other scrolls) with its own
+    //     sub-pixel carry.
+    //  2. Its keys didn't change when a cached chapter loaded between two
+    //     compositions; engineGen does, once per loaded chapter.
+    val appendedNow by rememberUpdatedState(appended)
+    LaunchedEffect(autoScroll, autoPaused, canSave, engineGen) {
         if (!autoScroll || autoPaused || !canSave) return@LaunchedEffect
         atChapterEnd = false
         delay(if (autoHint) 1100L else 400L)
-        var last = withFrameNanos { it }
-        var ramp = 0f
+        var last  = withFrameNanos { it }
+        var ramp  = 0f
+        var carry = 0f
         while (true) {
             val now = withFrameNanos { it }
             val dt  = ((now - last) / 1_000_000_000f).coerceIn(0f, 0.05f)
             last = now
             val max = scrollState.maxValue
             if (max != Int.MAX_VALUE && scrollState.value >= max) {
+                // The next chapter is appended but not measured yet → just wait a frame.
+                if (appendedNow != null) continue
                 atChapterEnd = true
                 break
             }
             ramp = (ramp + dt / 0.7f).coerceAtMost(1f)
             val eased = ramp * ramp * (3f - 2f * ramp)
-            scrollState.scrollBy(autoSpeed * density.density * eased * dt)
+            carry += autoSpeed * density.density * eased * dt
+            val whole = carry.toInt()
+            if (whole != 0) {
+                scrollState.dispatchRawDelta(whole.toFloat())
+                carry -= whole
+            }
+        }
+    }
+
+    // ── Continuous auto-pilot ────────────────────────────────────────────────
+    // With auto-pilot on, the next chapter is fetched when the reader gets near the
+    // end (≈ 2 screens left) and appended UNDER the current one, so the page just
+    // keeps flowing from one chapter into the next — no stop, no countdown. When the
+    // new title has scrolled up to where a chapter title normally sits, the screen
+    // swaps it in as the open chapter in a single frame (same pixels, scroll offset
+    // shifted by exactly the old chapter's height). A failed fetch falls back to the
+    // old end-of-chapter countdown.
+    val swapGeo        = remember { SwapGeometry() }
+    var appendFailedAt by remember { mutableStateOf(0) }
+    LaunchedEffect(autoScroll, settings.autoPilot, canSave, currentNum, hasNext, appendFailedAt) {
+        if (!autoScroll || !settings.autoPilot || !canSave || !hasNext || appended != null) return@LaunchedEffect
+        if (appendFailedAt == currentNum) return@LaunchedEffect
+        snapshotFlow {
+            val max = scrollState.maxValue
+            max != Int.MAX_VALUE && max > 0 && max - scrollState.value < screenHeightPx * 2f
+        }.first { it }
+        val num  = currentNum
+        val next = vm.fetchChapter(num + 1)
+        if (next != null && next.chapterNum == num + 1 && autoScroll && settings.autoPilot && vm.currentChapterNum == num) {
+            swapGeo.reset()
+            appended = next
+        } else if (next == null) {
+            appendFailedAt = num
+        }
+    }
+    // Auto-pilot switched off (or the session ended) before the swap → drop it again.
+    LaunchedEffect(autoScroll, settings.autoPilot) {
+        if (!autoScroll || !settings.autoPilot) appended = null
+    }
+    // The swap itself.
+    LaunchedEffect(appended) {
+        val next = appended ?: return@LaunchedEffect
+        // (A very short next chapter can't scroll far enough to reach its title's
+        // swap point — then the end of the page is the swap point.)
+        snapshotFlow {
+            val max = scrollState.maxValue
+            swapGeo.ready && scrollState.value >= minOf(swapGeo.delta.toInt(), if (max == Int.MAX_VALUE) Int.MAX_VALUE else max)
+        }.first { it }
+        withFrameNanos {
+            val delta = swapGeo.delta
+            if (appended === next && delta > 0f) {
+                swapped  = next                                  // content flips to the new chapter…
+                appended = null
+                scrollState.dispatchRawDelta(-delta)             // …and the offset follows, same frame
+                vm.advanceTo(next, next.chapterNum)
+            }
         }
     }
 
@@ -389,7 +491,7 @@ fun ReaderScreen(
         while (autoScroll && canSave) {
             delay(2000)
             val max = scrollState.maxValue
-            if (max > 0 && max != Int.MAX_VALUE) {
+            if (appendedNow == null && max > 0 && max != Int.MAX_VALUE) {
                 vm.saveScrollPosition(scrollState.value)
                 vm.saveReadingFraction(scrollState.value.toFloat() / max)
             }
@@ -399,7 +501,7 @@ fun ReaderScreen(
     // End of chapter: the newest chapter has nothing to open; otherwise auto-pilot
     // counts down and opens the next one, and without it the bar waits for the tap.
     LaunchedEffect(autoScroll, atChapterEnd, settings.autoPilot, hasNext) {
-        if (!autoScroll || !atChapterEnd) {
+        if (!autoScroll || !atChapterEnd || appendedNow != null) {
             endCountdown.snapTo(0f)
             return@LaunchedEffect
         }
@@ -432,7 +534,9 @@ fun ReaderScreen(
             .fillMaxSize()
             .background(bg)
             .clickable(interactionSource = noRipple, indication = null) {
-                if (!showSettings && !showToc && !showAudioOverlay) showControls = !showControls
+                // While auto-scroll runs a tap means pause / resume (handled by its own
+                // layer) — it must never also pop the reader's bars up.
+                if (!autoScroll && !showSettings && !showToc && !showAudioOverlay) showControls = !showControls
             }
     ) {
         // CHANGE (motion): Loading / Error / Content cross-fade (180ms) — a chapter
@@ -471,9 +575,13 @@ fun ReaderScreen(
                         ) { Text("Retry") }
                     }
                 }
-                else -> (state as? ReaderUiState.Success)?.let { s ->
+                else -> shownChapter?.let { shown ->
                     ReaderContent(
-                        chapter     = s.chapter,
+                        chapter     = shown,
+                        appended    = appended,
+                        appendedTitle = appendedTitle,
+                        swapGeo     = swapGeo,
+                        instantWave = shown === swapped,
                         title       = chapterTitle ?: "Chapter $currentNum",
                         settings    = settings,
                         fg          = fg,
@@ -493,39 +601,6 @@ fun ReaderScreen(
         // ── Brightness dimming overlay ────────────────────────────────────
         if (settings.brightness > 0f) {
             Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = settings.brightness)))
-        }
-
-        // ── Top header ────────────────────────────────────────────────────
-        // Hidden while a sheet (Settings / Contents) is open: its buttons used to
-        // sit over / through the sheet, looking tappable while the scrim ate the tap.
-        AnimatedVisibility(
-            visible  = showControls && !sheetOpen,
-            enter    = fadeIn(tween(220)) + slideInVertically(tween(220, easing = FastOutSlowInEasing)),
-            exit     = fadeOut(tween(160)) + slideOutVertically(tween(160, easing = FastOutSlowInEasing)),
-            modifier = Modifier.align(Alignment.TopCenter)
-        ) {
-            CompositionLocalProvider(LocalReaderHaze provides readerHaze) {
-                ReaderHeader(
-                    fg              = fg,
-                    accent          = accent,
-                    bg              = bg,
-                    audioSelected   = audioSelected,
-                    onBack          = onBack,
-                    onAudioClick    = { audioSelected = true; showAudioOverlay = true },
-                    onTextClick     = { audioSelected = false },
-                    bookmarked      = isBookmarked,
-                    onBookmarkClick = {
-                        // Only while a chapter is actually on screen — the spot is a
-                        // fraction of loaded text.
-                        if (state is ReaderUiState.Success) {
-                            vm.toggleBookmark(progress, chapterTitle ?: "Chapter $currentNum")
-                        }
-                    },
-                    onAutoScrollClick = { startAuto() },
-                    settingsOpen    = showSettings,
-                    onSettingsClick = { showToc = false; showSettings = !showSettings }
-                )
-            }
         }
 
         // ── Bottom scrim (always present, behind nav bar) ─────────────────
@@ -600,6 +675,9 @@ fun ReaderScreen(
                                         autoHint   = false
                                         autoPaused = !autoPaused
                                     }
+                                    // Consumed so the screen's own tap-to-show-controls
+                                    // handler (a parent) never sees this tap.
+                                    change.consume()
                                     break
                                 }
                                 val dy = change.position.y - change.previousPosition.y
@@ -727,7 +805,7 @@ fun ReaderScreen(
                 palette        = sheetPalette,
                 haze           = readerHaze,
                 onDismiss      = { showToc = false },
-                heightFraction = 0.85f
+                heightFraction = 1f   // fills everything below the header
             ) { dismiss ->
                 TocTabs(
                     chapters         = chapterList,
@@ -738,6 +816,39 @@ fun ReaderScreen(
                     onSelect         = { num -> vm.jumpTo(num); dismiss() },
                     onOpenBookmark   = { b -> vm.jumpToBookmark(b); dismiss() },
                     onRemoveBookmark = vm::removeBookmark
+                )
+            }
+        }
+
+        // ── Top header ────────────────────────────────────────────────────
+        // Stays up while a sheet (Settings / Contents) is open — drawn AFTER the sheets
+        // (so above their scrim, still tappable) while the bottom bar steps aside.
+        AnimatedVisibility(
+            visible  = showControls || sheetOpen,
+            enter    = fadeIn(tween(220)) + slideInVertically(tween(220, easing = FastOutSlowInEasing)),
+            exit     = fadeOut(tween(160)) + slideOutVertically(tween(160, easing = FastOutSlowInEasing)),
+            modifier = Modifier.align(Alignment.TopCenter)
+        ) {
+            CompositionLocalProvider(LocalReaderHaze provides readerHaze) {
+                ReaderHeader(
+                    fg              = fg,
+                    accent          = accent,
+                    bg              = bg,
+                    audioSelected   = audioSelected,
+                    onBack          = onBack,
+                    onAudioClick    = { audioSelected = true; showAudioOverlay = true },
+                    onTextClick     = { audioSelected = false },
+                    bookmarked      = isBookmarked,
+                    onBookmarkClick = {
+                        // Only while a chapter is actually on screen — the spot is a
+                        // fraction of loaded text.
+                        if (state is ReaderUiState.Success) {
+                            vm.toggleBookmark(progress, chapterTitle ?: "Chapter $currentNum")
+                        }
+                    },
+                    onAutoScrollClick = { showSettings = false; showToc = false; startAuto() },
+                    settingsOpen    = showSettings,
+                    onSettingsClick = { showToc = false; showSettings = !showSettings }
                 )
             }
         }
@@ -825,7 +936,11 @@ private fun ReaderContent(
     hasNext: Boolean,
     onPullNext: () -> Unit,
     revealed: Boolean,          // the chapter is loaded AND scrolled to its saved spot
-    autoScrolling: Boolean      // auto-scroll owns the page: no scrolling by hand
+    autoScrolling: Boolean,     // auto-scroll owns the page: no scrolling by hand
+    appended: ChapterEntity?,   // auto-pilot: the next chapter, flowing in under this one
+    appendedTitle: String,
+    swapGeo: SwapGeometry,      // where the two titles sit, so the screen can swap them
+    instantWave: Boolean        // this chapter was scrolled into already → no wave-in
 ) {
     val align = when (settings.textAlign) {
         ReaderTextAlign.LEFT   -> TextAlign.Left
@@ -855,7 +970,13 @@ private fun ReaderContent(
     // chapters keep the live animation too — bigger change, left for a
     // separate pass since it also means reworking the pull-to-next-chapter
     // gesture, which currently reads a plain ScrollState.
-    val fxPhases = if (anyFx)
+    // The chapter appended below (auto-pilot), split the same way.
+    val apParagraphs = remember(appended) {
+        appended?.content?.split("\n")?.map { it.trim() }?.filter { it.isNotBlank() } ?: emptyList()
+    }
+    val apParsed = remember(apParagraphs) { apParagraphs.map { parseFx(it) } }
+    val apFx     = remember(apParsed) { apParsed.any { segs -> segs.any { it.fx != Fx.PLAIN } } }
+    val fxPhases = if (anyFx || apFx)
         rememberFxPhases(freeze = paragraphs.size > LONG_CHAPTER_FX_THRESHOLD)
     else null
 
@@ -880,7 +1001,7 @@ private fun ReaderContent(
     // It starts once the chapter is revealed — i.e. after the saved spot has been
     // scrolled to — so the wave plays over what you will actually see.
     val reduced        = rememberReducedMotion()
-    val wave           = remember(chapter) { ChapterWave(reduced) }
+    val wave           = remember(chapter) { ChapterWave(reduced, instantWave) }
     val viewportPx     = with(density) { LocalConfiguration.current.screenHeightDp.dp.toPx() }
     val risePx         = with(density) { 14.dp.toPx() }
     LaunchedEffect(chapter, revealed) {
@@ -964,74 +1085,51 @@ private fun ReaderContent(
                 // bottom 120dp (was 170dp): matches the shorter bottom scrim
                 .padding(top = 150.dp, bottom = 120.dp, start = 24.dp, end = 24.dp)
         ) {
-            // CHANGE: heading is the chapter's title ("Chapter N" if it has none) —
-            // it used to print chapter.title as scraped, which could be the novel's name.
-            Text(
-                text       = title,
-                fontFamily = MontserratFamily,
-                fontWeight = FontWeight.ExtraBold,
-                fontSize   = 26.sp,
-                color      = fg,
-                textAlign  = TextAlign.Center,
-                modifier   = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 24.dp)
-                    .waveItem(wave, remember(chapter) { WaveSlot() }, viewportPx, risePx)
+            ChapterBlock(
+                title      = title,
+                paragraphs = paragraphs,
+                parsed     = parsed,
+                fxPhases   = fxPhases,
+                settings   = settings,
+                fg         = fg,
+                bodyFg     = bodyFg,
+                accent     = accent,
+                darkBg     = darkBg,
+                align      = align,
+                wave       = wave,
+                viewportPx = viewportPx,
+                risePx     = risePx,
+                chapterKey = chapter,
+                titleModifier = Modifier.onGloballyPositioned {
+                    swapGeo.mainY   = it.positionInParent().y
+                    swapGeo.mainSet = true
+                }
             )
 
-            paragraphs.forEachIndexed { index, para ->
-                val segs      = parsed[index]
-                val hasFx     = segs.any { it.fx != Fx.PLAIN }
-                val slot      = remember(chapter, index) { WaveSlot() }
-                val paraModifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = (settings.fontSize * 0.8f).dp)
-                    .waveItem(wave, slot, viewportPx, risePx)
-
-                if (hasFx && fxPhases != null) {
-                    // [ … ] neon-blue gradient / * … * pulsing red
-                    FxParagraph(
-                        segments = segs,
-                        dropCap  = index == 0,
-                        fx       = fxPhases,
-                        darkBg   = darkBg,
-                        settings = settings,
-                        fg       = bodyFg,
-                        accent   = accent,
-                        align    = align,
-                        modifier = paraModifier
-                    )
-                } else if (index == 0 && para.isNotEmpty()) {
-                    val annotated = buildAnnotatedString {
-                        withStyle(SpanStyle(
-                            fontSize   = (settings.fontSize * 2.4f).sp,
-                            fontWeight = FontWeight.Black,
-                            fontFamily = MontserratFamily,
-                            color      = accent
-                        )) { append(para.first().toString()) }
-                        withStyle(SpanStyle(fontFamily = MontserratFamily)) {
-                            append(para.substring(1))
-                        }
+            // Auto-pilot: the next chapter continues right below, same look, no wave —
+            // the screen swaps it in as the open chapter once it has scrolled up here.
+            if (appended != null) {
+                Spacer(Modifier.height(APPEND_GAP))
+                ChapterBlock(
+                    title      = appendedTitle,
+                    paragraphs = apParagraphs,
+                    parsed     = apParsed,
+                    fxPhases   = fxPhases,
+                    settings   = settings,
+                    fg         = fg,
+                    bodyFg     = bodyFg,
+                    accent     = accent,
+                    darkBg     = darkBg,
+                    align      = align,
+                    wave       = null,
+                    viewportPx = viewportPx,
+                    risePx     = risePx,
+                    chapterKey = appended,
+                    titleModifier = Modifier.onGloballyPositioned {
+                        swapGeo.appY   = it.positionInParent().y
+                        swapGeo.appSet = true
                     }
-                    Text(
-                        text       = annotated,
-                        fontSize   = settings.fontSize.sp,
-                        color      = bodyFg,
-                        textAlign  = align,
-                        lineHeight = (settings.fontSize * settings.lineHeight).sp,
-                        modifier   = paraModifier
-                    )
-                } else {
-                    Text(
-                        text       = para,
-                        fontFamily = MontserratFamily,
-                        fontSize   = settings.fontSize.sp,
-                        color      = bodyFg,
-                        textAlign  = align,
-                        lineHeight = (settings.fontSize * settings.lineHeight).sp,
-                        modifier   = paraModifier
-                    )
-                }
+                )
             }
         }
 
@@ -1048,6 +1146,119 @@ private fun ReaderContent(
             )
         }
     }
+}
+
+// One chapter's heading + paragraphs. Used for the open chapter (with its wave-in)
+// and for the next chapter appended below it during auto-pilot (wave = null, so
+// it looks exactly like the open chapter will once it is swapped in).
+@Composable
+private fun ChapterBlock(
+    title: String,
+    paragraphs: List<String>,
+    parsed: List<List<FxSeg>>,
+    fxPhases: FxPhases?,
+    settings: ReaderSettings,
+    fg: Color,
+    bodyFg: Color,
+    accent: Color,
+    darkBg: Boolean,
+    align: TextAlign,
+    wave: ChapterWave?,
+    viewportPx: Float,
+    risePx: Float,
+    chapterKey: Any?,
+    titleModifier: Modifier = Modifier
+) {
+    fun Modifier.waved(slot: WaveSlot): Modifier =
+        if (wave == null) this else this.waveItem(wave, slot, viewportPx, risePx)
+
+    // CHANGE: heading is the chapter's title ("Chapter N" if it has none) —
+    // it used to print chapter.title as scraped, which could be the novel's name.
+    Text(
+        text       = title,
+        fontFamily = MontserratFamily,
+        fontWeight = FontWeight.ExtraBold,
+        fontSize   = 26.sp,
+        color      = fg,
+        textAlign  = TextAlign.Center,
+        modifier   = titleModifier
+            .fillMaxWidth()
+            .padding(bottom = 24.dp)
+            .waved(remember(chapterKey) { WaveSlot() })
+    )
+
+    paragraphs.forEachIndexed { index, para ->
+        val segs      = parsed[index]
+        val hasFx     = segs.any { it.fx != Fx.PLAIN }
+        val slot      = remember(chapterKey, index) { WaveSlot() }
+        val paraModifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = (settings.fontSize * 0.8f).dp)
+            .waved(slot)
+
+        if (hasFx && fxPhases != null) {
+            // [ … ] neon-blue gradient / * … * pulsing red
+            FxParagraph(
+                segments = segs,
+                dropCap  = index == 0,
+                fx       = fxPhases,
+                darkBg   = darkBg,
+                settings = settings,
+                fg       = bodyFg,
+                accent   = accent,
+                align    = align,
+                modifier = paraModifier
+            )
+        } else if (index == 0 && para.isNotEmpty()) {
+            val annotated = buildAnnotatedString {
+                withStyle(SpanStyle(
+                    fontSize   = (settings.fontSize * 2.4f).sp,
+                    fontWeight = FontWeight.Black,
+                    fontFamily = MontserratFamily,
+                    color      = accent
+                )) { append(para.first().toString()) }
+                withStyle(SpanStyle(fontFamily = MontserratFamily)) {
+                    append(para.substring(1))
+                }
+            }
+            Text(
+                text       = annotated,
+                fontSize   = settings.fontSize.sp,
+                color      = bodyFg,
+                textAlign  = align,
+                lineHeight = (settings.fontSize * settings.lineHeight).sp,
+                modifier   = paraModifier
+            )
+        } else {
+            Text(
+                text       = para,
+                fontFamily = MontserratFamily,
+                fontSize   = settings.fontSize.sp,
+                color      = bodyFg,
+                textAlign  = align,
+                lineHeight = (settings.fontSize * settings.lineHeight).sp,
+                modifier   = paraModifier
+            )
+        }
+    }
+}
+
+// Extra space between the open chapter's last paragraph and the title of the next
+// one flowing in below it (auto-pilot).
+private val APPEND_GAP = 56.dp
+
+// Where the open chapter's title and the appended chapter's title sit in the scroll
+// content. Plain fields on purpose (written from layout callbacks, read by the swap
+// effect each frame) — their DIFFERENCE is how far the page must be shifted back
+// when the appended chapter becomes the open one.
+private class SwapGeometry {
+    var mainY = 0f
+    var appY = 0f
+    var mainSet = false
+    var appSet = false
+    val ready: Boolean get() = mainSet && appSet && appY > mainY
+    val delta: Float get() = appY - mainY
+    fun reset() { appSet = false; appY = 0f }
 }
 
 // ── Chapter wave (the animation behind the wave-in above) ───────────────────
@@ -1069,11 +1280,13 @@ private class WaveSlot {
     var delay  = WAVE_UNSET
 }
 
-private class ChapterWave(private val reduced: Boolean) {
-    val clock = Animatable(0f)                    // ms since the wave started
-    var running by mutableStateOf(false)
+private class ChapterWave(private val reduced: Boolean, played: Boolean = false) {
+    // played = the chapter was already on screen (auto-pilot swapped it in): start
+    // at the END of the wave so nothing fades in a second time.
+    val clock = Animatable(if (played) WAVE_TOTAL_MS else 0f)   // ms since the wave started
+    var running by mutableStateOf(played)
         private set
-    private var started = false
+    private var started = played
 
     suspend fun play() {
         if (started) return
@@ -1684,6 +1897,9 @@ private val LocalSheetPalette = staticCompositionLocalOf { SheetPalette(false) }
 // Reduced motion (system "Remove animations"): no slide, instant show/hide.
 // heightFraction == null → wraps its content (settings); otherwise fixed to
 // that fraction of the screen height (TOC).
+// Room kept clear above a sheet for the header (audio/text pill + the button row).
+private val SHEET_HEADER_CLEARANCE = 118.dp
+
 @Composable
 private fun ReaderSheet(
     accent: Color,
@@ -1762,7 +1978,9 @@ private fun ReaderSheet(
         alpha = if (canBlur) SHEET_GLASS_ALPHA else SHEET_GLASS_ALPHA_NO_BLUR
     )
 
-    // Scrim — tapping outside dismisses
+    // Scrim — tapping outside dismisses. The sheet never grows into the header
+    // (which now stays visible above it): padding AFTER clickable keeps the whole
+    // screen tappable but shrinks the area the sheet can occupy.
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -1771,6 +1989,8 @@ private fun ReaderSheet(
                 indication        = null,
                 onClick           = dismiss
             )
+            .statusBarsPadding()
+            .padding(top = SHEET_HEADER_CLEARANCE)
     ) {
         // Sheet — anchored to bottom, consumes clicks so they don't reach scrim
         Box(
@@ -2058,7 +2278,10 @@ private fun ColumnScope.ChapterTocContent(
     LaunchedEffect(sorted.isNotEmpty()) {
         if (sorted.isNotEmpty() && !positioned.value) {
             positioned.value = true
-            val index = sorted.indexOfFirst { it.num == currentNum }
+            // "Your place" first — the chapter the reader would continue from, even
+            // if a peek at another chapter is open right now — else the open chapter.
+            val target = if (placeNum > 0 && sorted.any { it.num == placeNum }) placeNum else currentNum
+            val index  = sorted.indexOfFirst { it.num == target }
             listState.scrollToItem((index - 3).coerceAtLeast(0))
         }
     }

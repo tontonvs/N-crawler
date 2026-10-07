@@ -9,6 +9,8 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -335,8 +337,26 @@ private fun NextChapterButton(
     accent: Color,
     onClick: () -> Unit
 ) {
+    // Without auto-pilot nothing opens the next chapter by itself, so the button
+    // breathes (soft glow + slight swell) to say "your move". With auto-pilot the
+    // countdown fill is the signal instead, so it stays still.
+    val blink = rememberInfiniteTransition(label = "nextBlink")
+    val pulse by blink.animateFloat(
+        initialValue  = 0f,
+        targetValue   = 1f,
+        animationSpec = infiniteRepeatable(tween(750, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+        label         = "nextPulse"
+    )
     Box(
         modifier = Modifier
+            .graphicsLayer {
+                if (!autoPilot) {
+                    val k = 1f + 0.06f * pulse
+                    scaleX = k
+                    scaleY = k
+                    alpha  = 1f - 0.28f * pulse
+                }
+            }
             .height(40.dp)
             .clip(RoundedCornerShape(50))
             .background(if (autoPilot) accent.copy(alpha = 0.38f) else accent)

@@ -419,6 +419,44 @@ class ReaderViewModel(app: Application) : AndroidViewModel(app) {
         return jump.second
     }
 
+    /**
+     * Fetches a chapter WITHOUT opening it (no state change, no place / read
+     * bookkeeping) — used by auto-pilot to have the next chapter ready to flow in
+     * under the current one. null if it couldn't be loaded.
+     */
+    suspend fun fetchChapter(chapterNum: Int): ChapterEntity? {
+        val slug = currentSlug
+        if (slug.isEmpty() || chapterNum <= 0) return null
+        return try {
+            repo.downloadChapter(slug, chapterNum)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "fetchChapter($chapterNum) failed: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Makes an already-fetched chapter the open one with NO Loading step — the
+     * screen has already swapped it in under the reader's eyes (continuous
+     * auto-pilot). Does the same bookkeeping load() does: the chapter just
+     * finished counts as fully read, the new one is marked read, and it becomes
+     * "your place" (it is always the next chapter, so it is sequential).
+     */
+    fun advanceTo(chapter: ChapterEntity, chapterNum: Int) {
+        val slug = currentSlug
+        if (slug.isEmpty() || chapterNum != currentChapter + 1) return
+        positionStore.save(slug, currentChapter, 1f)       // the one we just finished
+        currentChapter = chapterNum
+        pendingJump    = null
+        provisional    = false
+        baseline       = null
+        _readChapters.value = readStore.markRead(slug, chapterNum)
+        _state.value   = ReaderUiState.Success(chapter)
+        viewModelScope.launch { commitPlace(slug, chapterNum, chapter.title) }
+    }
+
     fun loadNext() = load(currentSlug, currentChapter + 1)
     fun loadPrev() { if (currentChapter > 1) load(currentSlug, currentChapter - 1) }
     fun jumpTo(chapterNum: Int) = load(currentSlug, chapterNum)
