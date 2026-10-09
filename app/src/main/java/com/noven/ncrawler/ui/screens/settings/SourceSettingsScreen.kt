@@ -23,11 +23,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Outline
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
@@ -41,7 +38,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpOffset
-import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
@@ -54,6 +50,14 @@ import com.noven.ncrawler.ui.components.errorShake
 import com.noven.ncrawler.ui.components.glassCard
 import com.noven.ncrawler.ui.components.rememberReducedMotion
 import com.noven.ncrawler.ui.components.staggerIn
+import com.noven.ncrawler.ui.components.MorphGeometryBase
+import com.noven.ncrawler.ui.components.MorphBarShape
+import com.noven.ncrawler.ui.components.mix
+import com.noven.ncrawler.ui.components.window
+import com.noven.ncrawler.ui.components.collapseOf
+import com.noven.ncrawler.ui.components.MORPH_COLLAPSE_AT
+import com.noven.ncrawler.ui.components.MORPH_EXPAND_BELOW
+import com.noven.ncrawler.ui.components.BAR_CONTENT_HEIGHT
 import com.noven.ncrawler.ui.theme.GlassBase
 import com.noven.ncrawler.ui.theme.GlassMode
 import com.noven.ncrawler.ui.theme.MontserratFamily
@@ -579,88 +583,16 @@ private fun NetworkCard(mode: DownloadNetwork, onChange: (DownloadNetwork) -> Un
 //  • Pill geometry is identical to Browse's, so it lands in the same spot when you
 //    flip between the tabs. Once scrolled, ONLY the pill is drawn up top.
 // ═════════════════════════════════════════════════════════════════════════════
-private const val MORPH_COLLAPSE_AT  = 0.40f   // scrolled this far (fraction of the bar's height) → bar morphs into the pill
-private const val MORPH_EXPAND_BELOW = 0.20f   // …and only grows back once it is clearly near the top again
 
-private val BAR_CONTENT_HEIGHT = 66.dp         // below the status bar (open bar) — same as Browse
 private val TITLE_INSET        = 20.dp         // open bar: title ↔ screen's left edge
-private val BAR_FLARE          = 14.dp         // how far the inverted corners reach below the flat edge
-private val CAPSULE_H          = 40.dp         // the pill's height
-private val CAPSULE_TOP        = 13.dp         // pill's top edge, below the status bar
 private val CAPSULE_PAD        = 20.dp         // pill: edge ↔ text, both sides
 
-private fun mix(a: Float, b: Float, t: Float): Float = a + (b - a) * t
-
-// 0 until [from], 1 from [to] on, linear in between.
-private fun window(p: Float, from: Float, to: Float): Float = ((p - from) / (to - from)).coerceIn(0f, 1f)
-
-// How far the bar has collapsed: 0 = fully open (list at rest), 1 = fully gone.
-private fun collapseOf(state: androidx.compose.foundation.lazy.LazyListState, barHeightPx: Float): Float {
-    if (barHeightPx <= 0f) return 0f
-    if (state.firstVisibleItemIndex > 0) return 1f
-    return (state.firstVisibleItemScrollOffset / barHeightPx).coerceIn(0f, 1f)
-}
-
-private class MorphGeometry(private val density: Density, statusDp: Dp) {
-    private fun px(d: Dp): Float = with(density) { d.toPx() }
-
-    val statusPx = px(statusDp)
-    val barH     = px(statusDp + BAR_CONTENT_HEIGHT + BAR_FLARE)
-    val flare    = px(BAR_FLARE)
-    val capH     = px(CAPSULE_H)
-    val capTop   = statusPx + px(CAPSULE_TOP)
-    val pad      = px(CAPSULE_PAD)
+// Settings' extra on top of the shared MorphGeometryBase (TopBarMorph.kt): the pill's padding.
+private class MorphGeometry(density: Density, statusDp: Dp) : MorphGeometryBase(density, statusDp) {
+    val pad = px(CAPSULE_PAD)
 
     /** Width of the pill = equal padding either side of the REAL laid-out text width. */
     fun capW(textPx: Float): Float = pad + textPx + pad
-
-    /** x of the shape's left edge: 0 = screen edge (bar), centred (pill). */
-    fun bodyLeft(w: Float, p: Float, capW: Float): Float = mix(0f, (w - capW) / 2f, p)
-
-    /**
-     * The morphing outline. Rect edges: x [bodyLeft … w - bodyLeft], y [0 … barH] (bar)
-     * → [capTop … capTop + capH] (pill). Top corners round off 0 → full; bottom corners
-     * go from an inverted fillet of radius [flare] (negative) to a full convex round.
-     */
-    fun path(w: Float, p: Float, capW: Float): Path {
-        val x0 = bodyLeft(w, p, capW)
-        val x1 = w - x0
-        val y0 = mix(0f, capTop, p)
-        val y1 = y0 + mix(barH, capH, p)
-        val half = minOf(y1 - y0, x1 - x0) / 2f
-        val rt = mix(0f, half, p)
-        val sb = mix(-flare, half, p)          // signed bottom radius: < 0 = inverted
-        val path = Path()
-        path.moveTo(x0 + rt, y0)
-        path.lineTo(x1 - rt, y0)
-        if (rt > 0f) path.arcTo(Rect(x1 - 2f * rt, y0, x1, y0 + 2f * rt), -90f, 90f, false)
-        if (sb >= 0f) {
-            path.lineTo(x1, y1 - sb)
-            if (sb > 0f) path.arcTo(Rect(x1 - 2f * sb, y1 - 2f * sb, x1, y1), 0f, 90f, false)
-            path.lineTo(x0 + sb, y1)
-            if (sb > 0f) path.arcTo(Rect(x0, y1 - 2f * sb, x0 + 2f * sb, y1), 90f, 90f, false)
-        } else {
-            val r = -sb
-            path.lineTo(x1, y1)                                                        // flare tip
-            path.arcTo(Rect(x1 - 2f * r, y1 - r, x1, y1 + r), 0f, -90f, false)         // right fillet
-            path.lineTo(x0 + r, y1 - r)                                                // flat bottom edge
-            path.arcTo(Rect(x0, y1 - r, x0 + 2f * r, y1 + r), -90f, -90f, false)       // left fillet
-        }
-        path.lineTo(x0, y0 + rt)
-        if (rt > 0f) path.arcTo(Rect(x0, y0, x0 + 2f * rt, y0 + 2f * rt), 180f, 90f, false)
-        path.close()
-        return path
-    }
-}
-
-// The outline at morph value [p] — handed to graphicsLayer so the pill gets its shadow.
-private class MorphBarShape(
-    private val geo: MorphGeometry,
-    private val p: Float,
-    private val capW: Float
-) : Shape {
-    override fun createOutline(size: Size, layoutDirection: LayoutDirection, density: Density): Outline =
-        Outline.Generic(geo.path(size.width, p, capW))
 }
 
 @Composable

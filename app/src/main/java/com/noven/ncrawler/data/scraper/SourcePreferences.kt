@@ -51,8 +51,6 @@ class SourcePreferences(context: Context) {
         prefs.edit().putString(KEY_ORDER, orderedIds.joinToString(",")).apply()
     }
 
-    fun isEnabled(sourceId: String): Boolean = sourceId in getPriorityOrder()
-
     /**
      * Enables (appended to the end = lowest priority) or disables a source.
      * Refuses to disable the last remaining enabled source — the app always

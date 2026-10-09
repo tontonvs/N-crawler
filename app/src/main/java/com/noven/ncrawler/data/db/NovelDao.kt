@@ -83,7 +83,4 @@ interface NovelDao {
     @Query("UPDATE novels SET isInLibrary = :inLibrary WHERE slug = :slug")
     suspend fun setLibrary(slug: String, inLibrary: Boolean)
 
-    // ── Cache management ─────────────────────────────────────────────────
-    @Query("DELETE FROM novels WHERE isInLibrary = 0 AND cachedAt < :before")
-    suspend fun pruneOldCache(before: Long)
 }

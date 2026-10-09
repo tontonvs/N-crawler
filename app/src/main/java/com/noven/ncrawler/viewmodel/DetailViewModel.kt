@@ -196,8 +196,6 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
 
     fun clearDownloadNotice() { _downloadNotice.value = null }
 
-    fun showMessage(message: String) { _updateMessage.value = message }
-
     fun toggleLibrary() {
         viewModelScope.launch {
             val add = !_inLibrary.value
@@ -253,23 +251,6 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             try { repo.queueDownloadRange(currentSlug, startChapter, endChapter); announceDownload() }
             catch (e: Exception) { _updateMessage.value = "Couldn't start download" }
-        }
-    }
-
-    fun downloadFirst(count: Int) {
-        viewModelScope.launch {
-            try { repo.queueDownloadFirst(currentSlug, count); announceDownload() }
-            catch (e: Exception) { _updateMessage.value = "Couldn't start download" }
-        }
-    }
-
-    fun downloadMissing() {
-        viewModelScope.launch {
-            try {
-                if (repo.queueDownloadMissing(currentSlug) == 0) {
-                    _updateMessage.value = "Every chapter is already downloaded"
-                } else announceDownload()
-            } catch (e: Exception) { _updateMessage.value = "Couldn't start download" }
         }
     }
 

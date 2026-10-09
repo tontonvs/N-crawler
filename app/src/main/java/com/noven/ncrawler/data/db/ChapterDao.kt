@@ -17,9 +17,6 @@ interface ChapterDao {
     @Upsert
     suspend fun upsert(chapter: ChapterEntity)
 
-    @Query("SELECT * FROM chapters WHERE novelSlug = :slug ORDER BY chapterNum ASC")
-    fun chaptersForNovel(slug: String): Flow<List<ChapterEntity>>
-
     @Query("SELECT * FROM chapters WHERE id = :id LIMIT 1")
     suspend fun getById(id: String): ChapterEntity?
 

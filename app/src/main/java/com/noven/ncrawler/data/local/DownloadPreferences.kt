@@ -76,10 +76,6 @@ class DownloadPreferences(context: Context) {
      */
     fun getConcurrentLimit(): Int = prefs.getInt(KEY_CONCURRENT_LIMIT, 1)
 
-    fun setConcurrentLimit(limit: Int) {
-        prefs.edit().putInt(KEY_CONCURRENT_LIMIT, limit.coerceAtLeast(1)).apply()
-    }
-
     /**
      * The chapter range the user last asked for on a novel. Needed so a queued
      * download can start later, and so Resume/Retry re-downloads that range

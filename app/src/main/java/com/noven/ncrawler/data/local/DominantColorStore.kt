@@ -18,10 +18,6 @@ class DominantColorStore(context: Context) {
             .apply()
     }
 
-    // ARGB of the last opened novel's dominant colour, or null if no novel has
-    // been opened on the Detail screen yet.
-    fun getLast(): Int? = if (prefs.contains(KEY_ARGB)) prefs.getInt(KEY_ARGB, 0) else null
-
     private companion object {
         const val KEY_SLUG = "last_slug"
         const val KEY_ARGB = "last_argb"

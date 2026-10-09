@@ -16,7 +16,6 @@ import com.noven.ncrawler.R
 // ── Brand palette — blue accent, NO yellow (StarGold is the sole exception,
 //    reserved strictly for the rating icon — see design note in chat) ─────────
 val NavBlue        = Color(0xFF08519C)   // top nav title, active icons
-val NavBgColor     = Color(0xFFA8EEFF)   // top nav background
 val AccentBlue     = Color(0xFF1565C0)   // buttons, FAB
 val AccentBlueDark = Color(0xFF1E88E5)   // dark mode accent
 val StarGold       = Color(0xFFFFB300)   // star rating only
@@ -40,7 +39,6 @@ val GlassBase          = Color(0xFF1F1F1F)  // tv3 --secondary (12% grey)
 
 // Glass mode values
 val GlassSurfaceLight  = Color(0x70FFFFFF)  // white @ 44%
-val GlassSurfaceMuted  = Color(0x82FFFFFF)  // white @ 51%
 val GlassSurfaceDark   = Color(0x701F1F1F)  // 12% grey @ 44%
 
 // Classic values (the look before Glass mode existed)
