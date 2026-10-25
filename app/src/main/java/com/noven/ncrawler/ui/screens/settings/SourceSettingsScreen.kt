@@ -45,6 +45,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.noven.ncrawler.data.local.DownloadNetwork
 import com.noven.ncrawler.ui.components.GlassModeCard
+import com.noven.ncrawler.ui.holiday.HolidayPickerCard
 import com.noven.ncrawler.ui.components.Motion
 import com.noven.ncrawler.ui.components.errorShake
 import com.noven.ncrawler.ui.components.glassCard
@@ -205,6 +206,11 @@ fun SourceSettingsScreen(
                 SectionLabel("Look")
             }
             item { GlassModeCard() }
+
+            // HOLIDAY TEST PICKER — temporary. Remove this block + the import above
+            // + holiday/HolidayPickerCard.kt when testing is done.
+            item { SectionLabel("Holiday (testing)") }
+            item { HolidayPickerCard() }
 
             // Credit required by the icon licence (CC BY 4.0)
             item {

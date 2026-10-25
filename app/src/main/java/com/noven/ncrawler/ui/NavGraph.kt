@@ -21,6 +21,11 @@ import androidx.navigation.compose.*
 import androidx.navigation.navArgument
 import com.noven.ncrawler.ui.components.Motion
 import com.noven.ncrawler.ui.components.glassSource
+import com.noven.ncrawler.ui.holiday.Holiday
+import com.noven.ncrawler.ui.holiday.HolidayAmbient
+import com.noven.ncrawler.ui.holiday.HolidayCritterStage
+import com.noven.ncrawler.ui.holiday.HolidaySettings
+import com.noven.ncrawler.ui.holiday.HolidaySplash
 import com.noven.ncrawler.ui.theme.GlassMode
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.haze
@@ -245,6 +250,21 @@ fun NCrawlerNavGraph() {
     }
     val searchNeedsHaze = !GlassMode.enabled && (showSearchOverlay || searchHazeTail)
 
+    // ── HOLIDAY ──────────────────────────────────────────────────────────
+    // `holiday` is null outside a holiday window (Auto) or when switched Off, so
+    // none of the layers below compose at all on a normal day. The splash greeting
+    // plays once per day on app open, and again whenever the test picker changes.
+    val holiday = HolidaySettings.active()
+    var splashHoliday by remember { mutableStateOf<Holiday?>(null) }
+    LaunchedEffect(Unit) {
+        val h = HolidaySettings.active()
+        if (h != null && HolidaySettings.consumeDailyGreeting(h)) splashHoliday = h
+    }
+    val previewTick = HolidaySettings.previewTick
+    LaunchedEffect(previewTick) {
+        if (previewTick > 0) splashHoliday = HolidaySettings.active()
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
         // Main nav host — no bottom padding, nav floats over content
         NavHost(
@@ -347,6 +367,15 @@ fun NCrawlerNavGraph() {
             }
         }
 
+        // HOLIDAY: drifting ambient particles over the screens (calm in the reader)
+        if (holiday != null) {
+            HolidayAmbient(
+                holiday   = holiday,
+                intensity = if (currentRoute.startsWith("reader/")) 0.35f else 1f,
+                modifier  = Modifier.fillMaxSize()
+            )
+        }
+
         // ── Search overlay — reachable from any tab via the search FAB ──────
         // Rendered BEFORE the floating nav below so the nav paints on top of
         // it (Box z-order = composition order) — otherwise the overlay's
@@ -393,7 +422,27 @@ fun NCrawlerNavGraph() {
                     } else {
                         showSearchOverlay = true
                     }
-                }
+                },
+                holiday       = holiday
+            )
+        }
+
+        // HOLIDAY: little animals run across / peek from behind the nav. Not in the
+        // reader (keeps reading calm) and not under the search overlay.
+        if (holiday != null && !currentRoute.startsWith("reader/") && !showSearchOverlay) {
+            HolidayCritterStage(
+                holiday    = holiday,
+                navVisible = !isFullScreen,
+                modifier   = Modifier.fillMaxSize()
+            )
+        }
+
+        // HOLIDAY: app-open greeting card; draws above everything, takes no touches.
+        splashHoliday?.let { h ->
+            HolidaySplash(
+                holiday   = h,
+                replayKey = previewTick,
+                onDone    = { splashHoliday = null }
             )
         }
     }

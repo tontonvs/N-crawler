@@ -27,6 +27,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.noven.ncrawler.ui.components.AppPullToRefresh
+import com.noven.ncrawler.ui.holiday.HolidayBarDecor
+import com.noven.ncrawler.ui.holiday.HolidaySettings
 import com.noven.ncrawler.ui.components.Motion
 import com.noven.ncrawler.ui.components.ShimmerScope
 import com.noven.ncrawler.ui.components.skeleton
@@ -164,6 +166,13 @@ fun BrowseScreen(
             morph            = { morph.value },
             modifier         = Modifier.align(Alignment.TopCenter)
         )
+
+        // HOLIDAY: garland / cobweb / bunting hanging off the bar's bottom edge
+        // (fades out as the bar morphs into the Browse capsule). Nothing in Auto
+        // mode outside a holiday window.
+        HolidaySettings.active()?.let { h ->
+            HolidayBarDecor(h, { morph.value }, Modifier.align(Alignment.TopCenter))
+        }
     }
 }
 

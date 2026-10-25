@@ -14,6 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import com.noven.ncrawler.ui.NCrawlerNavGraph
 import com.noven.ncrawler.ui.theme.GlassMode
+import com.noven.ncrawler.ui.holiday.HolidaySettings
 import com.noven.ncrawler.ui.theme.NCrawlerTheme
 
 class MainActivity : ComponentActivity() {
@@ -29,6 +30,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         GlassMode.init(this)   // read the saved Glass mode before the first frame
+        HolidaySettings.init(this)   // HOLIDAY: saved test choice (Auto by default)
         enableEdgeToEdge()
         requestNotificationPermissionIfNeeded()
         setContent {

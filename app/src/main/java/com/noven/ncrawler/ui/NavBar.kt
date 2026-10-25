@@ -38,6 +38,8 @@ import com.noven.ncrawler.ui.theme.GlassMode
 import dev.chrisbanes.haze.HazeState
 import com.noven.ncrawler.ui.theme.GlassSpec
 import com.noven.ncrawler.ui.components.SolarIcons
+import com.noven.ncrawler.ui.holiday.Holiday
+import com.noven.ncrawler.ui.holiday.HolidayHat
 
 // ── Floating nav: pill (Home · Library · Discover · Settings) + search FAB ───
 // CHANGE: rebuilt after floating_pill_navigation_bar.html — a solid pill with a
@@ -53,13 +55,14 @@ internal fun FloatingNavBar(
     searchOpen: Boolean,
     badges: Map<String, Int>,
     onTab: (String) -> Unit,
-    onSearchClick: () -> Unit
+    onSearchClick: () -> Unit,
+    holiday: Holiday? = null   // HOLIDAY: seasonal hat on the Home icon
 ) {
     Row(
         verticalAlignment     = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        PillNav(hazeState = hazeState, selectedIndex = selectedIndex, badges = badges, onTab = onTab)
+        PillNav(hazeState = hazeState, selectedIndex = selectedIndex, badges = badges, onTab = onTab, holiday = holiday)
         SearchFab(hazeState = hazeState, active = searchOpen, onClick = onSearchClick)
     }
 }
@@ -132,7 +135,13 @@ private fun navPalette(): NavPalette = when {
 }
 
 @Composable
-private fun PillNav(hazeState: HazeState, selectedIndex: Int, badges: Map<String, Int>, onTab: (String) -> Unit) {
+private fun PillNav(
+    hazeState: HazeState,
+    selectedIndex: Int,
+    badges: Map<String, Int>,
+    onTab: (String) -> Unit,
+    holiday: Holiday?
+) {
     val palette = navPalette()
     val shape   = RoundedCornerShape(50)
     val glass   = GlassMode.enabled
@@ -189,6 +198,7 @@ private fun PillNav(hazeState: HazeState, selectedIndex: Int, badges: Map<String
                     selected = index == selectedIndex,
                     palette  = palette,
                     badge    = badges[tab.route] ?: 0,
+                    holiday  = if (tab.route == Routes.BROWSE) holiday else null,
                     onClick  = { onTab(tab.route) }
                 )
             }
@@ -205,6 +215,7 @@ private fun PillNavItem(
     selected: Boolean,
     palette: NavPalette,
     badge: Int,
+    holiday: Holiday?,
     onClick: () -> Unit
 ) {
     val interactionSource = remember { MutableInteractionSource() }
@@ -249,6 +260,18 @@ private fun PillNavItem(
                 .size(NavIconSize)
                 .graphicsLayer { alpha = fill; scaleX = pressScale; scaleY = pressScale }
         )
+        // HOLIDAY: small hat perched on the Home icon (kept inside the 44dp circle
+        // so the pill's clip never cuts it).
+        if (holiday != null) {
+            HolidayHat(
+                holiday  = holiday,
+                rim      = palette.inactiveIcon.copy(alpha = 0.9f),
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .offset(x = 4.dp, y = 1.dp)
+                    .size(18.dp)
+            )
+        }
         // Gold count badge (e.g. new chapters in Library): a plain 16dp circle, no
         // border. It overlaps the icon's top-right corner but stays inside this
         // 44dp button (so inside the pill) — never peeks outside the nav.
