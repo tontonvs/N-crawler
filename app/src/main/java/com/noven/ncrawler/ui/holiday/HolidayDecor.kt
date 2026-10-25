@@ -50,8 +50,8 @@ fun HolidayBarDecor(
     morph: () -> Float,
     modifier: Modifier = Modifier
 ) {
-    val density = LocalDensity.current
-    val statusDp = with(density) { WindowInsets.statusBars.getTop(density).toDp() }
+    val localDensity = LocalDensity.current
+    val statusDp = with(localDensity) { WindowInsets.statusBars.getTop(localDensity).toDp() }
     val palette = holidayPalette(holiday)
     val reduced = rememberReducedMotion()
 
@@ -68,7 +68,7 @@ fun HolidayBarDecor(
     Canvas(modifier.fillMaxWidth().height(statusDp + BAR_CONTENT_HEIGHT + BAR_FLARE)) {
         val open = 1f - window(morph(), 0f, 0.22f)
         if (open <= 0.01f) return@Canvas
-        val d = density
+        val d = this.density   // DrawScope's Float density (px per dp)
         // the bar's flat bottom edge
         val y0 = (statusDp + BAR_CONTENT_HEIGHT).toPx() - 2f * d
         when (holiday) {
