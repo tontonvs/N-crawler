@@ -45,7 +45,7 @@ object HolidaySettings {
         choice = HolidayChoice.values().firstOrNull { it.name == saved } ?: HolidayChoice.AUTO
     }
 
-    fun setChoice(c: HolidayChoice) {
+    fun pickChoice(c: HolidayChoice) {
         choice = c
         previewTick++
         prefs?.edit()?.putString(KEY_CHOICE, c.name)?.apply()

@@ -76,7 +76,7 @@ fun HolidayPickerCard(modifier: Modifier = Modifier) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { HolidaySettings.setChoice(choice) }
+                    .clickable { HolidaySettings.pickChoice(choice) }
                     .padding(vertical = 11.dp),
                 verticalAlignment     = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.Start
