@@ -41,8 +41,10 @@ object HolidaySettings {
         if (prefs != null) return
         val p = context.applicationContext.getSharedPreferences(FILE, Context.MODE_PRIVATE)
         prefs = p
-        val saved = p.getString(KEY_CHOICE, null)
-        choice = HolidayChoice.values().firstOrNull { it.name == saved } ?: HolidayChoice.AUTO
+        // Test picker is gone: drop any choice saved while testing so the app is
+        // back on automatic dates. (pickChoice stays for re-testing if ever needed.)
+        if (p.contains(KEY_CHOICE)) p.edit().remove(KEY_CHOICE).apply()
+        choice = HolidayChoice.AUTO
     }
 
     fun pickChoice(c: HolidayChoice) {
